@@ -27,6 +27,11 @@ export interface FacilitationRecord {
   invitedByRef?: { id: string; displayName?: string };
   /** The per-conversation initiator role this facilitation reports to. */
   roleKey?: string;
+  /** #330 C3 — the group-side moderation records its state here; the hourly
+   *  assess tick reads it (the tick turn shares no session with the group). */
+  progress?: { dodMet: boolean; summary: string; updatedAt: string };
+  /** #330 C3 — nudge accounting for the per-facilitation cap. */
+  nudgesSent?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -89,6 +94,39 @@ export class FacilitationStateStore {
     return record;
   }
 
+  recordProgress(conversationId: string, progress: { dodMet: boolean; summary: string }): FacilitationRecord | undefined {
+    const record = this.records.get(conversationId);
+    if (!record) return undefined;
+    const next: FacilitationRecord = {
+      ...record,
+      progress: { ...progress, updatedAt: this.now().toISOString() },
+      updatedAt: this.now().toISOString(),
+    };
+    this.records.set(conversationId, next);
+    return next;
+  }
+
+  /** Reserve a nudge slot BEFORE delivery — closes the check-then-act window
+   *  between the concurrent group and tick sessions. Returns the reserved
+   *  count, or undefined when no record exists or the cap is exhausted. */
+  reserveNudge(conversationId: string, cap: number): number | undefined {
+    const record = this.records.get(conversationId);
+    if (!record) return undefined;
+    const current = record.nudgesSent ?? 0;
+    if (current >= cap) return undefined;
+    const nudgesSent = current + 1;
+    this.records.set(conversationId, { ...record, nudgesSent, updatedAt: this.now().toISOString() });
+    return nudgesSent;
+  }
+
+  /** Roll a reservation back after a failed delivery — failures don't burn the cap. */
+  releaseNudge(conversationId: string): void {
+    const record = this.records.get(conversationId);
+    if (!record) return;
+    const nudgesSent = Math.max(0, (record.nudgesSent ?? 0) - 1);
+    this.records.set(conversationId, { ...record, nudgesSent, updatedAt: this.now().toISOString() });
+  }
+
   markStopped(conversationId: string): FacilitationRecord | undefined {
     const record = this.records.get(conversationId);
     if (!record) return undefined;
@@ -99,6 +137,10 @@ export class FacilitationStateStore {
 
   get(conversationId: string): FacilitationRecord | undefined {
     return this.records.get(conversationId);
+  }
+
+  listActive(): FacilitationRecord[] {
+    return [...this.records.values()].filter((record) => record.phase === 'active');
   }
 
   /** The single most recently updated record — the fallback when a tool call

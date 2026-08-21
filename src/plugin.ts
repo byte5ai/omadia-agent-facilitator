@@ -24,6 +24,7 @@ import {
   CONVERSATION_BINDINGS_SERVICE_NAME,
   CONVERSATION_EVENTS_SERVICE_NAME,
   CONVERSATION_ROSTERS_SERVICE_NAME,
+  CONVERSATION_SEND_SERVICE_NAME,
   EPHEMERAL_RUNS_SERVICE_NAME,
   ROLE_ASSIGNMENTS_SERVICE_NAME,
   TARGETED_SEND_SERVICE_NAME,
@@ -33,6 +34,7 @@ import type {
   ConversationBindingsService,
   ConversationEventsService,
   ConversationRostersService,
+  ConversationSendService,
   EphemeralRunsService,
   RoleAssignmentsService,
   TargetedSendService,
@@ -72,6 +74,7 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
     CONVERSATION_BINDINGS_SERVICE_NAME,
     ROLE_ASSIGNMENTS_SERVICE_NAME,
     CONVERSATION_ROSTERS_SERVICE_NAME,
+    CONVERSATION_SEND_SERVICE_NAME,
   ]) {
     if (!resolve(name)) {
       ctx.log(`kernel service '${name}' not published (yet) — the matching feature degrades until it appears (kernel < #330?)`);
@@ -116,6 +119,7 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
     getRoleAssignments: () => resolve<RoleAssignmentsService>(ROLE_ASSIGNMENTS_SERVICE_NAME),
     getConversationBindings: () => resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME),
     getConversationRosters: () => resolve<ConversationRostersService>(CONVERSATION_ROSTERS_SERVICE_NAME),
+    getConversationSend: () => resolve<ConversationSendService>(CONVERSATION_SEND_SERVICE_NAME),
     log: (msg) => ctx.log(msg),
   });
 

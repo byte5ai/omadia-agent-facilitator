@@ -9,7 +9,7 @@ export { TARGETED_SEND_SERVICE_NAME } from '@omadia/plugin-api';
 export const EPHEMERAL_RUNS_SERVICE_NAME = 'conductorEphemeralRuns';
 export const CONVERSATION_EVENTS_SERVICE_NAME = 'conversationEvents';
 
-/** Kernel `conductorEphemeralRuns` (#330 Workstream A). */
+/** Kernel `conductorEphemeralRuns` (#330 Workstream A + C3). */
 export interface EphemeralRunsService {
   createEphemeralRun(input: {
     agentId: string;
@@ -18,6 +18,22 @@ export interface EphemeralRunsService {
     payload?: Record<string, unknown>;
     ttlMs?: number;
   }): Promise<{ runId: string; workflowId: string; workflowSlug: string; expiresAt: string }>;
+  /** #330 C3 — early-fire the run's open timer tick (kernel < C3: absent). */
+  poke?(runId: string): Promise<{ poked: boolean }>;
+}
+
+export const CONVERSATION_SEND_SERVICE_NAME = 'conversationSend';
+
+/** Kernel `conversationSend` (#330 C3b) — group nudges; the kernel scopes
+ *  delivery fail-closed to conversations THIS agent holds an ephemeral
+ *  attachment for. */
+export interface ConversationSendService {
+  sendToConversation(request: {
+    agentSlug: string;
+    channelType: string;
+    conversationId: string;
+    message: { text: string };
+  }): Promise<{ outcome: 'delivered' } | { outcome: 'unreachable'; code: string; message: string }>;
 }
 
 /** Kernel `conversationEvents` (#330 B1) — subscribe-only by design:
