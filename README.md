@@ -15,31 +15,34 @@ Conductor).
 
 | Was | Version |
 |---|---|
-| omadia Kernel | main ≥ `1fa8eda7` (#330 A `conductorEphemeralRuns` + B1 `targetedSend`/`conversationEvents`/`conversationRosters`) |
+| omadia Kernel | main ≥ `1fa8eda7` (A+B1); für Zero-Touch-Setup ≥ #330 C2a (`agentProvisioning`/`conversationBindings`/`conductorRoleAssignments`) |
 | Teams-Channel-Plugin | `@omadia/channel-teams` ≥ 0.13.0 (B2: `bot_added`-Events, Roster, Targeted Send) |
 | Postgres | ja (Conductor) — ohne DB degradieren die Tools mit ehrlichen Meldungen |
 
 Alle Kernel-Services sind `optional_requires`: auf älteren Kernels aktiviert
 das Plugin und antwortet mit klaren Degradations-Hinweisen statt zu brechen.
 
-## Betriebs-Setup (einmalig, Operator)
+## Betriebs-Setup
 
-1. **Plugin installieren** (Hub-ZIP oder Upload) und für einen Agenten
-   enablen; Setup-Felder prüfen (Defaults sind lauffähig).
-2. **Top-Level-Agent `facilitator` anlegen** (Operator-UI). In dessen
-   Instructions gehört die Moderations-Persona — als Startpunkt den Inhalt
-   von `skills/facilitator-playbook.md` übernehmen. (Die `prompt_partial`-
-   Skills dieses Plugins speisen den Sub-Agenten hinter `query_facilitation`,
-   nicht automatisch den Top-Level-Agenten.)
-3. **Conversation-Binding setzen:** Der Teams-Bot wird in den Gruppen-Chat
-   eingeladen (`bot_added` wird geloggt und als pending Facilitation
-   vorgemerkt); danach die Conversation über
-   `PUT /api/v1/operator/agents/facilitator/bindings` (channel_type `teams`,
-   channel_key = conversationId) an den Facilitator-Agenten binden.
-4. **Initiator-Rolle besetzen:** Der Conductor-Rolle
-   `facilitation-initiator` (konfigurierbar) die Initiator(en) als Holder
-   zuweisen — sie bestätigen das Ergebnis (confirm-Step, Deadline PT24H im
-   Pattern) und empfangen die Reports (`role:`-Fan-out an alle Holder).
+**Zero-Touch (Default, Kernel >= #330 C2a):** Plugin installieren — fertig.
+Beim Aktivieren provisioniert das Plugin den Top-Level-Agenten
+`facilitator` automatisch (Persona = das gebundelte Playbook als
+`agent_persona_skills`-Skill, create-only). Wird der Bot in einen
+Gruppen-Chat eingeladen, bindet der Kernel die Conversation automatisch
+(invite-guarded: nur Conversations mit kernel-beobachtetem `bot_added`,
+nie ein fremd-gebundenes Binding). Beim `facilitation_start` wird der
+Einladende als Holder einer auto-provisionierten per-Conversation-Rolle
+(`facilitation-<hash>`) gesetzt (E-Mail via Roster, AAD-Fallback) — Binding
+und Rolle werden mit dem ephemeren Workflow vom Kernel-Reaper wieder
+entsorgt. Alles auditierbar (`channel.binding_change`,
+`conductor.role_holders_change`). `auto_setup=false` schaltet auf den
+manuellen Modus zurück.
+
+**Manuell (Kernel < C2a oder `auto_setup=false`):** Agent anlegen
+(Playbook als Instructions), Binding via
+`PUT /api/v1/operator/agents/facilitator/bindings` setzen, Rolle
+`facilitation-initiator` mit Holdern besetzen — die Tools degradieren mit
+ehrlichen Meldungen, solange etwas fehlt.
 
 ## Ablauf
 

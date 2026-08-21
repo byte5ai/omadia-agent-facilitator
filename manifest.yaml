@@ -16,7 +16,7 @@ identity:
   kind: "agent"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.1.0"
+  version: "0.2.0"
   description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
   authors:
     - name: "byte5 GmbH"
@@ -39,12 +39,19 @@ depends_on: []
 # Kernel-published services (#330 A/B1). optional_requires by design: the
 # plugin activates without them and degrades with clear status messages —
 # and the deny-by-default service gate grants exactly what is declared here.
-# Least privilege: exactly the services C1 consumes — conversationRosters
-# and memoryStore join with C2 (roster-driven addressing, durable state).
+# Least privilege: exactly the services this slice consumes. The C2a setup
+# services power the zero-touch flow (agent provisioning, invite-guarded
+# auto-bind, per-conversation initiator roles); conversationRosters resolves
+# the inviter's email (role holders are email-keyed). memoryStore joins with
+# the durable-state slice.
 optional_requires:
   - "conductorEphemeralRuns@1"
   - "targetedSend@1"
   - "conversationEvents@1"
+  - "agentProvisioning@1"
+  - "conversationBindings@1"
+  - "conductorRoleAssignments@1"
+  - "conversationRosters@1"
 
 lifecycle:
   entry: "dist/plugin.js"
@@ -103,6 +110,12 @@ setup:
       help: "Sprache der Moderation und der Reports ('de' oder 'en')."
       required: false
       default: "de"
+    - key: "auto_setup"
+      type: "boolean"
+      label: "Zero-Touch-Setup"
+      help: "Default true: Beim Aktivieren wird der Top-Level-Agent automatisch provisioniert (inkl. Playbook-Persona), Gruppen-Einladungen binden die Conversation automatisch und der Einladende wird als Initiator-Rolle gesetzt. Auf false stellen, wenn der Operator Agent/Binding/Rolle manuell verwalten will."
+      required: false
+      default: true
     - key: "disclose_report_target"
       type: "boolean"
       label: "Report-Ziel offenlegen"

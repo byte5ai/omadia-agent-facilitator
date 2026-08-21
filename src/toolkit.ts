@@ -3,14 +3,28 @@
 // degradation (missing kernel service, quota, unknown conversation) comes
 // back as an honest tool output — never a throw that kills the turn.
 
+import { createHash } from 'node:crypto';
+
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import type { FacilitatorConfig } from './config.js';
 import { sendReport } from './reporting.js';
-import type { EphemeralRunsService, TargetedSendService } from './services.js';
+import type {
+  ConversationBindingsService,
+  ConversationRostersService,
+  EphemeralRunsService,
+  RoleAssignmentsService,
+  TargetedSendService,
+} from './services.js';
 import type { FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/** Stable, readable per-conversation role key - Teams conversation ids are
+ *  long and symbol-heavy, the hash keeps the key clean and collision-safe. */
+export function facilitationRoleKey(conversationId: string): string {
+  return `facilitation-${createHash('sha256').update(conversationId).digest('hex').slice(0, 12)}`;
+}
 
 export function buildFacilitationToolkit(deps: {
   agentId: string;
@@ -21,6 +35,9 @@ export function buildFacilitationToolkit(deps: {
    *  plugin activated is picked up without a reinstall. */
   getEphemeralRuns: () => EphemeralRunsService | undefined;
   getTargetedSend: () => TargetedSendService | undefined;
+  getRoleAssignments: () => RoleAssignmentsService | undefined;
+  getConversationBindings: () => ConversationBindingsService | undefined;
+  getConversationRosters: () => ConversationRostersService | undefined;
   log: (msg: string) => void;
 }): LocalSubAgentTool[] {
   const { config, store } = deps;
@@ -33,6 +50,29 @@ export function buildFacilitationToolkit(deps: {
     return store.latest();
   }
 
+  /** Resolve the inviter to the email-keyed holder id the role machinery
+   *  expects. bot_added only carries the AAD id, so we match it against the
+   *  roster; the AAD id itself is the honest fallback (targetedSend will then
+   *  report the holder unreachable rather than silently dropping). */
+  async function resolveInitiatorHolder(record: FacilitationRecord): Promise<{ holderId: string; via: string } | undefined> {
+    const inviter = record.invitedByRef;
+    if (!inviter) return undefined;
+    const rosters = deps.getConversationRosters();
+    if (rosters && record.channelType) {
+      try {
+        const roster = await rosters.getRoster(record.channelType, record.conversationId);
+        const match = roster?.participants.find(
+          (p) => p.userRef.id === inviter.id || p.externalId === inviter.id,
+        );
+        const email = match?.userRef.email ?? match?.userPrincipalName ?? undefined;
+        if (email) return { holderId: email.toLowerCase(), via: 'roster' };
+      } catch (err) {
+        deps.log(`initiator roster lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { holderId: inviter.id, via: 'aad-fallback' };
+  }
+
   function describe(record: FacilitationRecord): string {
     const lines = [
       de ? `Facilitation-Status: ${record.phase}` : `Facilitation status: ${record.phase}`,
@@ -42,10 +82,11 @@ export function buildFacilitationToolkit(deps: {
     if (record.definitionOfDone) lines.push(`Definition of Done: ${record.definitionOfDone}`);
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
     if (record.expiresAt) lines.push(de ? `Deadline/TTL: ${record.expiresAt}` : `Deadline/TTL: ${record.expiresAt}`);
+    const reportRole = record.roleKey ?? config.initiatorRoleKey;
     lines.push(
       de
-        ? `Berichtet wird an: role:${config.initiatorRoleKey} (${config.reportChannelType}).`
-        : `Reports go to: role:${config.initiatorRoleKey} (${config.reportChannelType}).`,
+        ? `Berichtet wird an: role:${reportRole} (${config.reportChannelType}).`
+        : `Reports go to: role:${reportRole} (${config.reportChannelType}).`,
     );
     return lines.join('\n');
   }
@@ -108,6 +149,34 @@ export function buildFacilitationToolkit(deps: {
           ? args.ttlHours
           : config.defaultTtlHours;
 
+      // #330 C2b - per-conversation initiator role, auto-assigned to the
+      // inviter. Degrades to the configured default role when the kernel
+      // predates C2a or no invite context exists.
+      let initiatorRoleKey = config.initiatorRoleKey;
+      const roleAssignments = deps.getRoleAssignments();
+      if (roleAssignments && pending) {
+        const candidateKey = facilitationRoleKey(conversationId);
+        const holder = await resolveInitiatorHolder(pending);
+        if (holder) {
+          try {
+            await roleAssignments.ensureRole({
+              roleKey: candidateKey,
+              label: `Facilitation initiator (${conversationId.slice(0, 24)})`,
+              description: 'Auto-provisioned per-conversation initiator role (#330 C2b) - disposed with the facilitation.',
+            });
+            await roleAssignments.addHolder({
+              roleKey: candidateKey,
+              holderId: holder.holderId,
+              actor: `plugin:${deps.agentId}`,
+            });
+            initiatorRoleKey = candidateKey;
+            deps.log(`initiator role ${candidateKey} -> ${holder.holderId} (${holder.via})`);
+          } catch (err) {
+            deps.log(`initiator role provisioning failed - falling back to '${config.initiatorRoleKey}': ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+
       let handle;
       try {
         handle = await ephemeralRuns.createEphemeralRun({
@@ -115,7 +184,7 @@ export function buildFacilitationToolkit(deps: {
           patternId: 'facilitation',
           slots: {
             agents: { facilitator: config.facilitatorAgentSlug },
-            roles: { initiator: config.initiatorRoleKey },
+            roles: { initiator: initiatorRoleKey },
             channels: { report: config.reportChannelType },
           },
           payload: { goal, definitionOfDone },
@@ -142,12 +211,33 @@ export function buildFacilitationToolkit(deps: {
         runId: handle.runId,
         workflowSlug: handle.workflowSlug,
         expiresAt: handle.expiresAt,
+        roleKey: initiatorRoleKey,
       });
+
+      // Tie the auto-bind + role to the run so the kernel reaper disposes of
+      // them with the workflow. Best-effort: a miss only means the binding
+      // falls back to its pending expiry.
+      const conversationBindings = deps.getConversationBindings();
+      if (conversationBindings && pending?.channelType) {
+        await conversationBindings
+          .attachWorkflow({
+            agentSlug: config.facilitatorAgentSlug,
+            channelType: pending.channelType,
+            conversationId,
+            workflowId: handle.workflowId,
+            roleKey: initiatorRoleKey,
+            expiresAt: new Date(handle.expiresAt),
+          })
+          .then((r) => {
+            if (!r.attached) deps.log('attachWorkflow did not take (no owned pending row) - binding stays on its invite expiry');
+          })
+          .catch((err: unknown) => deps.log(`attachWorkflow failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
 
       const disclosure = config.discloseReportTarget
         ? de
-          ? `Das Ergebnis (und ggf. Zwischenstände) berichte ich an role:${config.initiatorRoleKey}.`
-          : `I will report the result (and interim status, if configured) to role:${config.initiatorRoleKey}.`
+          ? `Das Ergebnis (und ggf. Zwischenstände) berichte ich an role:${initiatorRoleKey}.`
+          : `I will report the result (and interim status, if configured) to role:${initiatorRoleKey}.`
         : '';
       const handshake = de
         ? [
@@ -215,9 +305,10 @@ export function buildFacilitationToolkit(deps: {
         return de ? 'Keine Facilitation zum Beenden bekannt.' : 'No facilitation known to stop.';
       }
       store.markStopped(record.conversationId);
+      const stopRole = record.roleKey ?? config.initiatorRoleKey;
       return de
-        ? `Die Moderation ist beendet (announced stop). Der zugrundeliegende Workflow-Run ${record.runId ?? ''} läuft bis zu seiner Deadline/TTL weiter und meldet dann Ergebnis oder Abbruch an role:${config.initiatorRoleKey}.`
-        : `Moderation ended (announced stop). The underlying workflow run ${record.runId ?? ''} continues until its deadline/TTL and will then report result or abort to role:${config.initiatorRoleKey}.`;
+        ? `Die Moderation ist beendet (announced stop). Der zugrundeliegende Workflow-Run ${record.runId ?? ''} läuft bis zu seiner Deadline/TTL weiter und meldet dann Ergebnis oder Abbruch an role:${stopRole}.`
+        : `Moderation ended (announced stop). The underlying workflow run ${record.runId ?? ''} continues until its deadline/TTL and will then report result or abort to role:${stopRole}.`;
     },
   };
 
@@ -240,7 +331,12 @@ export function buildFacilitationToolkit(deps: {
       const kind = args.kind === 'interim' ? 'interim' : 'final';
       const text = typeof args.text === 'string' ? args.text.trim() : '';
       if (!text) return de ? 'Report abgelehnt: text ist leer.' : 'Report refused: text is empty.';
-      const result = await sendReport({ targetedSend: deps.getTargetedSend(), config, log: deps.log }, kind, text);
+      const activeRoleKey = store.latest()?.roleKey;
+      const result = await sendReport(
+        { targetedSend: deps.getTargetedSend(), config, log: deps.log, ...(activeRoleKey ? { roleKey: activeRoleKey } : {}) },
+        kind,
+        text,
+      );
       return result.summary;
     },
   };

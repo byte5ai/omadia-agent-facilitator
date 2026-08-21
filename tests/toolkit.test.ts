@@ -4,7 +4,14 @@ import { strict as assert } from 'node:assert';
 import { CONFIG_DEFAULTS } from '../src/config.js';
 import { buildFacilitationToolkit } from '../src/toolkit.js';
 import { FacilitationStateStore } from '../src/stateStore.js';
-import type { EphemeralRunsService, TargetedSendService } from '../src/services.js';
+import { facilitationRoleKey } from '../src/toolkit.js';
+import type {
+  ConversationBindingsService,
+  ConversationRostersService,
+  EphemeralRunsService,
+  RoleAssignmentsService,
+  TargetedSendService,
+} from '../src/services.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -17,6 +24,8 @@ function harness(opts?: {
   store: FacilitationStateStore;
   createCalls: Array<Record<string, unknown>>;
   sendCalls: Array<Record<string, unknown>>;
+  roleCalls: string[];
+  attachCalls: Array<Record<string, unknown>>;
 } {
   const createCalls: Array<Record<string, unknown>> = [];
   const sendCalls: Array<Record<string, unknown>> = [];
@@ -42,6 +51,36 @@ function harness(opts?: {
       };
     },
   };
+  const roleCalls: string[] = [];
+  const attachCalls: Array<Record<string, unknown>> = [];
+  const roleAssignments: RoleAssignmentsService = {
+    ensureRole: async (input) => {
+      roleCalls.push(`ensure:${input.roleKey}`);
+    },
+    addHolder: async (input) => {
+      roleCalls.push(`add:${input.roleKey}:${input.holderId}`);
+    },
+    removeHolder: async () => undefined,
+    holders: async () => [],
+  };
+  const conversationBindings: ConversationBindingsService = {
+    bind: async () => ({ bound: true }),
+    unbind: async () => ({ unbound: true }),
+    attachWorkflow: async (input) => {
+      attachCalls.push(input as unknown as Record<string, unknown>);
+      return { attached: true };
+    },
+    observedInvite: () => undefined,
+  };
+  const rosters: ConversationRostersService = {
+    getRoster: async () => ({
+      conversationType: 'group',
+      participants: [
+        { userRef: { kind: 'teams-aad', id: 'aad-owner', displayName: 'Owner', email: 'Owner@Co.com' }, externalId: '29:owner' },
+      ],
+      partial: false,
+    }),
+  };
   const config = { ...CONFIG_DEFAULTS, reportingMode: opts?.reportingMode ?? CONFIG_DEFAULTS.reportingMode };
   const toolkit = buildFacilitationToolkit({
     agentId: '@omadia/agent-facilitator',
@@ -49,16 +88,19 @@ function harness(opts?: {
     store,
     getEphemeralRuns: () => (opts?.noEphemeralRuns ? undefined : ephemeralRuns),
     getTargetedSend: () => targetedSend,
+    getRoleAssignments: () => roleAssignments,
+    getConversationBindings: () => conversationBindings,
+    getConversationRosters: () => rosters,
     log: () => undefined,
   });
   const tools = new Map(toolkit.map((t) => [t.spec.name, (input: unknown) => t.handle(input) as Promise<string>]));
-  return { tools, store, createCalls, sendCalls };
+  return { tools, store, createCalls, sendCalls, roleCalls, attachCalls };
 }
 
 describe('facilitation_start', () => {
   it('creates exactly one ephemeral run with the pattern slots + payload and returns the handshake', async () => {
-    const { tools, store, createCalls } = harness();
-    store.markPending({ conversationId: 'c1', channelType: 'teams', invitedBy: 'Owner' });
+    const { tools, store, createCalls, roleCalls, attachCalls } = harness();
+    store.markPending({ conversationId: 'c1', channelType: 'teams', invitedBy: 'Owner', invitedByRef: { id: 'aad-owner', displayName: 'Owner' } });
 
     const out = await tools.get('facilitation_start')!({ goal: 'Rollen besetzen', definitionOfDone: 'Jede Rolle hat genau einen bestätigten Namen' });
 
@@ -66,18 +108,24 @@ describe('facilitation_start', () => {
     const call = createCalls[0]!;
     assert.equal(call.patternId, 'facilitation');
     assert.equal(call.agentId, '@omadia/agent-facilitator');
+    const roleKey = facilitationRoleKey('c1');
     assert.deepEqual(call.slots, {
       agents: { facilitator: 'facilitator' },
-      roles: { initiator: 'facilitation-initiator' },
+      roles: { initiator: roleKey },
       channels: { report: 'teams' },
     });
+    // C2b - inviter resolved via roster to the email-keyed holder, role provisioned, run attached.
+    assert.deepEqual(roleCalls, [`ensure:${roleKey}`, `add:${roleKey}:owner@co.com`]);
+    assert.equal(attachCalls.length, 1);
+    assert.equal(attachCalls[0]!.roleKey, roleKey);
+    assert.equal(attachCalls[0]!.workflowId, 'wf-1');
     assert.deepEqual(call.payload, { goal: 'Rollen besetzen', definitionOfDone: 'Jede Rolle hat genau einen bestätigten Namen' });
     assert.equal(call.ttlMs, 24 * HOUR_MS);
 
     assert.ok(out.includes('Ziel: Rollen besetzen'));
     assert.ok(out.includes('Definition of Done:'));
     assert.ok(out.includes('2026-08-22T10:00:00.000Z'));
-    assert.ok(out.includes('role:facilitation-initiator')); // disclosure default
+    assert.ok(out.includes(`role:${facilitationRoleKey('c1')}`)); // disclosure default, per-conversation role
     assert.ok(out.includes('/facilitator stop'));
     assert.equal(store.get('c1')?.phase, 'active');
   });
@@ -125,7 +173,7 @@ describe('facilitation_status / facilitation_stop', () => {
     await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
     const active = await tools.get('facilitation_status')!({ conversationId: 'c1' });
     assert.ok(active.includes('active'));
-    assert.ok(active.includes('role:facilitation-initiator'));
+    assert.ok(active.includes('role:'));
   });
 
   it('stop marks stopped and names the honest limitation (run continues to deadline)', async () => {
@@ -142,7 +190,7 @@ describe('facilitation_report', () => {
     const { tools, sendCalls } = harness();
     const out = await tools.get('facilitation_report')!({ kind: 'final', text: 'Ergebnis: …' });
     assert.equal(sendCalls.length, 1);
-    assert.equal(sendCalls[0]!.principal, 'role:facilitation-initiator');
+    assert.equal(sendCalls[0]!.principal, 'role:facilitation-initiator'); // no active facilitation - config default
     assert.ok(out.includes('zugestellt'));
     assert.ok(out.includes('2'));
   });
