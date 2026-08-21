@@ -1,0 +1,43 @@
+{
+  "name": "@omadia/agent-facilitator",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/plugin.js",
+  "types": "dist/plugin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "manifest.yaml"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "package": "node scripts/build-zip.mjs",
+    "clean": "rm -rf dist out .test-build *.tsbuildinfo"
+  },
+  "peerDependencies": {
+    "@omadia/plugin-api": ">=1.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "@types/node": "^25.6.0",
+    "esbuild": "^0.24.0",
+    "zod": "^3.24.0",
+    "@omadia/plugin-api": "file:../odoo-bot/middleware/packages/plugin-api"
+  },
+  "description": "omadia Facilitator/Convener agent plugin — moderates group chats to a defined outcome, on ephemeral Conductor workflows (#330).",
+  "homepage": "https://github.com/byte5ai/omadia-agent-facilitator",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/byte5ai/omadia-agent-facilitator.git"
+  }
+}
