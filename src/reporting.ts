@@ -16,13 +16,13 @@ export interface ReportResult {
 }
 
 export async function sendReport(
-  deps: { targetedSend?: TargetedSendService; config: FacilitatorConfig; log: (msg: string) => void },
+  deps: { targetedSend?: TargetedSendService; config: FacilitatorConfig; log: (msg: string) => void; roleKey?: string },
   kind: ReportKind,
   text: string,
 ): Promise<ReportResult> {
   const { config } = deps;
   const de = config.language === 'de';
-  const target = `role:${config.initiatorRoleKey}`;
+  const target = `role:${deps.roleKey ?? config.initiatorRoleKey}`;
 
   if (kind === 'interim' && config.reportingMode !== 'interim') {
     return {

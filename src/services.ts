@@ -37,6 +37,76 @@ export interface ConversationMembershipEventShape {
   occurredAt: string;
 }
 
-// NB: conversationRosters is deliberately NOT consumed in C1 — declaring an
-// unused service would be an unused grant (deny-by-default = least
-// privilege). The roster-driven participant addressing lands with C2.
+export const AGENT_PROVISIONING_SERVICE_NAME = 'agentProvisioning';
+export const CONVERSATION_BINDINGS_SERVICE_NAME = 'conversationBindings';
+export const ROLE_ASSIGNMENTS_SERVICE_NAME = 'conductorRoleAssignments';
+export const CONVERSATION_ROSTERS_SERVICE_NAME = 'conversationRosters';
+
+/** Kernel `agentProvisioning` (#330 C2a). */
+export interface AgentProvisioningService {
+  ensureAgent(input: {
+    slug: string;
+    name: string;
+    description?: string;
+    pluginId: string;
+    /** Create-only; slug MUST be namespaced under `<agent slug>-`. */
+    personaSkill?: { slug: string; name: string; body: string };
+  }): Promise<{ created: boolean; agentSlug: string }>;
+}
+
+export interface ObservedInviteShape {
+  channelId: string;
+  channelType: string;
+  conversationId: string;
+  addedBy?: { kind: string; id: string; displayName?: string };
+  occurredAt: string;
+}
+
+/** Kernel `conversationBindings` (#330 C2a) — invite-guarded, self-disposing. */
+export interface ConversationBindingsService {
+  bind(input: { agentSlug: string; channelType: string; conversationId: string; pendingTtlMs?: number }): Promise<{
+    bound: boolean;
+    reason?: string;
+    preexistingOperatorBinding?: boolean;
+    invite?: ObservedInviteShape;
+  }>;
+  unbind(input: { agentSlug: string; channelType: string; conversationId: string }): Promise<{ unbound: boolean }>;
+  attachWorkflow(input: {
+    agentSlug: string;
+    channelType: string;
+    conversationId: string;
+    workflowId: string;
+    roleKey?: string;
+    expiresAt: Date;
+  }): Promise<{ attached: boolean }>;
+  observedInvite(channelType: string, conversationId: string): ObservedInviteShape | undefined;
+}
+
+/** Kernel `conductorRoleAssignments` (#330 C2a) — 'facilitation-'-scoped, audited. */
+export interface RoleAssignmentsService {
+  ensureRole(input: { roleKey: string; label: string; description?: string }): Promise<void>;
+  addHolder(input: { roleKey: string; holderId: string; actor: string }): Promise<void>;
+  removeHolder(input: { roleKey: string; holderId: string; actor: string }): Promise<void>;
+  holders(roleKey: string): Promise<string[]>;
+}
+
+/** Kernel `conversationRosters` (#330 B1) — used to resolve the inviter's
+ *  email (role holders are email-keyed; bot_added carries only the AAD id). */
+export interface ConversationRostersService {
+  getRoster(
+    channelType: string,
+    conversationId: string,
+  ): Promise<
+    | {
+        conversationType: 'direct' | 'group';
+        participants: readonly {
+          userRef: { kind: string; id: string; displayName?: string; email?: string };
+          isBot?: boolean;
+          externalId?: string | null;
+          userPrincipalName?: string | null;
+        }[];
+        partial: boolean;
+      }
+    | undefined
+  >;
+}

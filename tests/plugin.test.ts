@@ -52,7 +52,7 @@ describe('activate', () => {
     const handle = await activate(ctx);
 
     assert.equal(handle.toolkit.tools.length, 4);
-    for (const name of ['conductorEphemeralRuns', 'targetedSend', 'conversationEvents']) {
+    for (const name of ['conductorEphemeralRuns', 'targetedSend', 'conversationEvents', 'agentProvisioning', 'conversationBindings', 'conductorRoleAssignments', 'conversationRosters']) {
       assert.ok(logs.some((l) => l.includes(name)), `missing degradation log for ${name}`);
     }
     await handle.close();

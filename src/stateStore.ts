@@ -22,6 +22,11 @@ export interface FacilitationRecord {
   expiresAt?: string;
   /** Who invited the Facilitator (from the bot_added event), when known. */
   invitedBy?: string;
+  /** Channel-native ref of the inviter (AAD id for Teams) — the roster-match
+   *  key for resolving the email-keyed initiator role holder (#330 C2b). */
+  invitedByRef?: { id: string; displayName?: string };
+  /** The per-conversation initiator role this facilitation reports to. */
+  roleKey?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,7 +36,12 @@ export class FacilitationStateStore {
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
-  markPending(input: { conversationId: string; channelType?: string; invitedBy?: string }): FacilitationRecord {
+  markPending(input: {
+    conversationId: string;
+    channelType?: string;
+    invitedBy?: string;
+    invitedByRef?: { id: string; displayName?: string };
+  }): FacilitationRecord {
     const iso = this.now().toISOString();
     const existing = this.records.get(input.conversationId);
     // An active facilitation is never downgraded by a repeated invite event.
@@ -41,6 +51,7 @@ export class FacilitationStateStore {
       ...(input.channelType ? { channelType: input.channelType } : {}),
       phase: 'pending',
       ...(input.invitedBy ? { invitedBy: input.invitedBy } : {}),
+      ...(input.invitedByRef ? { invitedByRef: input.invitedByRef } : {}),
       createdAt: existing?.createdAt ?? iso,
       updatedAt: iso,
     };
@@ -55,6 +66,7 @@ export class FacilitationStateStore {
     runId: string;
     workflowSlug: string;
     expiresAt: string;
+    roleKey?: string;
   }): FacilitationRecord {
     const iso = this.now().toISOString();
     const existing = this.records.get(input.conversationId);
@@ -67,7 +79,9 @@ export class FacilitationStateStore {
       runId: input.runId,
       workflowSlug: input.workflowSlug,
       expiresAt: input.expiresAt,
+      ...(input.roleKey ? { roleKey: input.roleKey } : {}),
       ...(existing?.invitedBy ? { invitedBy: existing.invitedBy } : {}),
+      ...(existing?.invitedByRef ? { invitedByRef: existing.invitedByRef } : {}),
       createdAt: existing?.createdAt ?? iso,
       updatedAt: iso,
     };

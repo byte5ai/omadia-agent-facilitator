@@ -14,6 +14,8 @@ export interface FacilitatorConfig {
   moderationStyle: string;
   language: FacilitatorLanguage;
   discloseReportTarget: boolean;
+  /** #330 C2b — provision the top-level agent automatically at activate. */
+  autoSetup: boolean;
 }
 
 export const CONFIG_DEFAULTS: FacilitatorConfig = {
@@ -26,6 +28,7 @@ export const CONFIG_DEFAULTS: FacilitatorConfig = {
     'aktiv strukturierend, aber knapp — eingreifen bei Stillstand, Dominanz einzelner oder Zielabweichung',
   language: 'de',
   discloseReportTarget: true,
+  autoSetup: true,
 };
 
 function nonEmptyString(value: unknown, fallback: string): string {
@@ -62,6 +65,10 @@ export function parseConfig(
   const discloseReportTarget =
     typeof rawDisclose === 'boolean' ? rawDisclose : rawDisclose === 'false' ? false : CONFIG_DEFAULTS.discloseReportTarget;
 
+  const rawAutoSetup = get<unknown>('auto_setup');
+  const autoSetup =
+    typeof rawAutoSetup === 'boolean' ? rawAutoSetup : rawAutoSetup === 'false' ? false : CONFIG_DEFAULTS.autoSetup;
+
   return {
     facilitatorAgentSlug: nonEmptyString(get('facilitator_agent_slug'), CONFIG_DEFAULTS.facilitatorAgentSlug),
     initiatorRoleKey: nonEmptyString(get('initiator_role_key'), CONFIG_DEFAULTS.initiatorRoleKey),
@@ -71,5 +78,6 @@ export function parseConfig(
     moderationStyle: nonEmptyString(get('moderation_style'), CONFIG_DEFAULTS.moderationStyle),
     language,
     discloseReportTarget,
+    autoSetup,
   };
 }
