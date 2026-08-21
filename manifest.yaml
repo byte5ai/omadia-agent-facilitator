@@ -16,7 +16,7 @@ identity:
   kind: "agent"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.2.0"
+  version: "0.3.0"
   description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
   authors:
     - name: "byte5 GmbH"
@@ -52,6 +52,7 @@ optional_requires:
   - "conversationBindings@1"
   - "conductorRoleAssignments@1"
   - "conversationRosters@1"
+  - "conversationSend@1"
 
 lifecycle:
   entry: "dist/plugin.js"
@@ -110,6 +111,12 @@ setup:
       help: "Sprache der Moderation und der Reports ('de' oder 'en')."
       required: false
       default: "de"
+    - key: "nudges_enabled"
+      type: "boolean"
+      label: "Gruppen-Nudges erlauben"
+      help: "Default true: Der Assess-Tick darf bei Stillstand eine kurze aktivierende Moderationsnachricht in den Gruppen-Chat posten (kernel-seitig auf eigene Facilitations gescoped, max. 12 pro Facilitation). Auf false stellen, wenn proaktive Posts unerwünscht sind."
+      required: false
+      default: true
     - key: "auto_setup"
       type: "boolean"
       label: "Zero-Touch-Setup"

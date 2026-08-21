@@ -19,6 +19,9 @@ function harness(opts?: {
   noEphemeralRuns?: boolean;
   createError?: Error;
   reportingMode?: 'result-only' | 'interim';
+  nudgesEnabled?: boolean;
+  nudgeUnreachable?: boolean;
+  noPoke?: boolean;
 }): {
   tools: Map<string, (input: unknown) => Promise<string>>;
   store: FacilitationStateStore;
@@ -26,17 +29,29 @@ function harness(opts?: {
   sendCalls: Array<Record<string, unknown>>;
   roleCalls: string[];
   attachCalls: Array<Record<string, unknown>>;
+  pokes: string[];
+  nudges: string[];
 } {
   const createCalls: Array<Record<string, unknown>> = [];
   const sendCalls: Array<Record<string, unknown>> = [];
   const store = new FacilitationStateStore();
 
+  const pokes: string[] = [];
+  const nudges: string[] = [];
   const ephemeralRuns: EphemeralRunsService = {
     createEphemeralRun: async (input) => {
       createCalls.push(input as unknown as Record<string, unknown>);
       if (opts?.createError) throw opts.createError;
       return { runId: 'run-1', workflowId: 'wf-1', workflowSlug: 'eph-facilitation-ab12cd34', expiresAt: '2026-08-22T10:00:00.000Z' };
     },
+    ...(opts?.noPoke
+      ? {}
+      : {
+          poke: async (runId: string) => {
+            pokes.push(runId);
+            return { poked: true };
+          },
+        }),
   };
   const targetedSend: TargetedSendService = {
     sendToPrincipal: async (request) => {
@@ -81,7 +96,18 @@ function harness(opts?: {
       partial: false,
     }),
   };
-  const config = { ...CONFIG_DEFAULTS, reportingMode: opts?.reportingMode ?? CONFIG_DEFAULTS.reportingMode };
+  const conversationSend = {
+    sendToConversation: async (request: { conversationId: string; message: { text: string } }) => {
+      if (opts?.nudgeUnreachable) return { outcome: 'unreachable' as const, code: 'not_permitted', message: 'scoped out' };
+      nudges.push(`${request.conversationId}:${request.message.text}`);
+      return { outcome: 'delivered' as const };
+    },
+  };
+  const config = {
+    ...CONFIG_DEFAULTS,
+    reportingMode: opts?.reportingMode ?? CONFIG_DEFAULTS.reportingMode,
+    nudgesEnabled: opts?.nudgesEnabled ?? true,
+  };
   const toolkit = buildFacilitationToolkit({
     agentId: '@omadia/agent-facilitator',
     config,
@@ -91,10 +117,11 @@ function harness(opts?: {
     getRoleAssignments: () => roleAssignments,
     getConversationBindings: () => conversationBindings,
     getConversationRosters: () => rosters,
+    getConversationSend: () => conversationSend,
     log: () => undefined,
   });
   const tools = new Map(toolkit.map((t) => [t.spec.name, (input: unknown) => t.handle(input) as Promise<string>]));
-  return { tools, store, createCalls, sendCalls, roleCalls, attachCalls };
+  return { tools, store, createCalls, sendCalls, roleCalls, attachCalls, pokes, nudges };
 }
 
 describe('facilitation_start', () => {
@@ -204,5 +231,73 @@ describe('facilitation_report', () => {
     const open = harness({ reportingMode: 'interim' });
     await open.tools.get('facilitation_report')!({ kind: 'interim', text: 'Stand' });
     assert.equal(open.sendCalls.length, 1);
+  });
+});
+
+describe('facilitation_progress / facilitation_nudge (#330 C3)', () => {
+  it('records progress, surfaces it in status, and pokes the tick on dodMet=true', async () => {
+    const { tools, store, pokes } = harness();
+    await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+
+    await tools.get('facilitation_progress')!({ dodMet: false, summary: '3/7 Rollen besetzt', conversationId: 'c1' });
+    assert.equal(store.get('c1')?.progress?.dodMet, false);
+    assert.deepEqual(pokes, []);
+    const status = await tools.get('facilitation_status')!({ conversationId: 'c1' });
+    assert.ok(status.includes('3/7 Rollen besetzt'));
+
+    const out = await tools.get('facilitation_progress')!({ dodMet: true, summary: 'alle bestätigt', conversationId: 'c1' });
+    assert.deepEqual(pokes, ['run-1']);
+    assert.ok(out.includes('sofort') || out.includes('immediately'));
+  });
+
+  it('nudges the group with cap accounting; disabled config and kernel scope refusals stay honest', async () => {
+    const { tools, nudges } = harness();
+    await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    const sent = await tools.get('facilitation_nudge')!({ text: 'Wer fehlt noch?', conversationId: 'c1' });
+    assert.deepEqual(nudges, ['c1:Wer fehlt noch?']);
+    assert.ok(sent.includes('1/12'));
+
+    const disabled = harness({ nudgesEnabled: false });
+    await disabled.tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    const off = await disabled.tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
+    assert.ok(off.includes('deaktiviert'));
+    assert.deepEqual(disabled.nudges, []);
+
+    const refused = harness({ nudgeUnreachable: true });
+    await refused.tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    const out = await refused.tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
+    assert.ok(out.includes('NICHT zugestellt'));
+    assert.ok(out.includes('not_permitted'));
+  });
+});
+
+describe('facilitation progress/nudge guards (#330 C3 review)', () => {
+  it('refuses the no-id fallback when two facilitations are active — a nudge must not guess its audience', async () => {
+    const { tools, nudges } = harness();
+    await tools.get('facilitation_start')!({ goal: 'g1', definitionOfDone: 'd1', conversationId: 'c1' });
+    await tools.get('facilitation_start')!({ goal: 'g2', definitionOfDone: 'd2', conversationId: 'c2' });
+
+    const nudgeOut = await tools.get('facilitation_nudge')!({ text: 'x' });
+    assert.ok(nudgeOut.includes('conversationId'));
+    assert.deepEqual(nudges, []);
+    const progressOut = await tools.get('facilitation_progress')!({ dodMet: false, summary: 's' });
+    assert.ok(progressOut.includes('conversationId'));
+
+    const targeted = await tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c2' });
+    assert.ok(targeted.includes('1/12'));
+    assert.deepEqual(nudges, ['c2:x']);
+  });
+
+  it('says so when dodMet=true cannot fire the tick early (kernel without poke), and failed nudges do not burn the cap', async () => {
+    const { tools, pokes } = harness({ noPoke: true });
+    await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    const out = await tools.get('facilitation_progress')!({ dodMet: true, summary: 'fertig', conversationId: 'c1' });
+    assert.deepEqual(pokes, []);
+    assert.ok(out.includes('nächsten Intervall') || out.includes('next interval'));
+
+    const refused = harness({ nudgeUnreachable: true });
+    await refused.tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    await refused.tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
+    assert.equal(refused.store.get('c1')?.nudgesSent ?? 0, 0);
   });
 });

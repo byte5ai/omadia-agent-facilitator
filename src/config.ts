@@ -16,6 +16,8 @@ export interface FacilitatorConfig {
   discloseReportTarget: boolean;
   /** #330 C2b — provision the top-level agent automatically at activate. */
   autoSetup: boolean;
+  /** #330 C3 — allow proactive group nudges (operator control over posts). */
+  nudgesEnabled: boolean;
 }
 
 export const CONFIG_DEFAULTS: FacilitatorConfig = {
@@ -29,6 +31,7 @@ export const CONFIG_DEFAULTS: FacilitatorConfig = {
   language: 'de',
   discloseReportTarget: true,
   autoSetup: true,
+  nudgesEnabled: true,
 };
 
 function nonEmptyString(value: unknown, fallback: string): string {
@@ -69,6 +72,10 @@ export function parseConfig(
   const autoSetup =
     typeof rawAutoSetup === 'boolean' ? rawAutoSetup : rawAutoSetup === 'false' ? false : CONFIG_DEFAULTS.autoSetup;
 
+  const rawNudges = get<unknown>('nudges_enabled');
+  const nudgesEnabled =
+    typeof rawNudges === 'boolean' ? rawNudges : rawNudges === 'false' ? false : CONFIG_DEFAULTS.nudgesEnabled;
+
   return {
     facilitatorAgentSlug: nonEmptyString(get('facilitator_agent_slug'), CONFIG_DEFAULTS.facilitatorAgentSlug),
     initiatorRoleKey: nonEmptyString(get('initiator_role_key'), CONFIG_DEFAULTS.initiatorRoleKey),
@@ -79,5 +86,6 @@ export function parseConfig(
     language,
     discloseReportTarget,
     autoSetup,
+    nudgesEnabled,
   };
 }

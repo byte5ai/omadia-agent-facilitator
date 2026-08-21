@@ -12,6 +12,7 @@ import { sendReport } from './reporting.js';
 import type {
   ConversationBindingsService,
   ConversationRostersService,
+  ConversationSendService,
   EphemeralRunsService,
   RoleAssignmentsService,
   TargetedSendService,
@@ -19,6 +20,7 @@ import type {
 import type { FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+const MAX_NUDGES_PER_FACILITATION = 12;
 
 /** Stable, readable per-conversation role key - Teams conversation ids are
  *  long and symbol-heavy, the hash keeps the key clean and collision-safe. */
@@ -38,6 +40,7 @@ export function buildFacilitationToolkit(deps: {
   getRoleAssignments: () => RoleAssignmentsService | undefined;
   getConversationBindings: () => ConversationBindingsService | undefined;
   getConversationRosters: () => ConversationRostersService | undefined;
+  getConversationSend: () => ConversationSendService | undefined;
   log: (msg: string) => void;
 }): LocalSubAgentTool[] {
   const { config, store } = deps;
@@ -48,6 +51,18 @@ export function buildFacilitationToolkit(deps: {
       return store.get(conversationId.trim());
     }
     return store.latest();
+  }
+
+  /** Like resolveRecord, but for the ACTING tools (progress/nudge): with more
+   *  than one active facilitation the no-id `latest()` fallback is ambiguous,
+   *  and a proactive message must never guess its audience. */
+  function resolveRecordStrict(conversationId?: string): FacilitationRecord | 'ambiguous' | undefined {
+    if (conversationId && conversationId.trim().length > 0) {
+      return store.get(conversationId.trim());
+    }
+    const active = store.listActive();
+    if (active.length > 1) return 'ambiguous';
+    return active[0] ?? store.latest();
   }
 
   /** Resolve the inviter to the email-keyed holder id the role machinery
@@ -82,6 +97,13 @@ export function buildFacilitationToolkit(deps: {
     if (record.definitionOfDone) lines.push(`Definition of Done: ${record.definitionOfDone}`);
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
     if (record.expiresAt) lines.push(de ? `Deadline/TTL: ${record.expiresAt}` : `Deadline/TTL: ${record.expiresAt}`);
+    if (record.progress) {
+      lines.push(
+        de
+          ? `Fortschritt (Stand ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`
+          : `Progress (as of ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
+      );
+    }
     const reportRole = record.roleKey ?? config.initiatorRoleKey;
     lines.push(
       de
@@ -341,5 +363,124 @@ export function buildFacilitationToolkit(deps: {
     },
   };
 
-  return [start, status, stop, report];
+  const progress: LocalSubAgentTool = {
+    spec: {
+      name: 'facilitation_progress',
+      description:
+        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
+      input_schema: {
+        type: 'object',
+        properties: {
+          dodMet: { type: 'boolean', description: 'true ONLY when the definition of done is met AND the group explicitly confirmed.' },
+          summary: { type: 'string', description: 'One-line state of the result artifact (e.g. \'5/7 roles filled, QA contested\').' },
+          conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
+        },
+        required: ['dodMet', 'summary'],
+      },
+    },
+    async handle(input: unknown): Promise<string> {
+      const args = (input ?? {}) as { dodMet?: boolean; summary?: string; conversationId?: string };
+      const summary = typeof args.summary === 'string' ? args.summary.trim() : '';
+      if (!summary) return de ? 'Progress abgelehnt: summary ist leer.' : 'Progress refused: summary is empty.';
+      const resolved = resolveRecordStrict(args.conversationId);
+      if (resolved === 'ambiguous') {
+        return de
+          ? 'Mehrere aktive Facilitations — bitte conversationId angeben, damit der Progress dem richtigen Ziel zugeordnet wird.'
+          : 'Multiple active facilitations — pass conversationId so the progress lands on the right one.';
+      }
+      const record = resolved;
+      if (!record || record.phase !== 'active') {
+        return de
+          ? 'Keine aktive Facilitation bekannt — Progress nicht protokolliert.'
+          : 'No active facilitation known — progress not recorded.';
+      }
+      const dodMet = args.dodMet === true;
+      store.recordProgress(record.conversationId, { dodMet, summary });
+      let pokeNote = '';
+      if (dodMet && record.runId) {
+        let poked = false;
+        const ephemeralRuns = deps.getEphemeralRuns();
+        if (ephemeralRuns?.poke) {
+          try {
+            poked = (await ephemeralRuns.poke(record.runId)).poked;
+          } catch (err) {
+            deps.log(`poke failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        pokeNote = poked
+          ? de
+            ? ' Der Assess-Tick wurde sofort ausgelöst — die Bestätigungsanfrage an den Initiator geht jetzt raus.'
+            : ' The assess tick was fired immediately — the initiator confirmation is on its way.'
+          : de
+            ? ' Der Tick konnte NICHT sofort ausgelöst werden — er feuert beim nächsten Intervall.'
+            : ' The tick could NOT be fired immediately — it will fire on the next interval.';
+      }
+      return (de ? `Fortschritt protokolliert (dodMet=${String(dodMet)}).` : `Progress recorded (dodMet=${String(dodMet)}).`) + pokeNote;
+    },
+  };
+
+  const nudge: LocalSubAgentTool = {
+    spec: {
+      name: 'facilitation_nudge',
+      description:
+        'Post a short, activating moderation message INTO the facilitated group conversation (proactive — used by the hourly assess tick when the group looks stalled). The kernel only delivers into conversations this facilitation owns; capped per facilitation.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The nudge to post (short, activating, neutral).' },
+          conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
+        },
+        required: ['text'],
+      },
+    },
+    async handle(input: unknown): Promise<string> {
+      const args = (input ?? {}) as { text?: string; conversationId?: string };
+      const text = typeof args.text === 'string' ? args.text.trim() : '';
+      if (!text) return de ? 'Nudge abgelehnt: text ist leer.' : 'Nudge refused: text is empty.';
+      if (!config.nudgesEnabled) {
+        return de ? 'Nudges sind deaktiviert (nudges_enabled=false).' : 'Nudges are disabled (nudges_enabled=false).';
+      }
+      const resolved = resolveRecordStrict(args.conversationId);
+      if (resolved === 'ambiguous') {
+        return de
+          ? 'Mehrere aktive Facilitations — bitte conversationId angeben; ein Nudge darf sein Publikum nicht raten.'
+          : 'Multiple active facilitations — pass conversationId; a nudge must not guess its audience.';
+      }
+      const record = resolved;
+      if (!record || record.phase !== 'active') {
+        return de ? 'Kein aktives Facilitation-Ziel für einen Nudge.' : 'No active facilitation to nudge.';
+      }
+      const conversationSend = deps.getConversationSend();
+      if (!conversationSend) {
+        return de
+          ? "Nudge nicht möglich: der Kernel stellt keinen conversationSend-Service bereit (Kernel < #330 C3)."
+          : "Cannot nudge: the kernel does not publish the conversationSend service (kernel < #330 C3).";
+      }
+      const reserved = store.reserveNudge(record.conversationId, MAX_NUDGES_PER_FACILITATION);
+      if (reserved === undefined) {
+        return de
+          ? `Nudge-Limit erreicht (${String(MAX_NUDGES_PER_FACILITATION)} pro Facilitation) — nicht gesendet.`
+          : `Nudge cap reached (${String(MAX_NUDGES_PER_FACILITATION)} per facilitation) — not sent.`;
+      }
+      const outcome = await conversationSend
+        .sendToConversation({
+          agentSlug: config.facilitatorAgentSlug,
+          channelType: record.channelType ?? config.reportChannelType,
+          conversationId: record.conversationId,
+          message: { text },
+        })
+        .catch((err: unknown) => ({ outcome: 'unreachable' as const, code: 'error', message: err instanceof Error ? err.message : String(err) }));
+      if (outcome.outcome === 'delivered') {
+        return de
+          ? `Nudge gesendet (${String(reserved)}/${String(MAX_NUDGES_PER_FACILITATION)}).`
+          : `Nudge sent (${String(reserved)}/${String(MAX_NUDGES_PER_FACILITATION)}).`;
+      }
+      store.releaseNudge(record.conversationId);
+      return de
+        ? `Nudge NICHT zugestellt: ${outcome.code} — ${outcome.message}`
+        : `Nudge NOT delivered: ${outcome.code} — ${outcome.message}`;
+    },
+  };
+
+  return [start, status, stop, report, progress, nudge];
 }
