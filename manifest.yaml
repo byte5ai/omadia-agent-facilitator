@@ -16,7 +16,7 @@ identity:
   kind: "agent"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.3.0"
+  version: "0.4.0"
   description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
   authors:
     - name: "byte5 GmbH"

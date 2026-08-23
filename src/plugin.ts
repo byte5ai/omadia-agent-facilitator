@@ -110,6 +110,34 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
     ctx.log('subscribed to conversation membership events (bot_added → pending facilitation + auto-bind)');
   }
 
+  // #330 field report — restart rehydration: the in-memory store died with
+  // the last deploy while the durable side (ephemeral run, binding, role)
+  // kept going. Rebuild the records from the kernel's read-own attachment
+  // listing so progress/nudge/status keep working. Best-effort: a pre-feature
+  // kernel (no listOwnAttachments) or a failing call just keeps the old
+  // re-invite behaviour.
+  try {
+    const bindings = resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME);
+    if (bindings && typeof bindings.listOwnAttachments === 'function') {
+      const rows = await bindings.listOwnAttachments({ agentSlug: config.facilitatorAgentSlug });
+      let restored = 0;
+      for (const row of rows) {
+        const record = store.restore({
+          conversationId: row.conversationId,
+          channelType: row.channelType,
+          phase: row.state === 'attached' ? 'active' : 'pending',
+          ...(row.activeRunId ? { runId: row.activeRunId } : {}),
+          ...(row.roleKey ? { roleKey: row.roleKey } : {}),
+          expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
+        });
+        if (record) restored += 1;
+      }
+      if (restored > 0) ctx.log(`facilitation state rehydrated: ${String(restored)} attachment(s) restored`);
+    }
+  } catch (err) {
+    ctx.log(`facilitation rehydration failed (continuing without): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const tools = buildFacilitationToolkit({
     agentId: AGENT_ID,
     config,

@@ -20,6 +20,10 @@ import type {
 import type { FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+// Known limit (review L1): the counter lives in the in-memory record, so a
+// restart resets it — the cap is per process lifetime, not strictly per
+// facilitation. Durable nudge accounting needs kernel-side state; until
+// then the TTL (max 24 rounds) bounds the total blast radius.
 const MAX_NUDGES_PER_FACILITATION = 12;
 
 /** Stable, readable per-conversation role key - Teams conversation ids are
@@ -97,6 +101,13 @@ export function buildFacilitationToolkit(deps: {
     if (record.definitionOfDone) lines.push(`Definition of Done: ${record.definitionOfDone}`);
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
     if (record.expiresAt) lines.push(de ? `Deadline/TTL: ${record.expiresAt}` : `Deadline/TTL: ${record.expiresAt}`);
+    if (record.restored && !record.goal) {
+      lines.push(
+        de
+          ? 'Nach einem Neustart wiederhergestellt — Ziel/DoD stehen im Workflow-Kontext des Runs, nicht hier.'
+          : 'Restored after a restart — goal/DoD live in the run workflow context, not here.',
+      );
+    }
     if (record.progress) {
       lines.push(
         de

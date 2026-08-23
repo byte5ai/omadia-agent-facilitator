@@ -87,6 +87,20 @@ export interface ConversationBindingsService {
     invite?: ObservedInviteShape;
   }>;
   unbind(input: { agentSlug: string; channelType: string; conversationId: string }): Promise<{ unbound: boolean }>;
+  /** #330 field report — restart rehydration (kernel < this feature: absent).
+   *  Read-own listing of the plugin's non-expired ephemeral attachments,
+   *  enriched with the workflow's newest running/waiting run. */
+  listOwnAttachments?(input: { agentSlug: string }): Promise<
+    Array<{
+      channelType: string;
+      conversationId: string;
+      workflowId: string | null;
+      roleKey: string | null;
+      state: 'pending' | 'attached';
+      expiresAt: string | Date;
+      activeRunId: string | null;
+    }>
+  >;
   attachWorkflow(input: {
     agentSlug: string;
     channelType: string;

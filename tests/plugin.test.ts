@@ -58,3 +58,42 @@ describe('activate', () => {
     await handle.close();
   });
 });
+
+// #330 field report — after a restart the durable side (run, binding, role)
+// kept going while the in-memory store was empty; rehydration rebuilds it.
+describe('activate — restart rehydration', () => {
+  it('restores active facilitations from the kernel attachment listing', async () => {
+    const { ctx, logs } = fakeContext({
+      conversationBindings: {
+        listOwnAttachments: async (input: { agentSlug: string }) =>
+          input.agentSlug === 'facilitator'
+            ? [
+                {
+                  channelType: 'teams',
+                  conversationId: 'conv-restored',
+                  workflowId: 'wf-1',
+                  roleKey: 'facilitation-abc',
+                  state: 'attached',
+                  expiresAt: new Date('2026-08-24T00:00:00.000Z'),
+                  activeRunId: 'run-42',
+                },
+              ]
+            : [],
+      },
+    });
+    const handle = await activate(ctx);
+    assert.ok(logs.some((l) => l.includes('rehydrated: 1')));
+
+    const status = handle.toolkit.tools.find((t) => t.spec.name === 'facilitation_status')!;
+    const out = (await status.handle({ conversationId: 'conv-restored' })) as string;
+    assert.ok(out.includes('conv-restored'));
+    await handle.close();
+  });
+
+  it('a pre-feature kernel (no listOwnAttachments) activates unchanged', async () => {
+    const { ctx, logs } = fakeContext({ conversationBindings: {} });
+    const handle = await activate(ctx);
+    assert.ok(!logs.some((l) => l.includes('rehydrated')));
+    await handle.close();
+  });
+});
