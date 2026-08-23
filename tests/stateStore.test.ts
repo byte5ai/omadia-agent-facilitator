@@ -48,3 +48,17 @@ describe('FacilitationStateStore', () => {
     assert.equal(store.latest()?.conversationId, 'new');
   });
 });
+
+describe('restore (#330 restart rehydration)', () => {
+  it('is create-only — a live record always wins over a restored one', () => {
+    const store = new FacilitationStateStore(() => new Date('2026-08-22T08:00:00.000Z'));
+    store.markPending({ conversationId: 'c1', channelType: 'teams' });
+    const clobbered = store.restore({ conversationId: 'c1', phase: 'active', runId: 'run-x' });
+    assert.equal(clobbered, undefined);
+    assert.equal(store.get('c1')?.phase, 'pending');
+
+    const restored = store.restore({ conversationId: 'c2', phase: 'active', runId: 'run-2', roleKey: 'facilitation-x' });
+    assert.equal(restored?.restored, true);
+    assert.equal(store.get('c2')?.runId, 'run-2');
+  });
+});

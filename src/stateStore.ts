@@ -32,6 +32,10 @@ export interface FacilitationRecord {
   progress?: { dodMet: boolean; summary: string; updatedAt: string };
   /** #330 C3 — nudge accounting for the per-facilitation cap. */
   nudgesSent?: number;
+  /** Rebuilt from the kernel's attachment listing after a restart — goal and
+   *  DoD text live only in the durable workflow run context, so status output
+   *  says so instead of inventing them. */
+  restored?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +92,33 @@ export class FacilitationStateStore {
       ...(existing?.invitedBy ? { invitedBy: existing.invitedBy } : {}),
       ...(existing?.invitedByRef ? { invitedByRef: existing.invitedByRef } : {}),
       createdAt: existing?.createdAt ?? iso,
+      updatedAt: iso,
+    };
+    this.records.set(input.conversationId, record);
+    return record;
+  }
+
+  /** #330 field report — restart rehydration. Create-only: a record the
+   *  live event stream already produced in this process always wins. */
+  restore(input: {
+    conversationId: string;
+    channelType?: string;
+    phase: 'pending' | 'active';
+    runId?: string;
+    roleKey?: string;
+    expiresAt?: string;
+  }): FacilitationRecord | undefined {
+    if (this.records.has(input.conversationId)) return undefined;
+    const iso = this.now().toISOString();
+    const record: FacilitationRecord = {
+      conversationId: input.conversationId,
+      ...(input.channelType ? { channelType: input.channelType } : {}),
+      phase: input.phase,
+      ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.roleKey ? { roleKey: input.roleKey } : {}),
+      ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      restored: true,
+      createdAt: iso,
       updatedAt: iso,
     };
     this.records.set(input.conversationId, record);
