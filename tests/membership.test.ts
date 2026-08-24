@@ -96,3 +96,60 @@ describe('createMembershipHandler', () => {
     assert.ok(logs.some((l) => l.includes('failed')));
   });
 });
+
+// #330 round 3 — bot_present is eligibility, never an eager bind: binding
+// every chat the bot merely talks in would hijack conversations nobody asked
+// to be facilitated.
+describe('createMembershipHandler — bot_present', () => {
+  it('marks pending with bindPending and does NOT bind', () => {
+    const bindings = bindingsFake();
+    const store = new FacilitationStateStore();
+    const handler = createMembershipHandler({
+      store,
+      config: CONFIG_DEFAULTS,
+      getConversationBindings: () => bindings.service,
+      log: () => undefined,
+    });
+    handler({
+      kind: 'bot_present',
+      channelId: 'de.byte5.channel.teams',
+      channelType: 'teams',
+      conversationId: 'grp-present',
+      conversationType: 'group',
+      members: [],
+      addedBy: { kind: 'teams-aad', id: 'aad-1', displayName: 'Marcel Wege' },
+      occurredAt: '2026-08-24T07:00:00.000Z',
+    });
+    const record = store.get('grp-present');
+    assert.equal(record?.phase, 'pending');
+    assert.equal(record?.bindPending, true);
+    assert.equal(record?.invitedBy, 'Marcel Wege');
+    assert.deepEqual(bindings.bindCalls, []);
+  });
+
+  it('never downgrades an existing record, and ignores non-group presence', () => {
+    const bindings = bindingsFake();
+    const store = new FacilitationStateStore();
+    const handler = createMembershipHandler({
+      store,
+      config: CONFIG_DEFAULTS,
+      getConversationBindings: () => bindings.service,
+      log: () => undefined,
+    });
+    handler({
+      kind: 'bot_added', channelId: 'x', channelType: 'teams', conversationId: 'grp-1',
+      conversationType: 'group', members: [], occurredAt: '2026-08-24T07:00:00.000Z',
+    });
+    handler({
+      kind: 'bot_present', channelId: 'x', channelType: 'teams', conversationId: 'grp-1',
+      conversationType: 'group', members: [], occurredAt: '2026-08-24T07:01:00.000Z',
+    });
+    assert.equal(store.get('grp-1')?.bindPending, undefined, 'real invite must not gain bindPending');
+
+    handler({
+      kind: 'bot_present', channelId: 'x', channelType: 'teams', conversationId: 'dm-1',
+      conversationType: 'direct', members: [], occurredAt: '2026-08-24T07:00:00.000Z',
+    });
+    assert.equal(store.get('dm-1'), undefined);
+  });
+});

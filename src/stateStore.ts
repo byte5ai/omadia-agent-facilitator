@@ -32,6 +32,10 @@ export interface FacilitationRecord {
   progress?: { dodMet: boolean; summary: string; updatedAt: string };
   /** #330 C3 — nudge accounting for the per-facilitation cap. */
   nudgesSent?: number;
+  /** #330 round 3 — set when the record came from `bot_present` (bot was
+   *  already a member, nobody re-invited it): binding happens lazily in
+   *  facilitation_start instead of eagerly on the event. */
+  bindPending?: boolean;
   /** Rebuilt from the kernel's attachment listing after a restart — goal and
    *  DoD text live only in the durable workflow run context, so status output
    *  says so instead of inventing them. */
@@ -50,6 +54,9 @@ export class FacilitationStateStore {
     channelType?: string;
     invitedBy?: string;
     invitedByRef?: { id: string; displayName?: string };
+    /** #330 round 3 — record came from a `bot_present` eligibility signal:
+     *  no binding exists yet, facilitation_start performs it lazily. */
+    bindPending?: boolean;
   }): FacilitationRecord {
     const iso = this.now().toISOString();
     const existing = this.records.get(input.conversationId);
@@ -61,6 +68,7 @@ export class FacilitationStateStore {
       phase: 'pending',
       ...(input.invitedBy ? { invitedBy: input.invitedBy } : {}),
       ...(input.invitedByRef ? { invitedByRef: input.invitedByRef } : {}),
+      ...(input.bindPending ? { bindPending: true } : {}),
       createdAt: existing?.createdAt ?? iso,
       updatedAt: iso,
     };

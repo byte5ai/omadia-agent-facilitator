@@ -210,6 +210,30 @@ export function buildFacilitationToolkit(deps: {
         }
       }
 
+      // #330 round 3 — lazy bind for `bot_present` records: the eligibility
+      // came from an inbound group message, the BIND waits for this explicit
+      // start. Best-effort: a refusal is logged and the facilitation still
+      // runs (nudges then stay kernel-refused until a binding exists).
+      if (pending?.bindPending && pending.channelType) {
+        const bindings = deps.getConversationBindings();
+        if (bindings) {
+          try {
+            const bound = await bindings.bind({
+              agentSlug: config.facilitatorAgentSlug,
+              channelType: pending.channelType,
+              conversationId,
+            });
+            deps.log(
+              bound.bound
+                ? `lazy-bound ${pending.channelType}/${conversationId} at facilitation_start`
+                : `lazy bind refused at start: ${bound.reason ?? 'unknown'}`,
+            );
+          } catch (err) {
+            deps.log(`lazy bind failed at start: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+
       let handle;
       try {
         handle = await ephemeralRuns.createEphemeralRun({
