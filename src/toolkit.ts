@@ -25,6 +25,11 @@ const HOUR_MS = 60 * 60 * 1000;
 // facilitation. Durable nudge accounting needs kernel-side state; until
 // then the TTL (max 24 rounds) bounds the total blast radius.
 const MAX_NUDGES_PER_FACILITATION = 12;
+// Field report: the assess tick nudged eleven minutes into an actively
+// moderated conversation — reading as a SECOND facilitator. Fresh progress
+// is deterministic proof the group is working; the tool refuses instead of
+// trusting the model to hold back.
+const NUDGE_COOLDOWN_AFTER_PROGRESS_MS = 45 * 60 * 1000;
 
 /** Stable, readable per-conversation role key - Teams conversation ids are
  *  long and symbol-heavy, the hash keeps the key clean and collision-safe. */
@@ -484,6 +489,14 @@ export function buildFacilitationToolkit(deps: {
       const record = resolved;
       if (!record || record.phase !== 'active') {
         return de ? 'Kein aktives Facilitation-Ziel für einen Nudge.' : 'No active facilitation to nudge.';
+      }
+      if (record.progress?.updatedAt) {
+        const age = Date.now() - new Date(record.progress.updatedAt).getTime();
+        if (Number.isFinite(age) && age >= 0 && age < NUDGE_COOLDOWN_AFTER_PROGRESS_MS) {
+          return de
+            ? 'Kein Nudge gesendet: Die Gruppe arbeitet aktiv (Progress vor weniger als 45 Minuten protokolliert) — ein Impuls würde als zweiter Facilitator wirken.'
+            : 'No nudge sent: the group is actively working (progress recorded less than 45 minutes ago) — an impulse would read as a second facilitator.';
+        }
       }
       const conversationSend = deps.getConversationSend();
       if (!conversationSend) {
