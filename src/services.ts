@@ -43,7 +43,7 @@ export interface ConversationEventsService {
 }
 
 export interface ConversationMembershipEventShape {
-  kind: 'bot_added' | 'members_added' | 'members_removed';
+  kind: 'bot_added' | 'members_added' | 'members_removed' | 'bot_present';
   channelId: string;
   channelType?: string;
   conversationId: string;

@@ -31,6 +31,7 @@ function harness(opts?: {
   attachCalls: Array<Record<string, unknown>>;
   pokes: string[];
   nudges: string[];
+  bindCalls: Array<Record<string, unknown>>;
 } {
   const createCalls: Array<Record<string, unknown>> = [];
   const sendCalls: Array<Record<string, unknown>> = [];
@@ -78,8 +79,12 @@ function harness(opts?: {
     removeHolder: async () => undefined,
     holders: async () => [],
   };
+  const bindCalls: Array<Record<string, unknown>> = [];
   const conversationBindings: ConversationBindingsService = {
-    bind: async () => ({ bound: true }),
+    bind: async (input) => {
+      bindCalls.push(input as unknown as Record<string, unknown>);
+      return { bound: true };
+    },
     unbind: async () => ({ unbound: true }),
     attachWorkflow: async (input) => {
       attachCalls.push(input as unknown as Record<string, unknown>);
@@ -121,7 +126,7 @@ function harness(opts?: {
     log: () => undefined,
   });
   const tools = new Map(toolkit.map((t) => [t.spec.name, (input: unknown) => t.handle(input) as Promise<string>]));
-  return { tools, store, createCalls, sendCalls, roleCalls, attachCalls, pokes, nudges };
+  return { tools, store, createCalls, sendCalls, roleCalls, attachCalls, pokes, nudges, bindCalls };
 }
 
 describe('facilitation_start', () => {
@@ -299,5 +304,26 @@ describe('facilitation progress/nudge guards (#330 C3 review)', () => {
     await refused.tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
     await refused.tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
     assert.equal(refused.store.get('c1')?.nudgesSent ?? 0, 0);
+  });
+});
+
+// #330 round 3 — a bot_present record binds LAZILY at facilitation_start
+// (explicit intent), never on the presence signal itself.
+describe('facilitation_start — lazy bind for bot_present records', () => {
+  it('binds the conversation at start when the record carries bindPending', async () => {
+    const { tools, store, bindCalls } = harness();
+    store.markPending({ conversationId: 'grp-present', channelType: 'teams', bindPending: true });
+    const out = await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'grp-present' });
+    assert.ok(!out.includes('abgelehnt') && !out.includes('refused'), out);
+    assert.equal(bindCalls.length, 1);
+    assert.equal(bindCalls[0]!.conversationId, 'grp-present');
+    assert.equal(bindCalls[0]!.channelType, 'teams');
+  });
+
+  it('an invited (bot_added) record does not re-bind at start', async () => {
+    const { tools, store, bindCalls } = harness();
+    store.markPending({ conversationId: 'grp-invited', channelType: 'teams' });
+    await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'grp-invited' });
+    assert.deepEqual(bindCalls, []);
   });
 });

@@ -18,8 +18,30 @@ export function createMembershipHandler(deps: {
 }): (event: ConversationMembershipEventShape) => void {
   return (event) => {
     try {
-      if (event.kind !== 'bot_added') return;
+      if (event.kind !== 'bot_added' && event.kind !== 'bot_present') return;
       const invitedBy = event.addedBy?.displayName ?? event.addedBy?.id;
+      // #330 round 3 — `bot_present` is an ELIGIBILITY signal (the bot was
+      // already a member; an inbound group message proved it). Record it so
+      // facilitation_start can find the conversation, but DO NOT eagerly
+      // bind: binding every chat the bot merely talks in would hijack
+      // conversations nobody asked to be facilitated. The bind happens
+      // lazily inside facilitation_start — explicit intent.
+      if (event.kind === 'bot_present') {
+        if (event.conversationType !== 'group' || !event.channelType) return;
+        const existing = deps.store.get(event.conversationId);
+        if (existing) return; // never downgrade a real invite or an active facilitation
+        deps.store.markPending({
+          conversationId: event.conversationId,
+          channelType: event.channelType,
+          ...(invitedBy ? { invitedBy } : {}),
+          ...(event.addedBy
+            ? { invitedByRef: { id: event.addedBy.id, ...(event.addedBy.displayName ? { displayName: event.addedBy.displayName } : {}) } }
+            : {}),
+          bindPending: true,
+        });
+        deps.log(`facilitator present in ${event.channelType}/${event.conversationId} — eligible, bind deferred to facilitation_start`);
+        return;
+      }
       deps.store.markPending({
         conversationId: event.conversationId,
         ...(event.channelType ? { channelType: event.channelType } : {}),
