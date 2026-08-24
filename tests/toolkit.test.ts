@@ -327,3 +327,24 @@ describe('facilitation_start — lazy bind for bot_present records', () => {
     assert.deepEqual(bindCalls, []);
   });
 });
+
+// Field report — the tick nudged into an actively moderated conversation.
+describe('facilitation_nudge — cooldown while progress is fresh', () => {
+  it('refuses when progress was recorded within the cooldown, sends after it aged out', async () => {
+    const { tools, store, nudges } = harness();
+    await tools.get('facilitation_start')!({ goal: 'g', definitionOfDone: 'd', conversationId: 'c1' });
+    await tools.get('facilitation_progress')!({ dodMet: false, summary: 'aktiv dran', conversationId: 'c1' });
+
+    const refused = await tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
+    assert.ok(refused.includes('aktiv') || refused.includes('actively'), refused);
+    assert.deepEqual(nudges, []);
+
+    // Age the progress artificially past the cooldown.
+    const record = store.get('c1')!;
+    store.recordProgress('c1', { dodMet: false, summary: record.progress!.summary });
+    (store.get('c1')! as { progress?: { updatedAt: string } }).progress!.updatedAt = new Date(Date.now() - 46 * 60 * 1000).toISOString();
+    const sent = await tools.get('facilitation_nudge')!({ text: 'x', conversationId: 'c1' });
+    assert.ok(sent.includes('1/12'), sent);
+    assert.deepEqual(nudges, ['c1:x']);
+  });
+});
