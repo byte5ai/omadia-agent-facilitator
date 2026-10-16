@@ -1,13 +1,19 @@
-// The four facilitation_* tools (#330 C1). The LLM loop (top-level agent via
-// query_facilitation, or the pattern's step-mode turns) drives them; every
-// degradation (missing kernel service, quota, unknown conversation) comes
-// back as an honest tool output — never a throw that kills the turn.
-
-import { createHash } from 'node:crypto';
+// The six facilitation_* tools (#330 C1/C3). The LLM loop (top-level agent
+// via query_facilitation, or the pattern's step-mode turns) drives them;
+// every degradation (missing kernel service, quota, unknown conversation)
+// comes back as an honest tool output — never a throw that kills the turn.
+//
+// 0.6.0 — durable state: every handler first awaits the lazy rehydration
+// (rehydrate.ts — plugins activate BEFORE the kernel publishes its
+// Conductor services, so activate-time hydration alone finds nothing on a
+// cold boot), and every mutation is written through to the kernel's per-run
+// state blob (persistence.ts). facilitation_start/stop live in their own files.
 
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import type { FacilitatorConfig } from './config.js';
+import { RunStatePersister } from './persistence.js';
+import { Hydrator } from './rehydrate.js';
 import { sendReport } from './reporting.js';
 import type {
   ConversationBindingsService,
@@ -17,27 +23,27 @@ import type {
   RoleAssignmentsService,
   TargetedSendService,
 } from './services.js';
+import { buildStartTool } from './startTool.js';
+import { buildStopTool } from './stopTool.js';
 import type { FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
-const HOUR_MS = 60 * 60 * 1000;
-// Known limit (review L1): the counter lives in the in-memory record, so a
-// restart resets it — the cap is per process lifetime, not strictly per
-// facilitation. Durable nudge accounting needs kernel-side state; until
-// then the TTL (max 24 rounds) bounds the total blast radius.
+export { facilitationRoleKey } from './startTool.js';
+
+// The counter is part of the persisted run state (0.6.0), so the cap holds
+// per facilitation across restarts. Writes are best-effort: on a kernel
+// without saveRunState it degrades to the old per-process cap, and the TTL
+// still bounds the total blast radius.
 const MAX_NUDGES_PER_FACILITATION = 12;
 // Field report: the assess tick nudged eleven minutes into an actively
 // moderated conversation — reading as a SECOND facilitator. Fresh progress
 // is deterministic proof the group is working; the tool refuses instead of
 // trusting the model to hold back.
 const NUDGE_COOLDOWN_AFTER_PROGRESS_MS = 45 * 60 * 1000;
+// A one-line state, not a transcript — also keeps the persisted run state
+// well inside the kernel's 16 KiB cap.
+const MAX_PROGRESS_SUMMARY_CHARS = 1000;
 
-/** Stable, readable per-conversation role key - Teams conversation ids are
- *  long and symbol-heavy, the hash keeps the key clean and collision-safe. */
-export function facilitationRoleKey(conversationId: string): string {
-  return `facilitation-${createHash('sha256').update(conversationId).digest('hex').slice(0, 12)}`;
-}
-
-export function buildFacilitationToolkit(deps: {
+export interface ToolkitDeps {
   agentId: string;
   config: FacilitatorConfig;
   store: FacilitationStateStore;
@@ -51,13 +57,53 @@ export function buildFacilitationToolkit(deps: {
   getConversationRosters: () => ConversationRostersService | undefined;
   getConversationSend: () => ConversationSendService | undefined;
   log: (msg: string) => void;
-}): LocalSubAgentTool[] {
+  /** Shared with plugin.ts (activate-time head start); built here when absent. */
+  hydrator?: Hydrator;
+  persister?: RunStatePersister;
+  now?: () => Date;
+}
+
+/** What the split-out tool builders (startTool.ts, stopTool.ts) share with this file. */
+export interface ToolContext {
+  deps: ToolkitDeps;
+  de: boolean;
+  store: FacilitationStateStore;
+  hydrator: Hydrator;
+  persister: RunStatePersister;
+  now: () => Date;
+  resolveRecord(conversationId?: string): Promise<FacilitationRecord | undefined>;
+  resolveRecordStrict(conversationId?: string): Promise<FacilitationRecord | 'ambiguous' | undefined>;
+}
+
+export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[] {
   const { config, store } = deps;
   const de = config.language === 'de';
+  const hydrator =
+    deps.hydrator ??
+    new Hydrator({
+      agentId: deps.agentId,
+      config,
+      store,
+      getEphemeralRuns: deps.getEphemeralRuns,
+      getConversationBindings: deps.getConversationBindings,
+      log: deps.log,
+    });
+  const persister =
+    deps.persister ?? new RunStatePersister({ agentId: deps.agentId, store, getEphemeralRuns: deps.getEphemeralRuns, log: deps.log });
+  const now = deps.now ?? (() => new Date());
 
-  function resolveRecord(conversationId?: string): FacilitationRecord | undefined {
+  /** Explicit id → that record, with ONE throttled kernel re-read on a miss
+   *  (a facilitation this process has not seen yet). */
+  async function lookup(conversationId: string): Promise<FacilitationRecord | undefined> {
+    const hit = store.get(conversationId);
+    if (hit) return hit;
+    if (await hydrator.refreshOnMiss()) return store.get(conversationId);
+    return undefined;
+  }
+
+  async function resolveRecord(conversationId?: string): Promise<FacilitationRecord | undefined> {
     if (conversationId && conversationId.trim().length > 0) {
-      return store.get(conversationId.trim());
+      return lookup(conversationId.trim());
     }
     return store.latest();
   }
@@ -65,47 +111,37 @@ export function buildFacilitationToolkit(deps: {
   /** Like resolveRecord, but for the ACTING tools (progress/nudge): with more
    *  than one active facilitation the no-id `latest()` fallback is ambiguous,
    *  and a proactive message must never guess its audience. */
-  function resolveRecordStrict(conversationId?: string): FacilitationRecord | 'ambiguous' | undefined {
+  async function resolveRecordStrict(conversationId?: string): Promise<FacilitationRecord | 'ambiguous' | undefined> {
     if (conversationId && conversationId.trim().length > 0) {
-      return store.get(conversationId.trim());
+      return lookup(conversationId.trim());
     }
     const active = store.listActive();
     if (active.length > 1) return 'ambiguous';
     return active[0] ?? store.latest();
   }
 
-  /** Resolve the inviter to the email-keyed holder id the role machinery
-   *  expects. bot_added only carries the AAD id, so we match it against the
-   *  roster; the AAD id itself is the honest fallback (targetedSend will then
-   *  report the holder unreachable rather than silently dropping). */
-  async function resolveInitiatorHolder(record: FacilitationRecord): Promise<{ holderId: string; via: string } | undefined> {
-    const inviter = record.invitedByRef;
-    if (!inviter) return undefined;
-    const rosters = deps.getConversationRosters();
-    if (rosters && record.channelType) {
-      try {
-        const roster = await rosters.getRoster(record.channelType, record.conversationId);
-        const match = roster?.participants.find(
-          (p) => p.userRef.id === inviter.id || p.externalId === inviter.id,
-        );
-        const email = match?.userRef.email ?? match?.userPrincipalName ?? undefined;
-        if (email) return { holderId: email.toLowerCase(), via: 'roster' };
-      } catch (err) {
-        deps.log(`initiator roster lookup failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    return { holderId: inviter.id, via: 'aad-fallback' };
-  }
-
   function describe(record: FacilitationRecord): string {
     const lines = [
       de ? `Facilitation-Status: ${record.phase}` : `Facilitation status: ${record.phase}`,
-      `Conversation: ${record.channelType ? `${record.channelType}/` : ''}${record.conversationId}`,
+      record.conversationUnknown
+        ? de
+          ? `Conversation: unbekannt (Run ${record.runId ?? '?'} wurde vor 0.6.0 gestartet) — Nudges in diese Konversation sind nicht möglich.`
+          : `Conversation: unknown (run ${record.runId ?? '?'} was started before 0.6.0) — nudges into it are not possible.`
+        : `Conversation: ${record.channelType ? `${record.channelType}/` : ''}${record.conversationId}`,
     ];
     if (record.goal) lines.push(de ? `Ziel: ${record.goal}` : `Goal: ${record.goal}`);
     if (record.definitionOfDone) lines.push(`Definition of Done: ${record.definitionOfDone}`);
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
-    if (record.expiresAt) lines.push(de ? `Deadline/TTL: ${record.expiresAt}` : `Deadline/TTL: ${record.expiresAt}`);
+    if (record.deadline) lines.push(`Deadline: ${record.deadline}`);
+    if (record.expiresAt) {
+      lines.push(
+        record.deadline
+          ? de
+            ? `Workflow-Laufzeit (TTL) bis: ${record.expiresAt}`
+            : `Workflow lifetime (TTL) until: ${record.expiresAt}`
+          : `Deadline/TTL: ${record.expiresAt}`,
+      );
+    }
     if (record.restored && !record.goal) {
       lines.push(
         de
@@ -120,6 +156,9 @@ export function buildFacilitationToolkit(deps: {
           : `Progress (as of ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
       );
     }
+    if (record.nudgesSent) {
+      lines.push(`Nudges: ${String(record.nudgesSent)}/${String(MAX_NUDGES_PER_FACILITATION)}`);
+    }
     const reportRole = record.roleKey ?? config.initiatorRoleKey;
     lines.push(
       de
@@ -129,198 +168,8 @@ export function buildFacilitationToolkit(deps: {
     return lines.join('\n');
   }
 
-  const start: LocalSubAgentTool = {
-    spec: {
-      name: 'facilitation_start',
-      description:
-        'Start a facilitation for the current group conversation: creates ONE ephemeral Conductor run from the curated facilitation pattern (goal + machine-checkable definition of done) and returns the opening handshake to post verbatim into the chat. Call exactly once per facilitation, after the initiator stated goal and definition of done.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          goal: { type: 'string', description: 'The outcome the group must reach, in one sentence.' },
-          definitionOfDone: {
-            type: 'string',
-            description: 'Machine-checkable completion criterion (e.g. "every role carries exactly one confirmed name and the group agreed").',
-          },
-          conversationId: {
-            type: 'string',
-            description: 'Channel-native conversation id, when known. Omit to use the most recent invitation.',
-          },
-          ttlHours: { type: 'number', description: 'Optional lifetime override in hours (kernel-clamped).' },
-        },
-        required: ['goal', 'definitionOfDone'],
-      },
-    },
-    async handle(input: unknown): Promise<string> {
-      const args = (input ?? {}) as { goal?: string; definitionOfDone?: string; conversationId?: string; ttlHours?: number };
-      const goal = typeof args.goal === 'string' ? args.goal.trim() : '';
-      const definitionOfDone = typeof args.definitionOfDone === 'string' ? args.definitionOfDone.trim() : '';
-      if (!goal || !definitionOfDone) {
-        return de
-          ? 'Start abgelehnt: goal und definitionOfDone sind Pflicht. Frage den Initiator nach Ziel und einer maschinell prüfbaren Definition-of-Done.'
-          : 'Start refused: goal and definitionOfDone are required. Ask the initiator for the goal and a machine-checkable definition of done.';
-      }
-      const ephemeralRuns = deps.getEphemeralRuns();
-      if (!ephemeralRuns) {
-        return de
-          ? 'Start nicht möglich: der Kernel stellt keinen conductorEphemeralRuns-Service bereit (Kernel < #330 Workstream A, oder keine Datenbank). Bitte den Operator informieren.'
-          : 'Cannot start: the kernel does not publish the conductorEphemeralRuns service (kernel < #330 Workstream A, or no database). Please inform the operator.';
-      }
-
-      const pending = resolveRecord(args.conversationId);
-      const conversationId = args.conversationId?.trim() || pending?.conversationId;
-      if (!conversationId) {
-        // Refusing beats a colliding synthetic key (review L4): after a
-        // restart there is no pending record to fall back on.
-        return de
-          ? 'Start abgelehnt: Ich kenne keine Ziel-Konversation (keine ausstehende Einladung, keine conversationId). Bitte die conversationId mitgeben.'
-          : 'Start refused: no target conversation known (no pending invitation, no conversationId). Please pass the conversationId.';
-      }
-      if (pending?.phase === 'active') {
-        return de
-          ? `Es läuft bereits eine Facilitation in dieser Konversation (Run ${pending.runId ?? '?'}). Genau EINE pro Konversation — nutze facilitation_status.`
-          : `A facilitation is already active in this conversation (run ${pending.runId ?? '?'}). Exactly ONE per conversation — use facilitation_status.`;
-      }
-
-      const ttlHours =
-        typeof args.ttlHours === 'number' && Number.isFinite(args.ttlHours) && args.ttlHours > 0
-          ? args.ttlHours
-          : config.defaultTtlHours;
-
-      // #330 C2b - per-conversation initiator role, auto-assigned to the
-      // inviter. Degrades to the configured default role when the kernel
-      // predates C2a or no invite context exists.
-      let initiatorRoleKey = config.initiatorRoleKey;
-      const roleAssignments = deps.getRoleAssignments();
-      if (roleAssignments && pending) {
-        const candidateKey = facilitationRoleKey(conversationId);
-        const holder = await resolveInitiatorHolder(pending);
-        if (holder) {
-          try {
-            await roleAssignments.ensureRole({
-              roleKey: candidateKey,
-              label: `Facilitation initiator (${conversationId.slice(0, 24)})`,
-              description: 'Auto-provisioned per-conversation initiator role (#330 C2b) - disposed with the facilitation.',
-            });
-            await roleAssignments.addHolder({
-              roleKey: candidateKey,
-              holderId: holder.holderId,
-              actor: `plugin:${deps.agentId}`,
-            });
-            initiatorRoleKey = candidateKey;
-            deps.log(`initiator role ${candidateKey} -> ${holder.holderId} (${holder.via})`);
-          } catch (err) {
-            deps.log(`initiator role provisioning failed - falling back to '${config.initiatorRoleKey}': ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-      }
-
-      // #330 round 3 — lazy bind for `bot_present` records: the eligibility
-      // came from an inbound group message, the BIND waits for this explicit
-      // start. Best-effort: a refusal is logged and the facilitation still
-      // runs (nudges then stay kernel-refused until a binding exists).
-      if (pending?.bindPending && pending.channelType) {
-        const bindings = deps.getConversationBindings();
-        if (bindings) {
-          try {
-            const bound = await bindings.bind({
-              agentSlug: config.facilitatorAgentSlug,
-              channelType: pending.channelType,
-              conversationId,
-            });
-            deps.log(
-              bound.bound
-                ? `lazy-bound ${pending.channelType}/${conversationId} at facilitation_start`
-                : `lazy bind refused at start: ${bound.reason ?? 'unknown'}`,
-            );
-          } catch (err) {
-            deps.log(`lazy bind failed at start: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-      }
-
-      let handle;
-      try {
-        handle = await ephemeralRuns.createEphemeralRun({
-          agentId: deps.agentId,
-          patternId: 'facilitation',
-          slots: {
-            agents: { facilitator: config.facilitatorAgentSlug },
-            roles: { initiator: initiatorRoleKey },
-            channels: { report: config.reportChannelType },
-          },
-          payload: { goal, definitionOfDone },
-          ttlMs: ttlHours * HOUR_MS,
-        });
-      } catch (err) {
-        const name = err instanceof Error ? err.name : '';
-        const message = err instanceof Error ? err.message : String(err);
-        deps.log(`facilitation_start failed: ${name}: ${message}`);
-        if (name === 'EphemeralQuotaExceededError') {
-          return de
-            ? `Start abgelehnt (Kernel-Guardrail): ${message}. Später erneut versuchen oder laufende Facilitations beenden lassen.`
-            : `Start refused (kernel guardrail): ${message}. Retry later or let running facilitations finish.`;
-        }
-        return de
-          ? `Start fehlgeschlagen: ${message}`
-          : `Start failed: ${message}`;
-      }
-
-      store.markActive({
-        conversationId,
-        goal,
-        definitionOfDone,
-        runId: handle.runId,
-        workflowSlug: handle.workflowSlug,
-        expiresAt: handle.expiresAt,
-        roleKey: initiatorRoleKey,
-      });
-
-      // Tie the auto-bind + role to the run so the kernel reaper disposes of
-      // them with the workflow. Best-effort: a miss only means the binding
-      // falls back to its pending expiry.
-      const conversationBindings = deps.getConversationBindings();
-      if (conversationBindings && pending?.channelType) {
-        await conversationBindings
-          .attachWorkflow({
-            agentSlug: config.facilitatorAgentSlug,
-            channelType: pending.channelType,
-            conversationId,
-            workflowId: handle.workflowId,
-            roleKey: initiatorRoleKey,
-            expiresAt: new Date(handle.expiresAt),
-          })
-          .then((r) => {
-            if (!r.attached) deps.log('attachWorkflow did not take (no owned pending row) - binding stays on its invite expiry');
-          })
-          .catch((err: unknown) => deps.log(`attachWorkflow failed: ${err instanceof Error ? err.message : String(err)}`));
-      }
-
-      const disclosure = config.discloseReportTarget
-        ? de
-          ? `Das Ergebnis (und ggf. Zwischenstände) berichte ich an role:${initiatorRoleKey}.`
-          : `I will report the result (and interim status, if configured) to role:${initiatorRoleKey}.`
-        : '';
-      const handshake = de
-        ? [
-            'Ich bin der omadia Facilitator und moderiere diese Konversation ab jetzt zu einem definierten Ergebnis.',
-            `Ziel: ${goal}`,
-            `Definition of Done: ${definitionOfDone}`,
-            `Deadline/TTL: ${handle.expiresAt}`,
-            disclosure,
-            'Mit "/facilitator status" bekommt ihr jederzeit den Stand; "/facilitator stop" beendet die Moderation.',
-          ]
-        : [
-            'I am the omadia Facilitator and will moderate this conversation toward a defined outcome from now on.',
-            `Goal: ${goal}`,
-            `Definition of Done: ${definitionOfDone}`,
-            `Deadline/TTL: ${handle.expiresAt}`,
-            disclosure,
-            'Use "/facilitator status" any time for the current state; "/facilitator stop" ends the moderation.',
-          ];
-      return handshake.filter((l) => l.length > 0).join('\n');
-    },
-  };
+  const tc: ToolContext = { deps, de, store, hydrator, persister, now, resolveRecord, resolveRecordStrict };
+  const start = buildStartTool(tc);
 
   const status: LocalSubAgentTool = {
     spec: {
@@ -336,64 +185,64 @@ export function buildFacilitationToolkit(deps: {
       },
     },
     async handle(input: unknown): Promise<string> {
+      await hydrator.ensure();
       const args = (input ?? {}) as { conversationId?: string };
-      const record = resolveRecord(args.conversationId);
+      const record = await resolveRecord(args.conversationId);
       if (!record) {
-        return de
-          ? 'Keine Facilitation bekannt (auch keine ausstehende Einladung). Hinweis: Nach einem Middleware-Neustart geht der lokale Status verloren — der Conductor-Run selbst läuft davon unabhängig weiter.'
-          : 'No facilitation known (and no pending invitation). Note: local state is lost on a middleware restart — the Conductor run itself keeps running independently.';
+        const base = de
+          ? 'Keine Facilitation bekannt (auch keine ausstehende Einladung).'
+          : 'No facilitation known (and no pending invitation).';
+        if (hydrator.complete) return base;
+        return (
+          base +
+          (de
+            ? ' Hinweis: Der durable Facilitation-Status des Kernels ist (noch) nicht lesbar — ein laufender Conductor-Run ist damit nicht ausgeschlossen.'
+            : ' Note: the kernel’s durable facilitation state is not readable (yet) — a running Conductor run cannot be ruled out.')
+        );
       }
       return describe(record);
     },
   };
 
-  const stop: LocalSubAgentTool = {
-    spec: {
-      name: 'facilitation_stop',
-      description:
-        'End the moderation for this conversation ("/facilitator stop"): marks the facilitation stopped and returns the closing announcement to post. Honest limitation: the underlying Conductor run continues until its deadline/TTL fallback — this stops the moderation, not the workflow.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
-        },
-        required: [],
-      },
-    },
-    async handle(input: unknown): Promise<string> {
-      const args = (input ?? {}) as { conversationId?: string };
-      const record = resolveRecord(args.conversationId);
-      if (!record) {
-        return de ? 'Keine Facilitation zum Beenden bekannt.' : 'No facilitation known to stop.';
-      }
-      store.markStopped(record.conversationId);
-      const stopRole = record.roleKey ?? config.initiatorRoleKey;
-      return de
-        ? `Die Moderation ist beendet (announced stop). Der zugrundeliegende Workflow-Run ${record.runId ?? ''} läuft bis zu seiner Deadline/TTL weiter und meldet dann Ergebnis oder Abbruch an role:${stopRole}.`
-        : `Moderation ended (announced stop). The underlying workflow run ${record.runId ?? ''} continues until its deadline/TTL and will then report result or abort to role:${stopRole}.`;
-    },
-  };
+  const stop = buildStopTool(tc);
 
   const report: LocalSubAgentTool = {
     spec: {
       name: 'facilitation_report',
       description:
-        "Deliver a report to the facilitation's initiator (role fan-out to all current holders via the kernel targetedSend service). kind 'final' for the confirmed result or the failure report; 'interim' for status updates (only sent when reporting_mode=interim).",
+        "Deliver a report to the facilitation's initiator (role fan-out to all current holders via the kernel targetedSend service). kind 'final' for the confirmed result or the failure report; 'interim' for status updates (only sent when reporting_mode=interim). Pass conversationId whenever it is known so the report reaches THIS facilitation's initiator.",
       input_schema: {
         type: 'object',
         properties: {
           kind: { type: 'string', enum: ['final', 'interim'], description: "Report kind: 'final' or 'interim'." },
           text: { type: 'string', description: 'The report text to deliver.' },
+          conversationId: { type: 'string', description: 'Channel-native conversation id of the facilitation, when known.' },
         },
         required: ['kind', 'text'],
       },
     },
     async handle(input: unknown): Promise<string> {
-      const args = (input ?? {}) as { kind?: string; text?: string };
+      await hydrator.ensure();
+      const args = (input ?? {}) as { kind?: string; text?: string; conversationId?: string };
       const kind = args.kind === 'interim' ? 'interim' : 'final';
       const text = typeof args.text === 'string' ? args.text.trim() : '';
       if (!text) return de ? 'Report abgelehnt: text ist leer.' : 'Report refused: text is empty.';
-      const activeRoleKey = store.latest()?.roleKey;
+      // The NAMED conversation's initiator role — an unknown id is refused,
+      // never redirected to another facilitation's initiator; a record
+      // without its own role reports to the configured default. latest() is
+      // only for callers that cannot name the conversation.
+      let activeRoleKey: string | undefined;
+      if (args.conversationId && args.conversationId.trim().length > 0) {
+        const target = await lookup(args.conversationId.trim());
+        if (!target) {
+          return de
+            ? 'Report abgelehnt: zu dieser conversationId ist keine Facilitation bekannt.'
+            : 'Report refused: no facilitation known for this conversationId.';
+        }
+        activeRoleKey = target.roleKey;
+      } else {
+        activeRoleKey = store.latest()?.roleKey;
+      }
       const result = await sendReport(
         { targetedSend: deps.getTargetedSend(), config, log: deps.log, ...(activeRoleKey ? { roleKey: activeRoleKey } : {}) },
         kind,
@@ -419,10 +268,11 @@ export function buildFacilitationToolkit(deps: {
       },
     },
     async handle(input: unknown): Promise<string> {
+      await hydrator.ensure();
       const args = (input ?? {}) as { dodMet?: boolean; summary?: string; conversationId?: string };
-      const summary = typeof args.summary === 'string' ? args.summary.trim() : '';
+      const summary = typeof args.summary === 'string' ? args.summary.trim().slice(0, MAX_PROGRESS_SUMMARY_CHARS) : '';
       if (!summary) return de ? 'Progress abgelehnt: summary ist leer.' : 'Progress refused: summary is empty.';
-      const resolved = resolveRecordStrict(args.conversationId);
+      const resolved = await resolveRecordStrict(args.conversationId);
       if (resolved === 'ambiguous') {
         return de
           ? 'Mehrere aktive Facilitations — bitte conversationId angeben, damit der Progress dem richtigen Ziel zugeordnet wird.'
@@ -436,6 +286,7 @@ export function buildFacilitationToolkit(deps: {
       }
       const dodMet = args.dodMet === true;
       store.recordProgress(record.conversationId, { dodMet, summary });
+      await persister.persist(record.conversationId);
       let pokeNote = '';
       if (dodMet && record.runId) {
         let poked = false;
@@ -474,13 +325,14 @@ export function buildFacilitationToolkit(deps: {
       },
     },
     async handle(input: unknown): Promise<string> {
+      await hydrator.ensure();
       const args = (input ?? {}) as { text?: string; conversationId?: string };
       const text = typeof args.text === 'string' ? args.text.trim() : '';
       if (!text) return de ? 'Nudge abgelehnt: text ist leer.' : 'Nudge refused: text is empty.';
       if (!config.nudgesEnabled) {
         return de ? 'Nudges sind deaktiviert (nudges_enabled=false).' : 'Nudges are disabled (nudges_enabled=false).';
       }
-      const resolved = resolveRecordStrict(args.conversationId);
+      const resolved = await resolveRecordStrict(args.conversationId);
       if (resolved === 'ambiguous') {
         return de
           ? 'Mehrere aktive Facilitations — bitte conversationId angeben; ein Nudge darf sein Publikum nicht raten.'
@@ -490,8 +342,13 @@ export function buildFacilitationToolkit(deps: {
       if (!record || record.phase !== 'active') {
         return de ? 'Kein aktives Facilitation-Ziel für einen Nudge.' : 'No active facilitation to nudge.';
       }
+      if (record.conversationUnknown) {
+        return de
+          ? 'Kein Nudge gesendet: Die Konversation dieser (vor 0.6.0 gestarteten) Facilitation ist nach dem Neustart unbekannt.'
+          : 'No nudge sent: the conversation of this facilitation (started before 0.6.0) is unknown after the restart.';
+      }
       if (record.progress?.updatedAt) {
-        const age = Date.now() - new Date(record.progress.updatedAt).getTime();
+        const age = now().getTime() - new Date(record.progress.updatedAt).getTime();
         if (Number.isFinite(age) && age >= 0 && age < NUDGE_COOLDOWN_AFTER_PROGRESS_MS) {
           return de
             ? 'Kein Nudge gesendet: Die Gruppe arbeitet aktiv (Progress vor weniger als 45 Minuten protokolliert) — ein Impuls würde als zweiter Facilitator wirken.'
@@ -510,6 +367,9 @@ export function buildFacilitationToolkit(deps: {
           ? `Nudge-Limit erreicht (${String(MAX_NUDGES_PER_FACILITATION)} pro Facilitation) — nicht gesendet.`
           : `Nudge cap reached (${String(MAX_NUDGES_PER_FACILITATION)} per facilitation) — not sent.`;
       }
+      // Persist the reservation BEFORE delivery: a restart mid-send must
+      // count the nudge, never hand out a fresh slot.
+      await persister.persist(record.conversationId);
       const outcome = await conversationSend
         .sendToConversation({
           agentSlug: config.facilitatorAgentSlug,
@@ -524,6 +384,7 @@ export function buildFacilitationToolkit(deps: {
           : `Nudge sent (${String(reserved)}/${String(MAX_NUDGES_PER_FACILITATION)}).`;
       }
       store.releaseNudge(record.conversationId);
+      await persister.persist(record.conversationId);
       return de
         ? `Nudge NICHT zugestellt: ${outcome.code} — ${outcome.message}`
         : `Nudge NOT delivered: ${outcome.code} — ${outcome.message}`;

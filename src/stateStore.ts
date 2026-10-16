@@ -2,10 +2,12 @@
 // channel-native conversation id ALONE — deliberately not by
 // (channelType, conversationId): the report channel (config) and the
 // conversation's origin channel (event) are different concepts, and keying
-// by either conflates them (review M4). In-memory for the MVP — a middleware
-// restart loses pending/active markers, which is a documented C1 limitation
-// (the ephemeral Conductor run itself is durable; facilitation_status
-// degrades to "no local record" honesty, never invention).
+// by either conflates them (review M4). The map itself is in-memory; since
+// 0.6.0 it is a CACHE of durable kernel state: goal/DoD/conversationId live
+// in the ephemeral run's context (payload), phase/progress/nudge accounting
+// in the kernel's per-run state blob (persistence.ts), and rehydrate.ts
+// rebuilds the records lazily after a restart. Records restored that way are
+// create-only — whatever the live event stream produced in this process wins.
 
 export type FacilitationPhase = 'pending' | 'active' | 'stopped';
 
@@ -36,10 +38,17 @@ export interface FacilitationRecord {
    *  already a member, nobody re-invited it): binding happens lazily in
    *  facilitation_start instead of eagerly on the event. */
   bindPending?: boolean;
-  /** Rebuilt from the kernel's attachment listing after a restart — goal and
-   *  DoD text live only in the durable workflow run context, so status output
-   *  says so instead of inventing them. */
+  /** The deadline the initiator stated (ISO with offset), when one was
+   *  passed to facilitation_start — distinct from the workflow TTL. */
+  deadline?: string;
+  /** Rebuilt from durable kernel state after a restart (run listing and/or
+   *  attachment listing). Attachment-only records carry no goal/DoD — status
+   *  output says so instead of inventing them. */
   restored?: boolean;
+  /** Restored from a run started before 0.6.0 that carries no
+   *  conversationId and has no attachment: keyed `run:<runId>`, the real
+   *  conversation is unknown, so nothing may be posted into it. */
+  conversationUnknown?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,6 +93,7 @@ export class FacilitationStateStore {
     workflowSlug: string;
     expiresAt: string;
     roleKey?: string;
+    deadline?: string;
   }): FacilitationRecord {
     const iso = this.now().toISOString();
     const existing = this.records.get(input.conversationId);
@@ -97,6 +107,7 @@ export class FacilitationStateStore {
       workflowSlug: input.workflowSlug,
       expiresAt: input.expiresAt,
       ...(input.roleKey ? { roleKey: input.roleKey } : {}),
+      ...(input.deadline ? { deadline: input.deadline } : {}),
       ...(existing?.invitedBy ? { invitedBy: existing.invitedBy } : {}),
       ...(existing?.invitedByRef ? { invitedByRef: existing.invitedByRef } : {}),
       createdAt: existing?.createdAt ?? iso,
@@ -106,31 +117,81 @@ export class FacilitationStateStore {
     return record;
   }
 
-  /** #330 field report — restart rehydration. Create-only: a record the
-   *  live event stream already produced in this process always wins. */
+  /** Restart rehydration (rehydrate.ts). Create-only, with ONE exception: a
+   *  live record that is merely an eligibility marker (pending, no runId) is
+   *  UPGRADED by a durable run. On a cold boot conversationEvents is
+   *  published before this plugin activates, so the first group message
+   *  after a restart (bot_present) creates such a marker BEFORE the lazy
+   *  hydration runs — skipping the durable run then would drop an active
+   *  facilitation and let facilitation_start create a second run. Durable
+   *  fields win; the live invite context (invitedBy/Ref, channelType) stays.
+   *  Any other live record (active, or carrying a runId) always wins.
+   *  'stopped' comes from the persisted run state — a stopped facilitation
+   *  whose run could not be cancelled must not resume after a restart. */
   restore(input: {
     conversationId: string;
     channelType?: string;
-    phase: 'pending' | 'active';
+    phase: FacilitationPhase;
     runId?: string;
+    workflowSlug?: string;
     roleKey?: string;
     expiresAt?: string;
+    goal?: string;
+    definitionOfDone?: string;
+    deadline?: string;
+    progress?: { dodMet: boolean; summary: string; updatedAt: string };
+    nudgesSent?: number;
+    conversationUnknown?: boolean;
   }): FacilitationRecord | undefined {
-    if (this.records.has(input.conversationId)) return undefined;
+    const existing = this.records.get(input.conversationId);
+    const upgradable =
+      existing !== undefined &&
+      existing.phase === 'pending' &&
+      !existing.runId &&
+      (input.runId !== undefined || input.phase !== 'pending');
+    if (existing && !upgradable) return undefined;
     const iso = this.now().toISOString();
+    const channelType = existing?.channelType ?? input.channelType;
     const record: FacilitationRecord = {
       conversationId: input.conversationId,
-      ...(input.channelType ? { channelType: input.channelType } : {}),
+      ...(channelType ? { channelType } : {}),
+      ...(existing?.invitedBy ? { invitedBy: existing.invitedBy } : {}),
+      ...(existing?.invitedByRef ? { invitedByRef: existing.invitedByRef } : {}),
       phase: input.phase,
+      ...(input.goal ? { goal: input.goal } : {}),
+      ...(input.definitionOfDone ? { definitionOfDone: input.definitionOfDone } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.workflowSlug ? { workflowSlug: input.workflowSlug } : {}),
       ...(input.roleKey ? { roleKey: input.roleKey } : {}),
       ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      ...(input.deadline ? { deadline: input.deadline } : {}),
+      ...(input.progress ? { progress: { ...input.progress } } : {}),
+      ...(input.nudgesSent !== undefined ? { nudgesSent: input.nudgesSent } : {}),
+      ...(input.conversationUnknown ? { conversationUnknown: true } : {}),
       restored: true,
-      createdAt: iso,
+      createdAt: existing?.createdAt ?? iso,
       updatedAt: iso,
     };
     this.records.set(input.conversationId, record);
     return record;
+  }
+
+  /** Fill gaps of a RESTORED record from a second durable source (the
+   *  attachment listing adds channelType/roleKey to a run-sourced record).
+   *  Never overwrites a present field and never touches a live record. */
+  mergeRestored(conversationId: string, input: { channelType?: string; roleKey?: string }): FacilitationRecord | undefined {
+    const record = this.records.get(conversationId);
+    if (!record || !record.restored) return undefined;
+    const channelType = record.channelType ?? input.channelType;
+    const roleKey = record.roleKey ?? input.roleKey;
+    if (channelType === record.channelType && roleKey === record.roleKey) return record;
+    const next: FacilitationRecord = {
+      ...record,
+      ...(channelType ? { channelType } : {}),
+      ...(roleKey ? { roleKey } : {}),
+    };
+    this.records.set(conversationId, next);
+    return next;
   }
 
   recordProgress(conversationId: string, progress: { dodMet: boolean; summary: string }): FacilitationRecord | undefined {
@@ -176,6 +237,13 @@ export class FacilitationStateStore {
 
   get(conversationId: string): FacilitationRecord | undefined {
     return this.records.get(conversationId);
+  }
+
+  getByRunId(runId: string): FacilitationRecord | undefined {
+    for (const record of this.records.values()) {
+      if (record.runId === runId) return record;
+    }
+    return undefined;
   }
 
   listActive(): FacilitationRecord[] {

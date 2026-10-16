@@ -20,6 +20,31 @@ export interface EphemeralRunsService {
   }): Promise<{ runId: string; workflowId: string; workflowSlug: string; expiresAt: string }>;
   /** #330 C3 — early-fire the run's open timer tick (kernel < C3: absent). */
   poke?(runId: string): Promise<{ poked: boolean }>;
+  /** Durable facilitation state (kernel < this feature: absent). Read-own
+   *  listing of THIS agent's non-reaped, non-expired ephemeral runs that are
+   *  still running/waiting — the primary restart-rehydration source.
+   *  `payload` is the run context minus the kernel's reserved keys; the
+   *  kernel returns `expiresAt` as an ISO string. */
+  listOwnRuns?(input: { agentId: string }): Promise<
+    Array<{
+      runId: string;
+      workflowId: string;
+      workflowSlug: string;
+      patternId: string | null;
+      expiresAt: string | Date;
+      payload: Record<string, unknown>;
+      state: Record<string, unknown> | null;
+    }>
+  >;
+  /** Owner-guarded per-run state blob (≤16 KiB, purged with the workflow).
+   *  `saved: false` = not owned, or the run is no longer running/waiting. */
+  saveRunState?(input: { agentId: string; runId: string; state: Record<string, unknown> }): Promise<{ saved: boolean }>;
+  /** Owner-guarded cancel of an own active run — finalizes waiting runs and
+   *  hands the workflow to the reaper (kernel < this feature: absent). */
+  cancelOwnRun?(input: { agentId: string; runId: string; reason?: string }): Promise<{
+    cancelled: boolean;
+    reason?: 'not_found' | 'already_ended';
+  }>;
 }
 
 export const CONVERSATION_SEND_SERVICE_NAME = 'conversationSend';
