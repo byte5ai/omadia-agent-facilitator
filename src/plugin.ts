@@ -12,6 +12,11 @@
  * Every kernel service is optional (optional_requires) and resolved LAZILY
  * at first use: on a kernel that predates #330 A/B1/C2a the plugin activates
  * and each path degrades with an honest message (C1 behavior).
+ *
+ * 0.6.0 — durable facilitation state: the kernel activates agent plugins
+ * BEFORE it publishes the Conductor-backed services, so restart rehydration
+ * runs lazily on first tool use (rehydrate.ts); the activate-time pass below
+ * is only a head start for warm re-activations (upgrade/toggle).
  */
 
 import type { PluginContext } from '@omadia/plugin-api';
@@ -39,6 +44,8 @@ import type {
   RoleAssignmentsService,
   TargetedSendService,
 } from './services.js';
+import { RunStatePersister } from './persistence.js';
+import { Hydrator } from './rehydrate.js';
 import { loadPlaybookBody, runAutoSetup } from './setup.js';
 import { FacilitationStateStore } from './stateStore.js';
 import { buildFacilitationToolkit } from './toolkit.js';
@@ -52,6 +59,9 @@ export interface FacilitatorHandle {
 
 export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   ctx.log('activating facilitator agent');
+  // The kernel-assigned id is what ephemeral workflows record as
+  // created_by_agent — the owner key of every durable-state call.
+  const agentId = ctx.agentId || AGENT_ID;
 
   const config = parseConfig(
     <T,>(key: string) => ctx.config.get<T>(key),
@@ -86,16 +96,23 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   await runAutoSetup({
     agentProvisioning: resolve<AgentProvisioningService>(AGENT_PROVISIONING_SERVICE_NAME),
     config,
-    pluginId: AGENT_ID,
+    pluginId: agentId,
     ...(loadPlaybookBody() !== undefined ? { playbookBody: loadPlaybookBody()! } : {}),
     log: (msg) => ctx.log(msg),
   });
 
   const store = new FacilitationStateStore();
+  const getEphemeralRuns = (): EphemeralRunsService | undefined => resolve<EphemeralRunsService>(EPHEMERAL_RUNS_SERVICE_NAME);
+  const getConversationBindings = (): ConversationBindingsService | undefined =>
+    resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME);
+  const log = (msg: string): void => ctx.log(msg);
+  const hydrator = new Hydrator({ agentId, config, store, getEphemeralRuns, getConversationBindings, log });
+  const persister = new RunStatePersister({ agentId, store, getEphemeralRuns, log });
 
   // Subscription is the one inherently eager consumer: without the service at
   // activate time there is nothing to subscribe to. Logged above; a later
-  // re-activate (plugin upgrade/toggle) picks it up.
+  // re-activate (plugin upgrade/toggle) picks it up. Every invite/presence
+  // event also kicks the lazy rehydration (see stateStore.restore()).
   let unsubscribe: (() => void) | undefined;
   const conversationEvents = resolve<ConversationEventsService>(CONVERSATION_EVENTS_SERVICE_NAME);
   if (conversationEvents && typeof conversationEvents.subscribe === 'function') {
@@ -103,52 +120,36 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
       createMembershipHandler({
         store,
         config,
-        getConversationBindings: () => resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME),
-        log: (msg) => ctx.log(msg),
+        getConversationBindings,
+        log,
+        hydrate: () => hydrator.ensure(),
       }),
     );
     ctx.log('subscribed to conversation membership events (bot_added → pending facilitation + auto-bind)');
   }
 
-  // #330 field report — restart rehydration: the in-memory store died with
-  // the last deploy while the durable side (ephemeral run, binding, role)
-  // kept going. Rebuild the records from the kernel's read-own attachment
-  // listing so progress/nudge/status keep working. Best-effort: a pre-feature
-  // kernel (no listOwnAttachments) or a failing call just keeps the old
-  // re-invite behaviour.
-  try {
-    const bindings = resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME);
-    if (bindings && typeof bindings.listOwnAttachments === 'function') {
-      const rows = await bindings.listOwnAttachments({ agentSlug: config.facilitatorAgentSlug });
-      let restored = 0;
-      for (const row of rows) {
-        const record = store.restore({
-          conversationId: row.conversationId,
-          channelType: row.channelType,
-          phase: row.state === 'attached' ? 'active' : 'pending',
-          ...(row.activeRunId ? { runId: row.activeRunId } : {}),
-          ...(row.roleKey ? { roleKey: row.roleKey } : {}),
-          expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : row.expiresAt,
-        });
-        if (record) restored += 1;
-      }
-      if (restored > 0) ctx.log(`facilitation state rehydrated: ${String(restored)} attachment(s) restored`);
-    }
-  } catch (err) {
-    ctx.log(`facilitation rehydration failed (continuing without): ${err instanceof Error ? err.message : String(err)}`);
+  // Restart rehydration head start. On a cold boot the sources are not
+  // published yet and this finds nothing — every tool handler awaits
+  // hydrator.ensure() again, which is the path that actually restores state.
+  // Never throws; activation never depends on it.
+  await hydrator.ensure();
+  if (!hydrator.complete) {
+    ctx.log('facilitation state not restorable at activate (kernel services not published yet) — restoring lazily on first tool use');
   }
 
   const tools = buildFacilitationToolkit({
-    agentId: AGENT_ID,
+    agentId,
     config,
     store,
-    getEphemeralRuns: () => resolve<EphemeralRunsService>(EPHEMERAL_RUNS_SERVICE_NAME),
+    hydrator,
+    persister,
+    getEphemeralRuns,
     getTargetedSend: () => resolve<TargetedSendService>(TARGETED_SEND_SERVICE_NAME),
     getRoleAssignments: () => resolve<RoleAssignmentsService>(ROLE_ASSIGNMENTS_SERVICE_NAME),
-    getConversationBindings: () => resolve<ConversationBindingsService>(CONVERSATION_BINDINGS_SERVICE_NAME),
+    getConversationBindings,
     getConversationRosters: () => resolve<ConversationRostersService>(CONVERSATION_ROSTERS_SERVICE_NAME),
     getConversationSend: () => resolve<ConversationSendService>(CONVERSATION_SEND_SERVICE_NAME),
-    log: (msg) => ctx.log(msg),
+    log,
   });
 
   return {

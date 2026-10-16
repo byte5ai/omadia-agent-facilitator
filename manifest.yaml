@@ -16,7 +16,7 @@ identity:
   kind: "agent"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.5.1"
+  version: "0.6.0"
   description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
   authors:
     - name: "byte5 GmbH"
@@ -42,8 +42,9 @@ depends_on: []
 # Least privilege: exactly the services this slice consumes. The C2a setup
 # services power the zero-touch flow (agent provisioning, invite-guarded
 # auto-bind, per-conversation initiator roles); conversationRosters resolves
-# the inviter's email (role holders are email-keyed). memoryStore joins with
-# the durable-state slice.
+# the inviter's email (role holders are email-keyed). Durable facilitation
+# state (0.6.0) rides on conductorEphemeralRuns itself (listOwnRuns /
+# saveRunState / cancelOwnRun, all optional methods) — no new service.
 optional_requires:
   - "conductorEphemeralRuns@1"
   - "targetedSend@1"
@@ -177,8 +178,9 @@ skills:
     shareable: false
 
 permissions:
-  # C1 keeps facilitation state in-memory — no memory grants until the C2
-  # persistence actually reads/writes them (least privilege).
+  # Facilitation state is persisted kernel-side per ephemeral run (0.6.0,
+  # owner-guarded conductorEphemeralRuns methods) — no memory grants needed
+  # (least privilege).
   memory:
     reads: []
     writes: []

@@ -58,21 +58,50 @@ ehrlichen Meldungen, solange etwas fehlt.
    Fehlschlag/Deadline → ehrlicher Abort-Report. Der ephemere Workflow wird
    danach vom Kernel-Reaper entsorgt — Run-Historie bleibt als Audit-Trace.
 
-## Grenzen (C1, bewusst)
+## Durabler Facilitation-State (0.6.0)
 
-- **Kein proaktives Posten** in den Gruppen-Chat — alles Sichtbare ist
-  Turn-Antwort; Reports laufen als DM über `targetedSend`.
+- **Neustart-fest:** Ziel, DoD, `conversationId`, Kanal, Initiator-Rolle und
+  Deadline stehen im Payload des ephemeren Runs; Phase, Fortschritt und
+  Nudge-Zähler schreibt das Plugin in den kernel-seitigen Run-State
+  (`saveRunState`, owner-guarded, wird mit dem Workflow entsorgt). Nach einem
+  Neustart baut das Plugin seine Records **lazy beim ersten Tool-Aufruf**
+  wieder auf (`listOwnRuns` + `listOwnAttachments`) — der Kernel aktiviert
+  Agent-Plugins vor seinen Conductor-Services, ein reiner Activate-Pass fände
+  nichts. Das Nudge-Limit gilt damit pro Facilitation, nicht pro Prozess.
+- **Deadline:** `facilitation_start(…, deadline)` (ISO mit Zeitzone) setzt die
+  Workflow-TTL auf mindestens Deadline + 2 h. Kappt der Kernel die Laufzeit
+  (`CONDUCTOR_EPHEMERAL_MAX_TTL_MS`), sagt der Handshake das ehrlich.
+- **`facilitation_stop`** schickt den Abschlussbericht (letzter Stand) an die
+  Initiator-Rolle und bricht den Workflow-Run über `cancelOwnRun` ab. Auf
+  einem älteren Kernel läuft der Run wie bisher bis Deadline/TTL weiter — die
+  Rückgabe sagt, welcher Fall vorliegt; der Stop bleibt dann durabel
+  gespeichert.
+- `facilitation_report(kind, text, conversationId?)` berichtet an die Rolle
+  DIESER Konversation (unbekannte `conversationId` → abgelehnt, nie an eine
+  andere Facilitation umgeleitet). `facilitation_stop` ohne
+  `conversationId` verweigert bei mehreren aktiven Facilitations.
+- Nach einem Neustart erzeugt die erste Gruppen-Nachricht (`bot_present`)
+  oft einen pending-Marker, bevor die Rehydration läuft — der durable Run
+  wertet ihn dann zur aktiven Facilitation auf (kein zweiter Start).
+- Alle neuen Kernel-Methoden sind optional: gegen einen älteren Kernel
+  verhält sich das Plugin wie 0.5.x (State in-memory, Stop ohne Cancel).
+
+## Grenzen (bewusst)
+
+- **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`
+  (kernel-gescoped, gedeckelt) — alles andere ist Turn-Antwort; Reports
+  laufen als DM über `targetedSend`.
 - **Eigene Teams-App-Identität** (zweiter Bot) ist C2 — bis dahin tritt der
   Facilitator über den gebundenen Teams-Bot auf.
-- **`facilitation_stop` stoppt die Moderation, nicht den Workflow-Run** —
-  der läuft bis Deadline/TTL (dann Abort-Report). Ein Cancel-Durchgriff ist
-  ein A-Follow-up.
-- **Lokaler Facilitation-State ist in-memory** — ein Middleware-Neustart
-  verliert pending/active-Marker (der Conductor-Run selbst ist durabel);
-  `facilitation_status` sagt das dann ehrlich.
+- **TTL-Ablauf ist ein stiller Abbruch:** läuft der Workflow ab, bevor die
+  Facilitation abgeschlossen ist, entsorgt der Reaper ihn ohne Abort-Report
+  (Kernel-Follow-up). Deshalb die Deadline beim Start mitgeben.
+- **Runs von vor 0.6.0** tragen keine `conversationId`: ohne Attachment
+  werden sie als `run:<runId>` wiederhergestellt — Status ja, Nudges nein.
 - **Eine Facilitation zur Zeit empfohlen:** Tool-Aufrufe ohne
   `conversationId` fallen auf die zuletzt aktualisierte Facilitation zurück —
-  bei mehreren parallelen Gruppen die `conversationId` explizit mitgeben.
+  bei mehreren parallelen Gruppen die `conversationId` explizit mitgeben
+  (die Pattern-Prompts ab v5 reichen sie automatisch durch).
 - Confirm-Deadline ist im Pattern fix (`PT24H`); konfigurierbar ist die
   Workflow-TTL.
 

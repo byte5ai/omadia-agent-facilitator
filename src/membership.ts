@@ -15,10 +15,15 @@ export function createMembershipHandler(deps: {
   config: FacilitatorConfig;
   getConversationBindings: () => ConversationBindingsService | undefined;
   log: (msg: string) => void;
+  /** 0.6.0 — kick the lazy restart rehydration (never throws). After a cold
+   *  boot the first group message (bot_present) usually arrives before any
+   *  tool call; the durable run then upgrades the marker created here. */
+  hydrate?: () => Promise<void>;
 }): (event: ConversationMembershipEventShape) => void {
   return (event) => {
     try {
       if (event.kind !== 'bot_added' && event.kind !== 'bot_present') return;
+      if (deps.hydrate) void deps.hydrate().catch(() => undefined);
       const invitedBy = event.addedBy?.displayName ?? event.addedBy?.id;
       // #330 round 3 — `bot_present` is an ELIGIBILITY signal (the bot was
       // already a member; an inbound group message proved it). Record it so

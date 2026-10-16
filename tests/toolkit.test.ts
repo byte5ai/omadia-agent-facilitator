@@ -151,7 +151,14 @@ describe('facilitation_start', () => {
     assert.equal(attachCalls.length, 1);
     assert.equal(attachCalls[0]!.roleKey, roleKey);
     assert.equal(attachCalls[0]!.workflowId, 'wf-1');
-    assert.deepEqual(call.payload, { goal: 'Rollen besetzen', definitionOfDone: 'Jede Rolle hat genau einen bestätigten Namen' });
+    // 0.6.0 — the payload is the durable half of the facilitation (restart rehydration).
+    assert.deepEqual(call.payload, {
+      goal: 'Rollen besetzen',
+      definitionOfDone: 'Jede Rolle hat genau einen bestätigten Namen',
+      conversationId: 'c1',
+      channelType: 'teams',
+      initiatorRoleKey: roleKey,
+    });
     assert.equal(call.ttlMs, 24 * HOUR_MS);
 
     assert.ok(out.includes('Ziel: Rollen besetzen'));
