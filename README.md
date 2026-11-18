@@ -127,6 +127,17 @@ Abschlussbedingung nur per Neustart zu korrigieren war.
   die Namen der Liste.
 - Der Handshake bittet den Initiator, Ziel und Definition of Done zu prüfen.
 
+### 0.7.2
+
+- Eine unbekannte `conversationId` wird bei genau EINER aktiven Facilitation
+  auf diese aufgelöst (das Modell hatte die ID als Datenschutz-Platzhalter
+  im Kontext und reichte sie so durch); bei keiner oder mehreren bleibt es
+  beim Fehlschlag. Gilt für status, progress, nudge und update — nie für
+  start, report oder stop.
+- Tool-Beschreibung und Playbook: Der Agent lehnt keinen Beitrag selbst ab —
+  ob jemand zur Gruppe gehört, prüft `facilitation_progress` gegen die echte
+  Teilnehmerliste.
+
 ## Grenzen (bewusst)
 
 - **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`
