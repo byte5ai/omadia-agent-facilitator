@@ -136,7 +136,8 @@ export const en = {
     assign: '',
     close: '',
   },
-  moveOnHint: (): string => 'Write "next" when everything is collected.',
+  moveOnHint: { collect: 'Write "next" when everything is collected.', discuss: 'Write "next" when everything has been said.' },
+  afterInviteHint: (): string => 'After that, write "next" to close this step.',
   agendaLine: (position: number, title: string, timebox: number | null): string =>
     `${String(position)}. ${title}${timebox ? ` (${String(timebox)} min)` : ''}`,
   stepOpened: (position: number, total: number, title: string, instruction: string, until: string | undefined): string =>

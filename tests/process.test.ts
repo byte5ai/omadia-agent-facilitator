@@ -84,7 +84,7 @@ test('silent voices: before a discussion closes, whoever has not contributed is 
   assert.equal((await openStep(conv))?.title, 'Discuss the rules', 'still open');
   assert.deepEqual(h.kernel.dms.slice(dms).map((d) => d.principal), ['user:dave']);
   assert.match(h.kernel.dms.at(-1)?.text ?? '', /Hello Dave, we are about to close "Discuss the rules".*Please write it in the group/);
-  assert.equal(last(conv), 'Before we close "Discuss the rules": whoever has not had the chance yet is welcome to add something now.');
+  assert.equal(last(conv), 'Before we close "Discuss the rules": whoever has not had the chance yet is welcome to add something now. After that, write "next" to close this step.');
   assert.ok(!posts(conv).some((t) => /Dave/.test(t) && /not contributed|has not/.test(t)), 'nobody is named in the group as not having contributed');
 
   assert.match(await tool(conv, 'facilitation_invite_silent'), /already invited/);

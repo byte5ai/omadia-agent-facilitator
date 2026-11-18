@@ -61,7 +61,7 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
   }
   const instruction = needsOptions(opened)
     ? t.needOptions(step.title)
-    : [t.stepInstruction[step.kind], ...(step.kind === 'collect' && opened.method === null ? [t.moveOnHint()] : []), ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
+    : [t.stepInstruction[step.kind], ...(opened.method === null && (step.kind === 'collect' || step.kind === 'discuss') ? [t.moveOnHint[step.kind]] : []), ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
   w.post({
     purpose: 'step_opened',
     key: step.id,
@@ -161,7 +161,7 @@ export async function inviteSilentVoices(w: Work, step: Step): Promise<number> {
       text: t.silentInviteDirect(person.displayName, step.title),
     });
   }
-  w.post({ purpose: 'silent_invite_group', key: step.id, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['active'], text: t.silentInviteGroup(step.title) });
+  w.post({ purpose: 'silent_invite_group', key: step.id, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['active'], text: [t.silentInviteGroup(step.title), ...(step.method === null && ENDED_BY_THE_GROUP.has(step.kind) ? [t.afterInviteHint()] : [])].join(' ') });
   return fresh.length;
 }
 
@@ -271,7 +271,35 @@ function addressesProcess(text: string, facilitator: string): boolean {
  * for every close). A question, a message addressed to the facilitator or one
  * about the process is conversation and goes to the facilitator's turn.
  */
-const collecting: InboundHandler = async ({ w, record, author, command, retired }) => {
+/** Steps the group ends itself, with the announced word. */
+const ENDED_BY_THE_GROUP = new Set<Step['kind']>(['collect', 'discuss']);
+
+/**
+ * "next" in a collecting or discussing step: the group wants to move on. The
+ * engine reads the word itself and proposes to close the step; the group
+ * consents as for every close.
+ */
+const movingOn: InboundHandler = async ({ w, record, author, command }) => {
+  if (w.f.phase !== 'active' || !author || record.kind !== 'created') return undefined;
+  if (record.quoted === true || record.forwarded === true || !MOVE_ON.test(command)) return undefined;
+  if (!(await writtenAfterStart(w, record))) return undefined;
+  const step = await store.openStepOf(w.tx, w.f.id);
+  if (!step || step.method !== null || !ENDED_BY_THE_GROUP.has(step.kind)) return undefined;
+  if (await store.openProposal(w.tx, w.f.id)) {
+    w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).proposalBusy() });
+    return { outcome: 'move_on_busy' };
+  }
+  await openProposal(w, { kind: 'step_close', summary: step.title, payload: { stepId: step.id }, proposedBy: author.principalId, proposalMessageId: record.messageId, windowMinutes: w.f.settings.confirmWindowMinutes });
+  return { outcome: 'move_on' };
+};
+
+/**
+ * In a collecting step the announced format is "one point per message": a
+ * participant's own message is their contribution, recorded at once and
+ * without a model. A question, a message addressed to the facilitator or one
+ * about the process is conversation and goes to the facilitator's turn.
+ */
+const collecting: InboundHandler = async ({ w, record, author, retired }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   if (record.quoted === true || record.forwarded === true) return undefined;
@@ -280,21 +308,13 @@ const collecting: InboundHandler = async ({ w, record, author, command, retired 
   if (!step || step.kind !== 'collect' || step.method !== null) return undefined;
   const text = (record.text ?? '').trim();
   if (text === '') return undefined;
-  if (record.kind === 'created' && MOVE_ON.test(command)) {
-    const t = texts(w.f.language);
-    if (await store.openProposal(w.tx, w.f.id)) {
-      w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.proposalBusy() });
-      return { outcome: 'move_on_busy' };
-    }
-    await openProposal(w, { kind: 'step_close', summary: step.title, payload: { stepId: step.id }, proposedBy: author.principalId, proposalMessageId: record.messageId, windowMinutes: w.f.settings.confirmWindowMinutes });
-    return { outcome: 'move_on' };
-  }
   if (addressesProcess(text, facilitatorName(w.f))) return undefined;
   await recordContribution(w, { record, author, step, kind: 'idea', payload: { text }, summary: text, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'collected' };
 };
 
 export function installProcess(): void {
+  registerInboundHandler(movingOn, PRIORITY.process);
   registerInboundHandler(collecting, PRIORITY.process);
   setAfterStepDecided(afterStepClosed);
   setStepOpener(openStep);

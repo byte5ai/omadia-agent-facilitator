@@ -78,3 +78,44 @@ test('a message about the process reaches the facilitator turn instead of being 
   await say('mo-process', 'cara', 'Der Hafen hat genug Platz');
   assert.deepEqual(await collected(id), ['Der Hafen hat genug Platz']);
 });
+
+// ── S4: the discussing step ─────────────────────────────────────────────────
+
+async function discussStep(conv: string, language?: 'de'): Promise<string> {
+  h.kernel.conversation(conv, FOUR);
+  await h.tool(
+    'facilitation_start',
+    { goal: 'Pick a venue', agenda: [{ kind: 'discuss', title: 'Talk it through' }, { kind: 'decide', title: 'Vote', method: 'single', options: ['Harbour', 'Garden'] }], open: true, ...(language ? { language } : {}) },
+    { conversation: conv },
+  );
+  return (await h.facilitation(conv)).id;
+}
+
+test('S4: a discussing step says how it ends, and "next" proposes to close it without a model', { skip: PG_SKIP }, async () => {
+  const id = await discussStep('mo-discuss');
+  assert.match(posts('mo-discuss')[1] ?? '', /Write "next" when everything has been said/);
+  const turns = h.kernel.turns.length;
+  await say('mo-discuss', 'anna', 'next');
+  assert.equal(h.kernel.turns.length, turns, 'no model turn');
+  assert.match(posts('mo-discuss').at(-1) ?? '', /^Proposal: close "Talk it through" and move on/);
+  for (const who of ['anna', 'bert', 'cara', 'dave']) await say('mo-discuss', who, 'agreed');
+  assert.equal((await store.openStepOf(h.db.pool, id))?.kind, 'decide');
+});
+
+test('S4: in German the word is "weiter", and the speaking order no longer uses the same word for something else', { skip: PG_SKIP }, async () => {
+  await discussStep('mo-discuss-de', 'de');
+  assert.match(posts('mo-discuss-de')[1] ?? '', /Schreibt "weiter", wenn alles gesagt ist/);
+  await say('mo-discuss-de', 'bert', 'weiter');
+  assert.match(posts('mo-discuss-de').at(-1) ?? '', /^Vorschlag: "Talk it through" abschließen und weitergehen/);
+  const { de } = await import('../src/texts/de.js');
+  const { en } = await import('../src/texts/en.js');
+  assert.doesNotMatch(de.speakingOrder(['Anna'], false), /"weiter"/);
+  assert.doesNotMatch(en.speakingOrder(['Anna'], false), /"next"/);
+});
+
+test('S4: after the silent voices were invited, the group is told how the step ends', { skip: PG_SKIP }, async () => {
+  await discussStep('mo-discuss-invite');
+  await say('mo-discuss-invite', 'anna', 'I prefer the harbour because of the space');
+  await h.tool('facilitation_step', { action: 'close' }, { conversation: 'mo-discuss-invite' });
+  assert.match(posts('mo-discuss-invite').at(-1) ?? '', /write "next" to close this step/);
+});

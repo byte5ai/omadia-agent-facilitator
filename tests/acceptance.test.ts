@@ -543,7 +543,7 @@ test('16. silent voices and balance: a participant who has not contributed is in
   assert.equal((await store.openStepOf(h.db.pool, f.id))?.title, 'Discuss the rules', 'the step did not close before the invitation');
   assert.deepEqual(h.kernel.dms.slice(dms).map((d) => d.principal), ['user:dave']);
   const said = posts(conv).slice(groupBefore);
-  assert.deepEqual(said, ['Before we close "Discuss the rules": whoever has not had the chance yet is welcome to add something now.']);
+  assert.deepEqual(said, ['Before we close "Discuss the rules": whoever has not had the chance yet is welcome to add something now. After that, write "next" to close this step.']);
   assert.ok(posts(conv).every((t) => !(t.includes('Dave') && /not contributed|not had the chance|still open/.test(t))), 'nobody is named in the group as not having contributed');
   // The facilitator's turn knows the balance, so it can moderate it.
   await say(conv, 'dave', 'what do you need from me?');

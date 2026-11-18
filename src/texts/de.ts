@@ -122,7 +122,8 @@ export const de: Texts = {
     assign: '',
     close: '',
   },
-  moveOnHint: () => 'Schreibt "weiter", wenn alles gesammelt ist.',
+  moveOnHint: { collect: 'Schreibt "weiter", wenn alles gesammelt ist.', discuss: 'Schreibt "weiter", wenn alles gesagt ist.' },
+  afterInviteHint: () => 'Schreibt danach "weiter", um diesen Schritt abzuschließen.',
   agendaLine: (position, title, timebox) => `${String(position)}. ${title}${timebox ? ` (${String(timebox)} Min.)` : ''}`,
   stepOpened: (position, total, title, instruction, until) =>
     [`Schritt ${String(position)} von ${String(total)}: ${title}.`, instruction, until ? `Timebox bis ${until}.` : ''].filter((l) => l !== '').join(' '),
@@ -333,7 +334,7 @@ export const de: Texts = {
   sessionEnded: (title) => `"${title}" ist beendet. Was noch offen ist, geht hier im Chat weiter.`,
   timeNotice: (title, minutes) => `Zeit-Check: noch ${String(minutes)} Minuten für "${title}".`,
   speakingOrder: (names, remoteFirst) =>
-    `Reihenfolge für diese Runde${remoteFirst ? ' (Remote zuerst)' : ''}: ${names.join(', ')}. Sagt "weiter", wenn ihr nichts ergänzen möchtet.`,
+    `Reihenfolge für diese Runde${remoteFirst ? ' (Remote zuerst)' : ''}: ${names.join(', ')}. Sagt "passe", wenn ihr nichts ergänzen möchtet.`,
   capabilityGained: (what) => `In dieser Session hat sich etwas geändert. Ich nehme jetzt zusätzlich wahr: ${what.join(', ')}.`,
   capabilityLost: (what) => `In dieser Session hat sich etwas geändert. Ich nehme nicht mehr wahr: ${what.join(', ')}. Ich mache mit dem weiter, was bleibt.`,
   mediaConsent: () =>
