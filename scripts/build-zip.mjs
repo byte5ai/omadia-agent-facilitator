@@ -43,7 +43,7 @@ const pkgRoot = process.cwd();
 const REQUIRED_FILES = ['manifest.yaml'];
 const REQUIRED_DIRS = ['dist'];
 const OPTIONAL_FILES = ['README.md', 'LICENSE', 'NOTICE', 'INTEGRATION.md'];
-const OPTIONAL_DIRS = ['assets', 'skills', 'migrations'];
+const OPTIONAL_DIRS = ['assets', 'skills', 'migrations', 'ui'];
 
 /** The manifest's `lifecycle.entry`. Its absence means `tsc` did not finish. */
 const REQUIRED_IN_DIST = ['plugin.js'];

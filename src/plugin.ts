@@ -47,6 +47,9 @@ export interface FacilitatorHandle {
 const TICK_INTERVAL_MS = 30_000;
 const TICK_TIMEOUT_MS = 120_000;
 
+/** Labels of the navigation entry; the host resolves the locale. */
+export const NAV_LABEL = { en: 'Facilitations', de: 'Moderationen' } as const;
+
 export const NO_DATABASE_REASON =
   'The facilitation engine has no database: grant this plugin its SQL permission and run the middleware with Postgres.';
 
@@ -101,6 +104,11 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
       { auth: 'session', body: 'json' },
     ),
   );
+
+  // The facilitations view: the bundle in ui/ is served by the host at
+  // /p/<plugin id>/ui/; this makes it findable.
+  disposers.push(ctx.uiRoutes.register({ routeId: 'facilitations', path: '/ui/', title: 'Facilitations', description: 'Which facilitator runs which facilitation, its phase and counts.', order: 40 }));
+  disposers.push(ctx.uiRoutes.registerNav({ navId: 'facilitations', pluginUi: true, order: 40, label: NAV_LABEL }));
 
   if (info.available) {
     // The scheduler: reminders, deadlines, windows, delivery retries. The

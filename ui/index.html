@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Facilitations</title>
+    <!-- The shared plugin stylesheet of the host. Behind the web UI it is
+         served under /bot-api, on the middleware itself under /api; the one
+         that does not exist is a harmless 404. -->
+    <link rel="stylesheet" href="/bot-api/_harness/plugin-ui.css" />
+    <link rel="stylesheet" href="/api/_harness/plugin-ui.css" />
+  </head>
+  <body class="harness-admin">
+    <h1 id="title">Facilitations</h1>
+    <p class="harness-subtitle" id="subtitle"></p>
+
+    <div id="banner" role="status" aria-live="polite"></div>
+
+    <form id="filters" style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: end; margin: 1rem 0">
+      <label style="display: grid; gap: 0.25rem">
+        <span id="label-phase"></span>
+        <select id="filter-phase" class="harness-input"></select>
+      </label>
+      <label style="display: grid; gap: 0.25rem">
+        <span id="label-facilitator"></span>
+        <input id="filter-facilitator" class="harness-input" type="text" autocomplete="off" />
+      </label>
+      <button id="refresh" class="harness-btn" type="submit"></button>
+    </form>
+
+    <div style="overflow-x: auto">
+      <table class="harness-table" id="table">
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="harness-empty" id="empty" hidden></p>
+
+    <section id="detail" hidden style="margin-top: 1.5rem">
+      <h2 id="detail-title"></h2>
+      <p class="harness-subtitle" id="detail-hint"></p>
+      <form id="reason-form" style="display: grid; gap: 0.5rem; max-width: 40rem">
+        <label for="reason" id="label-reason"></label>
+        <textarea id="reason" class="harness-input" rows="3" required minlength="10"></textarea>
+        <div style="display: flex; gap: 0.5rem">
+          <button id="submit-reason" class="harness-btn harness-btn--primary" type="submit"></button>
+          <button id="cancel-reason" class="harness-btn" type="button"></button>
+        </div>
+      </form>
+      <pre id="protocol" hidden style="white-space: pre-wrap; margin-top: 1rem"></pre>
+      <h3 id="audit-title" hidden></h3>
+      <ul id="audit"></ul>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

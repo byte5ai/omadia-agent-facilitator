@@ -11,6 +11,8 @@ function bareContext(overrides: Partial<Record<string, unknown>> = {}) {
   const provided = new Map<string, unknown>();
   const tools: string[] = [];
   const routes: string[] = [];
+  const ui: unknown[] = [];
+  const nav: unknown[] = [];
   const ctx = {
     agentId: '@omadia/agent-facilitator',
     log: (...args: unknown[]) => logs.push(args.join(' ')),
@@ -22,6 +24,16 @@ function bareContext(overrides: Partial<Record<string, unknown>> = {}) {
       },
     },
     jobs: { register: () => () => undefined },
+    uiRoutes: {
+      register: (descriptor: unknown) => {
+        ui.push(descriptor);
+        return () => undefined;
+      },
+      registerNav: (entry: unknown) => {
+        nav.push(entry);
+        return () => undefined;
+      },
+    },
     tools: {
       register: (spec: { name: string }) => {
         tools.push(spec.name);
@@ -39,7 +51,7 @@ function bareContext(overrides: Partial<Record<string, unknown>> = {}) {
     },
     ...overrides,
   } as unknown as PluginContext;
-  return { ctx, logs, provided, tools, routes };
+  return { ctx, logs, provided, tools, routes, ui, nav };
 }
 
 test('without the SQL grant the engine activates, reports itself unavailable and says why', async () => {
@@ -88,4 +100,12 @@ test('without a database the tools still exist and say that the engine is not av
   assert.match(answer ?? '', /^Not available: The facilitation engine has no database/);
   const noContext = await start?.handler({ goal: 'g', definitionOfDone: 'd' });
   assert.match(noContext ?? '', /never guesses a facilitation/);
+});
+
+test('the operator API is mounted and the facilitations view is in the navigation with English and German labels', async () => {
+  const { ctx, routes, ui, nav } = bareContext();
+  await activate(ctx);
+  assert.deepEqual(routes, ['/api/v1/facilitation']);
+  assert.deepEqual(nav, [{ navId: 'facilitations', pluginUi: true, order: 40, label: { en: 'Facilitations', de: 'Moderationen' } }]);
+  assert.equal((ui[0] as { path: string }).path, '/ui/');
 });
