@@ -13,11 +13,11 @@ import * as store from '../db/store.js';
 import type { Facilitation } from '../model.js';
 import { formatWhen } from '../texts/index.js';
 import type { EngineCore } from './core.js';
+import { isSilent } from './guard.js';
 import { playbook } from './playbook.js';
 import { participationOf } from './status.js';
 
 export const SILENT = '[silent]';
-const SILENT_REPLY = /^\s*(\[?\s*silent\s*\]?|no_reply)?\s*$/i;
 
 export type ContextSection = (q: Queryable, f: Facilitation) => Promise<string | undefined>;
 const sections: ContextSection[] = [];
@@ -88,7 +88,8 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     await engine.work(f.id, (w) => w.event('turn_failed', 'engine', { outcome: outcome.outcome, detail, eventId: record.eventId }));
     return;
   }
-  if (SILENT_REPLY.test(outcome.text)) return;
+  // The marker anywhere in the answer means: say nothing.
+  if (isSilent(outcome.text)) return;
   await engine.work(f.id, async (w) => {
     w.post({
       purpose: 'moderation',

@@ -16,6 +16,8 @@ import * as store from '../db/store.js';
 import { inTransaction, withFacilitationLock } from '../db/tx.js';
 import type { Kernel } from '../kernel.js';
 import type { DeliveryClass, Facilitation, Job, OutboxPayload, OutboxRow, Phase } from '../model.js';
+import { texts } from '../texts/index.js';
+import { guardOutgoing } from './guard.js';
 import { dispatchOutbox } from './outbox.js';
 
 /** Test seams: a fault at a named point of a send. Never set in production. */
@@ -210,7 +212,7 @@ export class EngineCore {
       };
       const value = await fn(w);
       const version = bumped ? await store.bumpStateVersion(tx, facilitationId) : current.stateVersion;
-      for (const message of queued) await this.enqueue(tx, facilitationId, version, now, message);
+      for (const message of queued) await this.enqueue(tx, current, version, now, message);
       return value;
     });
   }
@@ -221,9 +223,19 @@ export class EngineCore {
     await this.released(facilitationId);
   }
 
-  private async enqueue(tx: Queryable, facilitationId: string, version: number, now: Date, m: Outgoing): Promise<void> {
+  private async enqueue(tx: Queryable, f: Facilitation, version: number, now: Date, m: Outgoing): Promise<void> {
+    const facilitationId = f.id;
+    // Every outgoing text passes the guard, whoever wrote it. What it refuses
+    // is replaced by a neutral line and put on record; nothing is posted for
+    // "say nothing".
+    const verdict = guardOutgoing(m.text);
+    if (!verdict.ok) {
+      await store.appendEvent(tx, { facilitationId, kind: 'text_refused', actor: 'engine', occurredAt: now, payload: { purpose: m.purpose, reason: verdict.reason } });
+      this.log(`facilitation ${facilitationId}: outgoing ${m.purpose} refused by the text guard (${verdict.reason})`);
+      if (verdict.reason === 'silent' || verdict.reason === 'empty') return;
+    }
     const payload: OutboxPayload & { link?: Outgoing['link'] } = {
-      text: m.text,
+      text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),
       ...(m.link ? { link: m.link } : {}),
