@@ -367,3 +367,19 @@ test('review 6: after downtime overdue reminders are not sent late, and never af
   assert.equal((await h.facilitation(late)).phase, 'closed');
   assert.equal(h.kernel.dms.filter((d) => d.text.includes('is still open')).length, dms + 1, 'one private reminder in all');
 });
+
+test('review: a deadline without a single vote says that nobody voted, not that every option is level', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('sc-nobody', FOUR);
+  const f = await startActive(h, conv, { ...VOTE, deadline: inHours(5) });
+  h.clock.set(new Date((f.deadline as Date).getTime() + 1000));
+  await h.tick();
+  assert.equal((await h.facilitation(conv)).phase, 'aborted');
+  assert.equal(posts(conv).at(-1), 'This facilitation ends without a result. Reason: the deadline passed and nobody voted');
+
+  const abstained = h.kernel.conversation('sc-abstained', FOUR);
+  const g = await startActive(h, abstained, { ...VOTE, deadline: inHours(5) });
+  await say(abstained, 'anna', 'abstain');
+  h.clock.set(new Date((g.deadline as Date).getTime() + 1000));
+  await h.tick();
+  assert.equal(posts(abstained).at(-1), 'This facilitation ends without a result. Reason: the deadline passed and nobody voted for an option');
+});

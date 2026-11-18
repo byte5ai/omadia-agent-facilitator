@@ -86,6 +86,8 @@ export const de: Texts = {
   abortTie: (tied) => `die Deadline ist erreicht und die Abstimmung steht gleichauf zwischen ${tied}`,
   abortObjection: (objections) => `die Deadline ist erreicht und es steht ein Einwand (${objections})`,
   abortOpenItems: (items) => `die Deadline ist erreicht und Folgendes ist noch offen: ${items}`,
+  abortNoVotes: () => 'die Deadline ist erreicht und niemand hat abgestimmt',
+  abortOnlyAbstentions: () => 'die Deadline ist erreicht und niemand hat für eine Option gestimmt',
   abortNothing: () => 'die Deadline ist erreicht und die Definition of Done ist nicht erfüllt',
 
   reminderGroup: (open, deadline) =>

@@ -349,7 +349,10 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
     case 'tie': {
       const tied = outcome.tied.map((k) => optionLabel(options, k));
       if (deadlineReached) {
-        await abort(w, t.abortTie(t.list(tied)));
+        // Nobody scored at all: that is not a tie between the options. (In a
+        // runoff the tie of the round before still stands and is named.)
+        if (outcome.tally.votes === 0 && step.round === 1) await abort(w, outcome.tally.abstentions > 0 ? t.abortOnlyAbstentions() : t.abortNoVotes());
+        else await abort(w, t.abortTie(t.list(tied)));
         return outcome;
       }
       // Runoff among the tied options, same method; it ends at the earlier of

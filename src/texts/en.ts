@@ -100,6 +100,8 @@ export const en = {
   abortTie: (tied: string): string => `the deadline passed with the vote level between ${tied}`,
   abortObjection: (objections: string): string => `the deadline passed with an objection standing (${objections})`,
   abortOpenItems: (items: string): string => `the deadline passed with these still open: ${items}`,
+  abortNoVotes: (): string => 'the deadline passed and nobody voted',
+  abortOnlyAbstentions: (): string => 'the deadline passed and nobody voted for an option',
   abortNothing: (): string => 'the deadline passed and the definition of done was not met',
 
   reminderGroup: (open: number, deadline: string | undefined): string =>
