@@ -56,6 +56,24 @@ The plugin becomes the facilitation engine for native facilitators
   from free/busy on `facilitation.followup`, checked against the grant and
   written to the protocol.
 
+### Hardening after review (before first use)
+
+- Tables live in the kernel-reserved `plg_omadia_agent_facilitator_`
+  namespace; the migration is idempotent.
+- Bounded locking on the kernel's shared pool: try-lock with a deadline, at
+  most two lock connections, send timeouts, no second connection under a lock.
+- The conversation is released on close; a new facilitation never reads the
+  earlier chat; a message that fails to process is retried, then reported.
+- A result that cannot be posted ends the facilitation with a record instead
+  of leaving it concluding.
+- Mail and invitation run after the close is committed, outside the lock, at
+  most once; an unknown outcome is said to the group and not repeated.
+- A leftover confirmation cannot overwrite a later vote; an open proposal does
+  not swallow the ballots of a consent vote; contributions are frozen from the
+  conclusion on; stale reminders are skipped after downtime.
+- One guard for every outgoing text; bots never become participants;
+  retention deletes in batches.
+
 ### Fixed (defects of the field test, spec 4)
 
 - Votes without a mention are recorded (F1); the engine counts, not a model

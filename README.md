@@ -34,8 +34,9 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 ## Set-up
 
-1. Install the plugin and **grant its SQL permission**. It owns the
-   `facilitation*` tables and records its migrations in
+1. Install the plugin and **grant its SQL permission**. It owns the tables
+   `plg_omadia_agent_facilitator_*` (the kernel-reserved namespace of this
+   plugin) and records its migrations in
    `plg_omadia_agent_facilitator_migrations`. Without the grant the engine
    activates, reports itself unavailable, and every facilitator says that
    facilitation is not available.
@@ -69,7 +70,15 @@ report in the group.
   at-most-once and bound to the state they were computed from; handshake,
   result and abort report are retried until delivered.
 - **Rules change by consent**: anyone proposes, it holds when nobody objects
-  within the window (12 h by default, never past the deadline).
+  within the window (12 h by default, never past the deadline). While a
+  consent vote is open, and always for consent to processing speech, only a
+  reply to the proposal's own message answers the proposal.
+- **On a shared pool.** The engine holds at most two connections for locked
+  work, takes a facilitation's lock with a deadline, and never keeps a
+  transaction open across a call into the channel or an integration. Mail and
+  calendar calls run after the close is committed, at most once.
+- **Every outgoing text** passes one guard: no tool fragments, no raw JSON, no
+  unrestored privacy placeholders.
 
 Contributions count only from the group conversation. A private message to a
 facilitator is not a turn, so private reminders ask to answer in the group.
