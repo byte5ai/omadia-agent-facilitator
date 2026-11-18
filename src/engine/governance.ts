@@ -169,17 +169,35 @@ export async function checkStartQuota(engine: EngineCore, facilitatorAgent: stri
 
 // ── retention ───────────────────────────────────────────────────────────────
 
-/** Delete what is past its retention. Records and protocol go; the result in
- *  the chat stays where the channel keeps it. The access audit stays too. */
-export async function purgeExpired(engine: EngineCore): Promise<string[]> {
-  const deleted = await engine.pool().query<{ id: string }>(
-    `DELETE FROM plg_omadia_agent_facilitator_facilitations
-      WHERE purge_after IS NOT NULL AND purge_after <= $1 AND phase IN ('closed', 'aborted') AND followup_state <> 'active'
-      RETURNING id`,
-    [engine.now()],
-  );
-  for (const row of deleted.rows) engine.log(`facilitation ${row.id}: records deleted after the retention period`);
-  return deleted.rows.map((r) => r.id);
+/** Facilitations deleted by one statement, and statements per pass. Each
+ *  delete cascades through every table of a facilitation, so it is kept
+ *  small: a backlog is worked off over several ticks, not in one transaction. */
+export const PURGE_BATCH = 25;
+export const PURGE_MAX_BATCHES = 8;
+
+/** Delete what is past its retention, in bounded batches. Records and
+ *  protocol go; the result in the chat stays where the channel keeps it. The
+ *  access audit stays too. */
+export async function purgeExpired(engine: EngineCore, opts: { maxBatches?: number } = {}): Promise<string[]> {
+  const purged: string[] = [];
+  for (let batch = 0; batch < (opts.maxBatches ?? PURGE_MAX_BATCHES); batch += 1) {
+    const deleted = await engine.pool().query<{ id: string }>(
+      `DELETE FROM plg_omadia_agent_facilitator_facilitations
+        WHERE id IN (
+          SELECT id FROM plg_omadia_agent_facilitator_facilitations
+           WHERE purge_after IS NOT NULL AND purge_after <= $1 AND phase IN ('closed', 'aborted') AND followup_state <> 'active'
+           ORDER BY purge_after
+           LIMIT ${String(PURGE_BATCH)}
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id`,
+      [engine.now()],
+    );
+    purged.push(...deleted.rows.map((r) => r.id));
+    if (deleted.rows.length < PURGE_BATCH) break;
+  }
+  for (const id of purged) engine.log(`facilitation ${id}: records deleted after the retention period`);
+  return purged;
 }
 
 export function installGovernance(): void {

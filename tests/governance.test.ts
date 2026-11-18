@@ -198,3 +198,21 @@ test('no silent end: a facilitation that reaches its maximum duration ends with 
   assert.equal((await h.facilitation(conv)).phase, 'aborted');
   assert.equal(posts(conv).at(-1), 'This facilitation ends without a result. Reason: the maximum duration of 30 days was reached');
 });
+
+test('review: retention deletes in bounded batches', { skip: PG_SKIP }, async () => {
+  const { purgeExpired, PURGE_BATCH } = await import('../src/engine/governance.js');
+  const { createFacilitation } = await import('../src/db/store.js');
+  const past = new Date(h.clock.now().getTime() - DAY_MS);
+  const total = PURGE_BATCH * 2 + 7;
+  for (let i = 0; i < total; i += 1) {
+    const f = await createFacilitation(h.db.pool, {
+      facilitatorAgent: 'bulk', channelType: 'teams', conversationId: `go-bulk-${String(i)}`, initiatorPrincipal: 'user:anna', goal: 'g', format: 'custom', language: 'en', timezone: 'Europe/Berlin',
+      closeRule: 'all_contributed', reminderPolicy: { offsetsHours: [] }, followupPolicy: { actionItems: false, leadHours: 24 }, settings: { changeWindowHours: 12, runoffWindowHours: 12, confirmWindowMinutes: 30 }, createdAt: past,
+    });
+    await store.patchFacilitation(h.db.pool, f.id, { phase: 'closed', closedAt: past, purgeAfter: past });
+  }
+  const first = await purgeExpired(h.engine.core, { maxBatches: 1 });
+  assert.equal(first.length, PURGE_BATCH, 'one statement deletes at most one batch');
+  const rest = await purgeExpired(h.engine.core);
+  assert.equal(rest.length, total - PURGE_BATCH);
+});
