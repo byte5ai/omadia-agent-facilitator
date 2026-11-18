@@ -332,6 +332,7 @@ export const en = {
   abortResultUndelivered: (error: string): string => `the result could not be posted to the group (${error})`,
   resultUndeliveredReport: (result: string): string => `I could not post the result in the group. This is what was reached:\n\n${result}`,
   messageUnprocessed: (): string => 'One message here could not be processed because of a technical problem. If you were waiting for me to record something, please send it again.',
+  defaultDod: (goal: string, decision: boolean): string => (decision ? `A decision is made on: ${goal}` : `The group has reached: ${goal}`),
   notEverybodyYet: (): string => 'Not everybody has contributed yet. I do not name anybody here; reminders go to the people concerned.',
   stillOpen: (title: string, deadline: string | undefined): string => `"${title}" is still open${deadline ? ` until ${deadline}` : ''}. Ask "status" for where we stand.`,
   /** What the group reads when a tool refused and the facilitator said nothing. */

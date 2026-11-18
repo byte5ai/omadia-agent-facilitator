@@ -286,6 +286,7 @@ export const de: Texts = {
   abortResultUndelivered: (error) => `das Ergebnis konnte nicht in die Gruppe gepostet werden (${error})`,
   resultUndeliveredReport: (result) => `Ich konnte das Ergebnis nicht in die Gruppe posten. Das wurde erreicht:\n\n${result}`,
   messageUnprocessed: () => 'Eine Nachricht hier konnte wegen eines technischen Problems nicht verarbeitet werden. Falls du darauf wartest, dass ich etwas erfasse, schick es bitte noch einmal.',
+  defaultDod: (goal, decision) => (decision ? `Es ist entschieden: ${goal}` : `Die Gruppe hat erreicht: ${goal}`),
   notEverybodyYet: () => 'Es haben noch nicht alle beigetragen. Ich nenne hier niemanden; Erinnerungen gehen an die Betroffenen.',
   stillOpen: (title, deadline) => `"${title}" ist noch offen${deadline ? ` bis ${deadline}` : ''}. Fragt nach dem "Status", um zu sehen, wo wir stehen.`,
   refusals: {

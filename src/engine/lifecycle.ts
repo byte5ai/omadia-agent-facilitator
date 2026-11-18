@@ -43,7 +43,8 @@ export interface ConfigureInput extends ConversationRef {
   /** Kernel-stated principal of the person the turn answers. */
   callerPrincipalId: string;
   goal: string;
-  definitionOfDone: string;
+  /** Absent: the agreed one is kept, or a default from the goal is used. */
+  definitionOfDone?: string;
   dodCriteria?: DodCriteria;
   format?: FormatId;
   deadline?: string;
@@ -159,6 +160,8 @@ export interface ConfigureResult {
   participants: Participant[];
   /** Things the facilitator has to tell the group (degradations). */
   notes: string[];
+  /** The definition of done the engine wrote because none was given. */
+  defaultedDod?: string;
 }
 
 const profileLanguage = (language: string | undefined): 'de' | 'en' | undefined => {
@@ -244,12 +247,14 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   if (existing) {
     const facilitation = await engine.work(existing.id, async (w) => {
       const dod = await store.currentDod(w.tx, existing.id);
-      if (dod && (dod.text !== input.definitionOfDone || JSON.stringify(dod.criteria) !== JSON.stringify(input.dodCriteria ?? null))) {
-        await store.patchDodVersion(w.tx, dod.id, { text: input.definitionOfDone, criteria: input.dodCriteria ?? null });
+      // A call that names no definition of done keeps the one that is there.
+      const dodText = input.definitionOfDone ?? dod?.text ?? '';
+      if (dod && (dod.text !== dodText || JSON.stringify(dod.criteria) !== JSON.stringify(input.dodCriteria ?? null))) {
+        await store.patchDodVersion(w.tx, dod.id, { text: dodText, criteria: input.dodCriteria ?? null });
       }
       const agenda = agendaFor(input, config);
       await store.replaceSteps(w.tx, existing.id, agenda);
-      if (dod && !input.dodCriteria) await store.patchDodVersion(w.tx, dod.id, { text: input.definitionOfDone, criteria: criteriaFor(agenda) });
+      if (dod && !input.dodCriteria) await store.patchDodVersion(w.tx, dod.id, { text: dodText, criteria: criteriaFor(agenda) });
       await w.event('reconfigured', 'facilitator', { goal: input.goal });
       return w.patch({
         goal: input.goal,
@@ -323,6 +328,11 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
 
   const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
   const agenda = agendaFor({ ...input, language }, config);
+  // A setup is stored with what is known. Without a definition of done the
+  // engine writes the plain one that follows from the goal; the group sees it
+  // in the handshake and can change it like any other.
+  const defaultedDod = input.definitionOfDone === undefined ? texts(language).defaultDod(input.goal, agenda.some((s) => s.method !== undefined && s.method !== null)) : undefined;
+  const definitionOfDone = input.definitionOfDone ?? defaultedDod ?? input.goal;
   try {
     const result = await poolTransaction(pool, async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
@@ -350,7 +360,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       });
       await store.addDodVersion(tx, {
         facilitationId: facilitation.id,
-        text: input.definitionOfDone,
+        text: definitionOfDone,
         criteria: input.dodCriteria ?? criteriaFor(agenda),
         proposedBy: input.callerPrincipalId,
         consentState: 'initial',
@@ -393,7 +403,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         occurredAt: now,
         payload: { goal: input.goal, initiator: input.callerPrincipalId, participants: participants.length },
       });
-      return { facilitation, created: true, participants, notes };
+      return { facilitation, created: true, participants, notes, ...(defaultedDod !== undefined ? { defaultedDod } : {}) };
     });
     // What needs the kernel (the session's capabilities) is fetched now,
     // outside any transaction.

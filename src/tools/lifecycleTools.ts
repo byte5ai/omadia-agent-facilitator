@@ -70,10 +70,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_start',
         description:
-          'Set up a facilitation in THIS group conversation when a person here asks for it. That person becomes the initiator (say so in the group). Creates it in the phase "configuring": nothing is posted and nothing is recorded until it is opened. Calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open; or pass open: true when the request already fixed everything. Refuses when the facilitator has no identity of its own here or cannot read every message.',
+          'Call this FIRST, in the same turn in which a person here asks for a facilitation, with whatever the request already says, BEFORE you describe a setup or ask anything. You keep no memory between messages: a setup you only describe in the chat is lost with the next message, a setup stored here is not. Sets up a facilitation in THIS group conversation. That person becomes the initiator (say so in the group). Creates it in the phase "configuring": nothing is posted and nothing is recorded until it is opened. Calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open; or pass open: true when the request already fixed everything. Refuses when the facilitator has no identity of its own here or cannot read every message.',
         properties: {
           goal: { type: 'string', description: 'What the group wants to reach.' },
-          definitionOfDone: { type: 'string', description: 'When the facilitation is done, in the words agreed with the group.' },
+          definitionOfDone: { type: 'string', description: 'When the facilitation is done, in the words agreed with the group. Leave it out if it is not agreed yet: a plain one is written from the goal, shown to the group at the opening, and you can call this tool again with the agreed wording.' },
           deadline: { type: 'string', description: 'ISO 8601 with offset, e.g. 2026-11-21T17:00:00+01:00.' },
           timezone: { type: 'string', description: 'IANA timezone of the group.' },
           language: { type: 'string', enum: ['de', 'en'] },
@@ -102,7 +102,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
           open: { type: 'boolean', description: 'Open in the same call. Only when the request already fixed goal, definition of done and (for a vote) method and options, so the group has nothing left to agree on. Otherwise leave it out, agree the setup with the group and call facilitation_open.' },
         },
-        required: ['goal', 'definitionOfDone'],
+        required: ['goal'],
       },
       async (args, ctx) => {
         if (!ctx.callerPrincipalId) throw new Refusal('no_caller', 'It is not known who asked. A facilitation needs an initiator.');
@@ -115,6 +115,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const points = numberList(args, 'points');
         const format = oneOf(args, 'format', FORMAT_IDS);
         const statusAt = optionalString(args, 'followUpStatusAt');
+        const definitionOfDone = optionalString(args, 'definitionOfDone');
         const agenda = Array.isArray(args['agenda'])
           ? args['agenda'].map((raw): AgendaStepInput => {
               const o = asObject(raw);
@@ -138,7 +139,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...ctx,
           callerPrincipalId: ctx.callerPrincipalId,
           goal: requiredString(args, 'goal'),
-          definitionOfDone: requiredString(args, 'definitionOfDone'),
+          ...(definitionOfDone ? { definitionOfDone } : {}),
           ...(deadline ? { deadline } : {}),
           ...(timezone ? { timezone } : {}),
           ...(language ? { language } : {}),
@@ -151,7 +152,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         });
         engine.ensureAttached(ctx.agentSlug);
         const people = result.participants.map((p) => p.displayName).join(', ') || 'not known yet';
-        const notes = result.notes.map((n) => `Tell the group: ${n}`);
+        const notes = [
+          ...result.notes.map((n) => `Tell the group: ${n}`),
+          ...(result.defaultedDod !== undefined ? [`No definition of done was given, so this one is used: "${result.defaultedDod}". Say it to the group; if they want another wording, call facilitation_start again with it.`] : []),
+        ];
         const what = result.created ? 'Facilitation created' : 'Setup updated';
         if (args['open'] === true) {
           const opened = await openAndReport(engine, result.facilitation.id);

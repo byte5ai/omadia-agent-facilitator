@@ -157,3 +157,35 @@ test('a tool that cannot work says so without naming the machinery', async () =>
   assert.match(noContext, /^Refused/);
   assert.doesNotMatch(noContext, INTERNALS);
 });
+
+// ── S2: a setup that is only described is lost ──────────────────────────────
+
+test('S2: facilitation_start can be called with what is known so far, so that a setup is stored before anything is asked', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-draft', FOUR);
+  const answer = await h.tool('facilitation_start', { goal: 'Pick a venue', method: 'single', options: ['Harbour', 'Garden'] }, { conversation: conv });
+  assert.match(answer, /^Facilitation created/);
+  assert.match(answer, /No definition of done was given/);
+  assert.match(answer, /"A decision is made on: Pick a venue"/);
+  const f = await h.facilitation(conv);
+  assert.equal(f.phase, 'configuring');
+  // The confirming message finds the stored setup: it can simply be opened.
+  assert.match(await h.tool('facilitation_open', {}, { conversation: conv }), /^Opened/);
+  assert.match(h.kernel.groupPosts(conv)[0]?.text ?? '', /Done when \(version 1\): A decision is made on: Pick a venue/);
+});
+
+test('S2: a later call without a definition of done keeps the one that was agreed', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-draft-keep', FOUR);
+  await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'Everybody can live with the venue', method: 'single', options: ['Harbour', 'Garden'] }, { conversation: conv });
+  const again = await h.tool('facilitation_start', { goal: 'Pick a venue', method: 'single', options: ['Harbour', 'Garden', 'Old Town'] }, { conversation: conv });
+  assert.doesNotMatch(again, /No definition of done was given/);
+  await h.tool('facilitation_open', {}, { conversation: conv });
+  assert.match(h.kernel.groupPosts(conv)[0]?.text ?? '', /Done when \(version 1\): Everybody can live with the venue/);
+});
+
+test('S2: the description of facilitation_start says to call it first, because nothing is remembered between messages', async () => {
+  const { buildTools } = await import('../src/tools/index.js');
+  const start = buildTools({} as never).find((t) => t.spec.name === 'facilitation_start');
+  assert.match(start?.spec.description ?? '', /^Call this FIRST/);
+  assert.match(start?.spec.description ?? '', /no memory between messages/);
+  assert.deepEqual((start?.spec.input_schema as { required?: string[] }).required, ['goal']);
+});
