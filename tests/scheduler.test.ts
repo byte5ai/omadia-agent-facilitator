@@ -32,6 +32,7 @@ async function say(conv: string, who: string, text: string) {
 }
 const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
 const jobs = async (conv: string) => rows<Job>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind NOT IN ('lifetime', 'grant_revoke') ORDER BY due_at`, [(await h.facilitation(conv)).id]);
+const jobsOf = async (conv: string, kind: string) => rows<Job>(h.db.pool, 'SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind = $2', [(await h.facilitation(conv)).id, kind]);
 /** A deadline `hours` from the current clock, ISO. */
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 async function at(deadline: Date, hoursBefore: number, plusMs = 1000): Promise<void> {
@@ -291,21 +292,48 @@ test('a deadline without a result: honest abort report, and the deadline of a fa
   assert.match(posts(conv).at(-1) ?? '', /Reason: the deadline passed and the definition of done was not met/);
 });
 
-test('an essential message that never gets through is retried with backoff and finally recorded as failed', { skip: PG_SKIP }, async () => {
+test('review 2: a result that cannot be posted does not leave the facilitation concluding forever', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('sc-giveup', FOUR);
   const f = await startActive(h, conv, VOTE);
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'A');
   for (let i = 0; i < MAX_ESSENTIAL_ATTEMPTS + 2; i += 1) h.kernel.sendFaults.push({ code: 'throttled', message: 'try later' });
   await say(conv, 'dave', 'A');
+  assert.equal((await h.facilitation(conv)).phase, 'concluding');
+  assert.ok((await jobsOf(conv, 'lifetime')).some((j) => j.status === 'pending'), 'the maximum duration still applies while concluding');
   // The echo of Dave's ballot took the first fault; the result takes the rest.
   for (let i = 0; i < MAX_ESSENTIAL_ATTEMPTS + 2; i += 1) {
     h.clock.advance(2 * HOUR_MS);
     await h.tick();
   }
   h.kernel.sendFaults.length = 0;
+  await h.tick();
   const result = (await outbox(conv)).find((r) => r.purpose === 'result');
   assert.equal(result?.status, 'failed');
   assert.equal(result?.attempts, MAX_ESSENTIAL_ATTEMPTS);
-  assert.equal((await store.listEvents(h.db.pool, f.id, ['delivery_failed'])).length, 1);
-  assert.ok(h.logs.some((l) => l.includes('could not be delivered')));
+  const ended = await h.facilitation(conv);
+  assert.equal(ended.phase, 'aborted', 'an end state, not concluding');
+  assert.match(ended.closeReason ?? '', /result could not be posted/);
+  assert.ok(ended.purgeAfter, 'retention is scheduled');
+  assert.ok(ended.result, 'the result itself is kept');
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['result_undelivered'])).length, 1);
+  assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false, 'the conversation is released');
+  assert.match(await h.tool('facilitation_start', { goal: 'again', definitionOfDone: 'd' }, { conversation: conv }), /^Facilitation created/, 'a new facilitation can start there');
+});
+
+test('review 2: a crash between "result sent" and the close is finished by the next tick', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('sc-close-crash', FOUR);
+  await startActive(h, conv, VOTE);
+  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'A');
+  h.hooks.beforeClose = () => {
+    throw new Error('process killed before the close was committed');
+  };
+  await say(conv, 'dave', 'A');
+  delete h.hooks.beforeClose;
+  assert.equal((await h.facilitation(conv)).phase, 'concluding');
+  assert.equal(count(conv, 'Result for'), 1);
+  await h.restart();
+  await h.tick();
+  assert.equal((await h.facilitation(conv)).phase, 'closed');
+  assert.equal(count(conv, 'Result for'), 1, 'the result is not posted again');
+  assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);
 });

@@ -234,6 +234,7 @@ export class FacilitationEngine {
     await this.track(
       (async () => {
         await tick(this.core);
+        await this.finishConcluding();
         await purgeExpired(this.core);
         await this.releaseEnded();
         for (const f of await store.listSubscribed(this.core.pool())) {
@@ -243,6 +244,20 @@ export class FacilitationEngine {
       })(),
     );
     await this.idle();
+  }
+
+  /** A facilitation that is concluding is looked at on every tick: the close
+   *  may have been lost after the result went out, or the result may have
+   *  finally failed. Either way it does not stay concluding. */
+  private async finishConcluding(): Promise<void> {
+    const concluding = await this.core.pool().query<{ id: string }>(`SELECT id FROM plg_omadia_agent_facilitator_facilitations WHERE phase = 'concluding' ORDER BY concluded_at LIMIT 50`);
+    for (const row of concluding.rows) {
+      try {
+        await this.core.flush(row.id);
+      } catch (err) {
+        this.core.log(`facilitation ${row.id}: finishing the conclusion failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   /** A release that could not happen when a facilitation ended (a report was

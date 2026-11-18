@@ -497,6 +497,11 @@ export function onAborted(hook: (w: Work, report: string) => Promise<void>): voi
   if (!onAbort.includes(hook)) onAbort.push(hook);
 }
 
+/** What every ending without a result also does. */
+export async function runAbortHooks(w: Work, report: string): Promise<void> {
+  for (const hook of onAbort) await hook(w, report);
+}
+
 /** End without a result inside a unit of work: an honest report to the group.
  *  Idempotent. Nothing ends silently, so every way out goes through here. */
 export async function abortInWork(w: Work, input: AbortInput): Promise<void> {

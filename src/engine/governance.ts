@@ -187,6 +187,17 @@ export function installGovernance(): void {
   // No facilitation stays open forever: reaching the maximum duration ends
   // it with an abort report, never silently.
   registerJobHandler('lifetime', async (w) => {
+    if (w.f.phase === 'concluding') {
+      // The result has not reached the group in all this time: end it with a
+      // record instead of waiting forever. (The row is given up; the close
+      // check after this unit of work does the rest.)
+      await w.tx.query(
+        `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'failed', last_error = coalesce(last_error, 'not delivered within the maximum duration')
+          WHERE facilitation_id = $1 AND purpose = 'result' AND status IN ('pending', 'sending')`,
+        [w.f.id],
+      );
+      return;
+    }
     if (w.f.phase !== 'configuring' && w.f.phase !== 'active') return;
     await abortInWork(w, { reason: texts(w.f.language).abortLifetime(w.config.maxLifetimeDays), actor: 'engine' });
   });

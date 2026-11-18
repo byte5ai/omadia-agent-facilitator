@@ -275,6 +275,8 @@ export const de: Texts = {
     startQuota: (max) =>
       `Systemhinweis: Dieser Facilitator hat in der letzten Stunde ${String(max)} Moderationen gestartet, das ist sein Limit. Bitte versucht es später noch einmal.`,
   },
+  abortResultUndelivered: (error) => `das Ergebnis konnte nicht in die Gruppe gepostet werden (${error})`,
+  resultUndeliveredReport: (result) => `Ich konnte das Ergebnis nicht in die Gruppe posten. Das wurde erreicht:\n\n${result}`,
   abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
   abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
   notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',
