@@ -3,7 +3,8 @@
 // Reading a conversation and posting in it both ride on the subscription the
 // kernel keeps for the facilitator. The kernel ends it on its own when its
 // ground is gone (the engine's grant was revoked, the engine was reinstalled,
-// the agent was disabled), and nothing tells the engine. So the engine asks:
+// the agent was disabled), and nothing tells the engine. So the engine asks
+// (`isSubscribed`, or on an older kernel infers it from what the kernel stored):
 // when it comes up, on every scheduler pass, and before a tool acts.
 //
 //   still there        -> nothing happens
@@ -35,8 +36,8 @@ export type SubscriptionState =
 const LIVE = new Set(['configuring', 'active', 'concluding']);
 
 /**
- * Is there evidence that the subscription is gone? The contract has no
- * question for it, so the engine reads the kernel's store: a subscription
+ * Is there evidence that the subscription is gone? Only for a kernel that
+ * cannot be asked (before plugin-api 1.56). The engine reads the kernel's store: a subscription
  * that delivered events to this facilitation still lists them. An empty list
  * after events arrived means the subscription those events belonged to ended.
  */
@@ -58,10 +59,19 @@ export async function reconcileSubscription(engine: EngineCore, f: Facilitation)
   const messages = engine.deps.kernel.messages();
   if (!messages) return { state: 'unknown' };
   const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId };
-  const listed = (await messages.listSince(scope, { limit: 1 })).events.length;
-  // Events are listed: the subscription stands, whatever else is going on.
-  if (listed > 0 && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
-  const lost = await lostByEvidence(engine, f, listed);
+  let lost: boolean;
+  if (typeof messages.isSubscribed === 'function') {
+    // The kernel answers exactly (plugin-api 1.56).
+    const held = await messages.isSubscribed(scope);
+    if (held && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
+    lost = !held || f.settings.subscriptionLost === true;
+  } else {
+    // An older kernel: inferred from what it stored.
+    const listed = (await messages.listSince(scope, { limit: 1 })).events.length;
+    // Events are listed: the subscription stands, whatever else is going on.
+    if (listed > 0 && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
+    lost = await lostByEvidence(engine, f, listed);
+  }
   const outcome = await messages.subscribe(scope);
 
   if (outcome.outcome === 'subscribed') {
@@ -72,7 +82,7 @@ export async function reconcileSubscription(engine: EngineCore, f: Facilitation)
       if (!lost) return;
       await w.event('subscription_restored', 'engine', {});
       if (LIVE.has(w.f.phase)) {
-        w.post({ purpose: 'resumed', key: w.now.toISOString(), to: 'group', deliveryClass: 'essential', text: texts(w.f.language).resumed() });
+        w.post({ purpose: 'resumed', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).resumed() });
       }
     });
     engine.log(`facilitation ${f.id}: ${lost ? 'the kernel had ended its subscription; subscribed again' : 'the kernel accepts the subscription again'}`);

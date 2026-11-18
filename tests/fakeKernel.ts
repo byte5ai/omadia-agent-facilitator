@@ -356,7 +356,11 @@ export class FakeKernel {
 
   // ── the services ─────────────────────────────────────────────────────────
 
+  /** false: a kernel before plugin-api 1.56, without `isSubscribed`. */
+  exactSubscriptions = true;
+
   private readonly messagesService: ConversationMessagesService = {
+    isSubscribed: async (scope) => this.subscriptions.has(scopeKey(scope)),
     subscribe: async (scope) => {
       if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
       const refusal = this.subscribeRefusals.get(scope.agentSlug);
@@ -529,7 +533,12 @@ export class FakeKernel {
     const unless = <T>(name: keyof Kernel, value: T) => (): T | undefined => (this.absent.has(name) ? undefined : value);
     return {
       pool: () => (this.absent.has('pool') ? undefined : this.pool),
-      messages: unless('messages', this.messagesService),
+      messages: () => {
+        if (this.absent.has('messages')) return undefined;
+        if (this.exactSubscriptions) return this.messagesService;
+        const { isSubscribed: _isSubscribed, ...older } = this.messagesService;
+        return older;
+      },
       agentTurn: unless('agentTurn', this.turnService),
       conversationSend: unless('conversationSend', this.sendService),
       targetedSend: unless('targetedSend', this.targetedService),

@@ -164,3 +164,50 @@ test('a provider that answers without a code or a message leaves a readable erro
   assert.doesNotMatch(opened, /undefined/);
   assert.ok(!h.logs.some((l) => l.includes('undefined: undefined')));
 });
+
+// ── with the kernel's exact answer (plugin-api 1.56: isSubscribed) ──────────
+
+test('S1: a gap that is found when the engine comes up is announced like one found on a pass, also without any message since the last gap', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-activate', FOUR);
+  await startActive(h, conv, VOTE);
+  await h.kernel.say(conv, 'anna', 'A');
+  await h.settle();
+  const told = (): number => h.kernel.groupPosts(conv).filter((p) => /continues/.test(p.text)).length;
+  // First gap, found on a pass.
+  h.kernel.endSubscription('mira', conv);
+  await h.tick();
+  assert.equal(told(), 1);
+  // Second gap with nothing written in between, found at activation.
+  h.kernel.endSubscription('mira', conv);
+  await h.restart();
+  assert.ok(h.kernel.subscriptions.has(`mira|teams|${conv}`));
+  assert.equal(told(), 2, 'announced whichever path noticed it');
+  await h.restart();
+  await h.tick();
+  assert.equal(told(), 2, 'and only once per gap');
+});
+
+test('a facilitation that never received a message is announced too when the kernel can say that the subscription is gone', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-exact', FOUR);
+  await startActive(h, conv, VOTE);
+  h.kernel.endSubscription('mira', conv);
+  await h.tick();
+  assert.equal(h.kernel.groupPosts(conv).filter((p) => /continues/.test(p.text)).length, 1);
+});
+
+test('on a kernel without isSubscribed (plugin-api 1.55) the engine still infers a lost subscription from what it sees', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-inferred', FOUR);
+  h.kernel.exactSubscriptions = false;
+  try {
+    await startActive(h, conv, VOTE);
+    await h.kernel.say(conv, 'anna', 'A');
+    await h.settle();
+    h.kernel.endSubscription('mira', conv);
+    await h.tick();
+    assert.equal(h.kernel.groupPosts(conv).filter((p) => /continues/.test(p.text)).length, 1);
+    await h.tick();
+    assert.equal(h.kernel.groupPosts(conv).filter((p) => /continues/.test(p.text)).length, 1);
+  } finally {
+    h.kernel.exactSubscriptions = true;
+  }
+});
