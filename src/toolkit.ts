@@ -13,6 +13,7 @@
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import type { FacilitatorConfig } from './config.js';
+import { withLocalTime } from './localTime.js';
 import { buildNudgeTool, MAX_NUDGES_PER_FACILITATION } from './nudgeTool.js';
 import { buildParticipantOverview, describeParticipants, loadHumanRoster } from './participants.js';
 import { RunStatePersister, SNAPSHOT_CONTRIBUTOR_MAX_CHARS, SNAPSHOT_MAX_CONTRIBUTORS } from './persistence.js';
@@ -114,6 +115,8 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     return active[0] ?? store.latest();
   }
 
+  const local = (iso: string): string => withLocalTime(iso, config.timezone, de);
+
   async function describe(record: FacilitationRecord): Promise<string> {
     const lines = [
       de ? `Facilitation-Status: ${record.phase}` : `Facilitation status: ${record.phase}`,
@@ -128,19 +131,19 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     if (record.amendedAt) {
       lines.push(
         de
-          ? `Ziel/DoD/Deadline zuletzt geändert am ${record.amendedAt} (facilitation_update) — es gilt der Stand HIER, nicht der ursprüngliche Auftrag.`
-          : `Goal/DoD/deadline last changed at ${record.amendedAt} (facilitation_update) — the wording HERE applies, not the original brief.`,
+          ? `Ziel/DoD/Deadline zuletzt geändert am ${local(record.amendedAt)} (facilitation_update) — es gilt der Stand HIER, nicht der ursprüngliche Auftrag.`
+          : `Goal/DoD/deadline last changed at ${local(record.amendedAt)} (facilitation_update) — the wording HERE applies, not the original brief.`,
       );
     }
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
-    if (record.deadline) lines.push(`Deadline: ${record.deadline}`);
+    if (record.deadline) lines.push(`Deadline: ${local(record.deadline)}`);
     if (record.expiresAt) {
       lines.push(
         record.deadline
           ? de
-            ? `Workflow-Laufzeit (TTL) bis: ${record.expiresAt}`
-            : `Workflow lifetime (TTL) until: ${record.expiresAt}`
-          : `Deadline/TTL: ${record.expiresAt}`,
+            ? `Workflow-Laufzeit (TTL) bis: ${local(record.expiresAt)}`
+            : `Workflow lifetime (TTL) until: ${local(record.expiresAt)}`
+          : `Deadline/TTL: ${local(record.expiresAt)}`,
       );
     }
     if (record.restored && !record.goal) {
@@ -153,8 +156,8 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     if (record.progress) {
       lines.push(
         de
-          ? `Fortschritt (Stand ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`
-          : `Progress (as of ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
+          ? `Fortschritt (Stand ${local(record.progress.updatedAt)}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`
+          : `Progress (as of ${local(record.progress.updatedAt)}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
       );
     }
     if (record.phase === 'active' && !record.conversationUnknown) {
@@ -177,8 +180,8 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
       // the status is where it learns what the group was already told.
       lines.push(
         de
-          ? `Letzter Nudge in den Gruppen-Chat (${record.lastNudge.at}): „${record.lastNudge.text}“`
-          : `Last nudge posted into the group chat (${record.lastNudge.at}): "${record.lastNudge.text}"`,
+          ? `Letzter Nudge in den Gruppen-Chat (${local(record.lastNudge.at)}): „${record.lastNudge.text}“`
+          : `Last nudge posted into the group chat (${local(record.lastNudge.at)}): "${record.lastNudge.text}"`,
       );
     }
     const reportRole = record.roleKey ?? config.initiatorRoleKey;
@@ -292,7 +295,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
             type: 'array',
             items: { type: 'string' },
             description:
-              'COMPLETE list of the participants whose contribution (vote, answer, confirmation) is recorded so far — full names as shown in the participant list of facilitation_status. Replaces the previous list; omit to keep it. Lets the status say who is still pending.',
+              'COMPLETE list of the participants whose contribution (vote, answer, confirmation) is recorded so far — full names as shown in the participant list of facilitation_status. Replaces the previous list; omit to keep it. Lets the status say who is still pending. A name that matches no participant, or more than one, makes the whole call fail with the valid names.',
           },
           conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
         },
@@ -327,7 +330,25 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
           : 'No active facilitation known — progress not recorded.';
       }
       const dodMet = args.dodMet === true;
-      store.recordProgress(record.conversationId, { dodMet, summary, ...(contributors ? { contributors } : {}) });
+      // 0.7.1 — names are checked against the roster at WRITE time. A name
+      // that fits nobody (a typo, or a pseudonym a masked model context
+      // produced) is refused here instead of being stored and resurfacing in
+      // later turns. Without a roster the list is taken as given.
+      let recorded = contributors;
+      if (contributors && contributors.length > 0 && !record.conversationUnknown) {
+        const roster = await loadHumanRoster(deps.getConversationRosters(), record.channelType, record.conversationId, deps.log);
+        if (roster && roster.participants.length > 0) {
+          const overview = buildParticipantOverview(roster, contributors);
+          if (overview.unmatched.length > 0) {
+            const known = roster.participants.join(', ');
+            return de
+              ? `Progress NICHT protokolliert: ${overview.unmatched.join(', ')} passt auf keine oder mehrere Personen der Teilnehmerliste. Gültige Namen: ${known}. Bitte mit den vollen Namen aus dieser Liste erneut protokollieren.`
+              : `Progress NOT recorded: ${overview.unmatched.join(', ')} matches no participant, or more than one. Valid names: ${known}. Record again with the full names from this list.`;
+          }
+          recorded = overview.contributed;
+        }
+      }
+      store.recordProgress(record.conversationId, { dodMet, summary, ...(recorded ? { contributors: recorded } : {}) });
       await persister.persist(record.conversationId);
       let pokeNote = '';
       if (dodMet && record.runId) {

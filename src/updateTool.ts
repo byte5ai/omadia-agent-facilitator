@@ -11,6 +11,7 @@
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import { parseDeadline } from './deadline.js';
+import { withLocalTime } from './localTime.js';
 import { SNAPSHOT_DOD_MAX_CHARS, SNAPSHOT_GOAL_MAX_CHARS } from './persistence.js';
 import type { ToolContext } from './toolkit.js';
 
@@ -93,14 +94,14 @@ export function buildUpdateTool(tc: ToolContext): LocalSubAgentTool {
       const lines = [de ? 'Facilitation aktualisiert (kein Neustart, Fortschritt bleibt erhalten).' : 'Facilitation updated (no restart, progress is kept).'];
       if (goal) lines.push(de ? `Ziel: ${goal}` : `Goal: ${goal}`);
       if (definitionOfDone) lines.push(`Definition of Done: ${definitionOfDone}`);
-      if (deadline) lines.push(`Deadline: ${deadline}`);
+      if (deadline) lines.push(`Deadline: ${withLocalTime(deadline, tc.deps.config.timezone, de)}`);
       // The workflow lifetime was fixed at the start and cannot be stretched here.
       const expiresAt = next?.expiresAt;
       if (deadline && expiresAt && Date.parse(expiresAt) < Date.parse(deadline)) {
         lines.push(
           de
-            ? `Achtung: Der Workflow läuft nur bis ${expiresAt} — das liegt VOR der neuen Deadline. Für die volle Laufzeit ist ein Neustart nötig (facilitation_stop, dann facilitation_start mit deadline).`
-            : `Note: the workflow only lives until ${expiresAt} — BEFORE the new deadline. A restart is needed for the full lifetime (facilitation_stop, then facilitation_start with deadline).`,
+            ? `Achtung: Der Workflow läuft nur bis ${withLocalTime(expiresAt, tc.deps.config.timezone, de)} — das liegt VOR der neuen Deadline. Für die volle Laufzeit ist ein Neustart nötig (facilitation_stop, dann facilitation_start mit deadline).`
+            : `Note: the workflow only lives until ${withLocalTime(expiresAt, tc.deps.config.timezone, de)} — BEFORE the new deadline. A restart is needed for the full lifetime (facilitation_stop, then facilitation_start with deadline).`,
         );
       }
       return lines.join('\n');

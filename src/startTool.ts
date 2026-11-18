@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import { effectiveTtlHours, parseDeadline, wasClamped } from './deadline.js';
+import { withLocalTime } from './localTime.js';
 import type { FacilitationRecord } from './stateStore.js';
 import type { ToolContext } from './toolkit.js';
 
@@ -259,6 +260,7 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
         expiresAt: handle.expiresAt,
         roleKey: initiatorRoleKey,
         ...(deadline ? { deadline: deadline.value } : {}),
+        startedAt: now,
       });
       await tc.persister.persist(conversationId);
 
@@ -295,21 +297,30 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
     clamped: boolean;
     ttlHours: number;
   }): string {
+    const local = (iso: string): string => withLocalTime(iso, config.timezone, de);
     const disclosure = config.discloseReportTarget
       ? de
         ? `Das Ergebnis (und ggf. Zwischenstände) berichte ich an role:${h.initiatorRoleKey}.`
         : `I will report the result (and interim status, if configured) to role:${h.initiatorRoleKey}.`
       : '';
     const timing = h.deadline
-      ? [`Deadline: ${h.deadline}`, de ? `Workflow-Laufzeit (TTL) bis: ${h.expiresAt}` : `Workflow lifetime (TTL) until: ${h.expiresAt}`]
-      : [`Deadline/TTL: ${h.expiresAt}`];
+      ? [
+          `Deadline: ${local(h.deadline)}`,
+          de ? `Workflow-Laufzeit (TTL) bis: ${local(h.expiresAt)}` : `Workflow lifetime (TTL) until: ${local(h.expiresAt)}`,
+        ]
+      : [`Deadline/TTL: ${local(h.expiresAt)}`];
+    // The wording passed two models on its way here — the initiator is the
+    // only one who can tell whether it still says what was meant.
+    const wordingCheck = de
+      ? 'An den Initiator: Bitte prüfe Ziel und Definition of Done oben. Stimmt etwas nicht, sag es hier — ich korrigiere es ohne Neustart.'
+      : 'To the initiator: please check the goal and definition of done above. If something is off, say so here — I will correct it without a restart.';
     let clampNote = '';
     if (h.clamped) {
       const beforeDeadline = h.deadline !== undefined && Date.parse(h.expiresAt) < Date.parse(h.deadline);
       clampNote = de
-        ? `Achtung: Der Kernel hat die Laufzeit begrenzt (angefragt ${h.ttlHours.toFixed(1)} h, gewährt bis ${h.expiresAt}).` +
+        ? `Achtung: Der Kernel hat die Laufzeit begrenzt (angefragt ${h.ttlHours.toFixed(1)} h, gewährt bis ${local(h.expiresAt)}).` +
           (beforeDeadline ? ' Das liegt VOR der Deadline — ohne Ergebnis bis dahin endet die Facilitation vorzeitig. Bitte den Operator informieren.' : '')
-        : `Note: the kernel capped the lifetime (requested ${h.ttlHours.toFixed(1)} h, granted until ${h.expiresAt}).` +
+        : `Note: the kernel capped the lifetime (requested ${h.ttlHours.toFixed(1)} h, granted until ${local(h.expiresAt)}).` +
           (beforeDeadline ? ' That is BEFORE the deadline — without a result by then the facilitation ends early. Please inform the operator.' : '');
     }
     const lines = de
@@ -319,6 +330,7 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
           `Definition of Done: ${h.definitionOfDone}`,
           ...timing,
           clampNote,
+          wordingCheck,
           disclosure,
           'Mit "/facilitator status" bekommt ihr jederzeit den Stand; "/facilitator stop" beendet die Moderation.',
         ]
@@ -328,6 +340,7 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
           `Definition of Done: ${h.definitionOfDone}`,
           ...timing,
           clampNote,
+          wordingCheck,
           disclosure,
           'Use "/facilitator status" any time for the current state; "/facilitator stop" ends the moderation.',
         ];

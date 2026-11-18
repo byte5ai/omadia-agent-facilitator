@@ -26,6 +26,8 @@ export interface RunStateSnapshot {
   nudgesSent?: number;
   roleKey?: string;
   channelType?: string;
+  /** 0.7.1 — when the run was started (minimum nudge spacing from the start). */
+  startedAt?: string;
   /** 0.7.0 — last delivered nudge (time + capped text). */
   lastNudge?: { at: string; text: string };
   /** 0.7.0 — goal/DoD/deadline as changed by facilitation_update. The run
@@ -63,6 +65,7 @@ export function snapshotOf(record: FacilitationRecord): RunStateSnapshot {
           },
         }
       : {}),
+    ...(record.startedAt ? { startedAt: record.startedAt } : {}),
     ...(record.lastNudge
       ? { lastNudge: { at: record.lastNudge.at, text: record.lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) } }
       : {}),
@@ -111,6 +114,7 @@ export function parseSnapshot(raw: Record<string, unknown> | null | undefined): 
       ...(contributors ? { contributors } : {}),
     };
   }
+  if (typeof raw.startedAt === 'string' && Number.isFinite(Date.parse(raw.startedAt))) out.startedAt = raw.startedAt;
   const lastNudge = raw.lastNudge as Record<string, unknown> | undefined;
   if (lastNudge && typeof lastNudge === 'object' && typeof lastNudge.at === 'string' && typeof lastNudge.text === 'string') {
     out.lastNudge = { at: lastNudge.at, text: lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) };

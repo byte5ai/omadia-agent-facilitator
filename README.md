@@ -115,6 +115,18 @@ Abschlussbedingung nur per Neustart zu korrigieren war.
   verlangen die DoD im Wortlaut des Initiators; `dodMet` gilt, sobald die DoD
   wie formuliert erfüllt ist. Dazu gehört Kernel-Pattern `facilitation` v6.
 
+### 0.7.1
+
+- Der Mindestabstand zwischen Nudges zählt auch ab dem Start (der erste
+  Assess-Tick hatte 25 s nach dem Handshake erinnert).
+- Alle ausgegebenen Zeiten tragen zusätzlich die Ortszeit der konfigurierten
+  `timezone` (`<ISO> = Fr., 20.11.2026, 14:00 Uhr (Europe/Berlin)`).
+- `facilitation_progress` prüft `contributors` beim Schreiben gegen die
+  Teilnehmerliste: ein Name, der auf niemanden oder auf mehrere passt, lässt
+  den Aufruf mit der Liste der gültigen Namen scheitern; gespeichert werden
+  die Namen der Liste.
+- Der Handshake bittet den Initiator, Ziel und Definition of Done zu prüfen.
+
 ## Grenzen (bewusst)
 
 - **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`
