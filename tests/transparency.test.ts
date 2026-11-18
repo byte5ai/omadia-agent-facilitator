@@ -192,7 +192,7 @@ test('changing the method: ballots that no longer fit are retired and the people
   assert.match(last(conv), /^"Pick a venue" is now decided like this\. .*Points per rank: 5\/3\/1/);
   assert.match(await tool(conv, 'facilitation_status'), /Contributed: Anna, Bert\nStill open: Cara\nProvisional tally: Harbour 5, Old Town 8, Castle Hill 0/);
 
-  await tool(conv, 'facilitation_propose_change', { change: 'method', method: 'single', options: ['Harbour', 'Old Town'] });
+  await tool(conv, 'facilitation_propose_change', { change: 'method', method: 'single', options: ['Harbour', 'Old Town'], replaceOptions: true });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
   const tail = posts(conv).slice(-2);
   assert.match(tail[0] ?? '', /is now decided like this\. How to vote: write the one option you choose/);

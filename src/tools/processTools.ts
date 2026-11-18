@@ -50,7 +50,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_step',
         description:
-          'Close or extend the open step. "close" on a collecting or discussing step first makes the engine invite whoever has not contributed (privately, and with a neutral line in the group); call it again after they had their chance. A step that is decided by a vote closes by itself.',
+          'Close or extend the open step. This is the tool when the group wants to move on, skip ahead or go to the vote: "close" ends the open step and opens the next one. "close" on a collecting or discussing step first makes the engine invite whoever has not contributed (privately, and with a neutral line in the group); call it again after they had their chance. A step that is decided by a vote closes by itself.',
         properties: {
           action: { type: 'string', enum: ['close', 'extend'] },
           minutes: { type: 'number', description: 'For "extend": how many minutes.' },

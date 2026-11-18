@@ -52,3 +52,48 @@ test('open: true on a setup that cannot be posted does not claim that it is open
   assert.doesNotMatch(answer, /and opened/);
   assert.match(answer, /NOT posted/);
 });
+
+// ── facilitation_propose_change ─────────────────────────────────────────────
+
+async function decisionAgenda(conv: string): Promise<void> {
+  h.kernel.conversation(conv, FOUR);
+  await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', format: 'decision', method: 'single', options: ['Harbour', 'Garden', 'Old Town'], open: true }, { conversation: conv });
+}
+const proposals = async (conv: string): Promise<number> =>
+  (await h.db.pool.query('SELECT 1 FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1', [(await h.facilitation(conv)).id])).rows.length;
+
+test('a method change is refused for a step that is not decided by a vote, and points to facilitation_step', { skip: PG_SKIP }, async () => {
+  await decisionAgenda('tr-change-step');
+  // Step 2 is "collect": "go to the vote" is not a change of its method.
+  const answer = await h.tool('facilitation_propose_change', { change: 'method', step: 2, method: 'ranked', options: ['Fits for all', 'Collect options', 'Discuss'] }, { conversation: 'tr-change-step' });
+  assert.match(answer, /^Refused \(not_a_deciding_step\)/);
+  assert.match(answer, /facilitation_step/);
+  assert.equal(await proposals('tr-change-step'), 0);
+  assert.equal(h.kernel.groupPosts('tr-change-step').filter((p) => /^Proposal/.test(p.text)).length, 0);
+});
+
+test('a method change keeps the options of the step unless it says that they are replaced', { skip: PG_SKIP }, async () => {
+  await decisionAgenda('tr-change-options');
+  const foreign = await h.tool('facilitation_propose_change', { change: 'method', method: 'ranked', options: ['Fits for all', 'Collect options', 'Discuss'] }, { conversation: 'tr-change-options' });
+  assert.match(foreign, /^Refused \(foreign_options\)/);
+  assert.match(foreign, /Harbour, Garden, Old Town/);
+  assert.equal(await proposals('tr-change-options'), 0);
+  // The step's own options, in any order and case, are no change of options.
+  const same = await h.tool('facilitation_propose_change', { change: 'method', method: 'ranked', options: ['garden', 'Harbour', 'Old Town'] }, { conversation: 'tr-change-options' });
+  assert.match(same, /^Put to the group/);
+});
+
+test('replacing the options is possible when the change says so', { skip: PG_SKIP }, async () => {
+  await decisionAgenda('tr-change-replace');
+  const answer = await h.tool('facilitation_propose_change', { change: 'method', options: ['Harbour', 'Lakeside'], replaceOptions: true }, { conversation: 'tr-change-replace' });
+  assert.match(answer, /^Put to the group/);
+  assert.match(h.kernel.groupPosts('tr-change-replace').at(-1)?.text ?? '', /Lakeside/);
+});
+
+test('the tool descriptions tell a rule change from moving on', async () => {
+  const { buildTools } = await import('../src/tools/index.js');
+  const tools = buildTools({} as never);
+  const describe = (name: string): string => tools.find((t) => t.spec.name === name)?.spec.description ?? '';
+  assert.match(describe('facilitation_propose_change'), /facilitation_step/);
+  assert.match(describe('facilitation_step'), /move on|skip/);
+});

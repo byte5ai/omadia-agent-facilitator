@@ -24,16 +24,17 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
       {
         name: 'facilitation_propose_change',
         description:
-          'Put a change of the rules to the group when somebody proposes one: the definition of done, the deadline, the close rule, or the method and options of a deciding step. Anyone may propose. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
+          'Put a change of the RULES to the group when somebody proposes one: the definition of done, the deadline, the close rule, or the method of a step that is decided by a vote. This is not how the group moves on: to close the open step, skip ahead or go to the vote, use facilitation_step. Anyone may propose. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
         properties: {
           change: { type: 'string', enum: [...CHANGES] },
           messageId: { type: 'string', description: 'The message in which a participant proposed the change (from the turn input).' },
           definitionOfDone: { type: 'string', description: 'For definition_of_done: the new wording.' },
           deadline: { type: 'string', description: 'For deadline: ISO 8601 with offset.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'] },
-          step: { type: 'number', description: 'For method: position of the deciding step. Default: the open one.' },
+          step: { type: 'number', description: 'For method: position of the step that is decided by a vote (never a collecting or discussing step). Default: the open one.' },
           method: { type: 'string', enum: [...METHODS] },
-          options: { type: 'array', items: { type: 'string' } },
+          options: { type: 'array', items: { type: 'string' }, description: "For method: leave out to keep the step's options. Other options are accepted only with replaceOptions." },
+          replaceOptions: { type: 'boolean', description: 'For method: the group proposed to vote on different options than the step has. Only then pass new options.' },
           points: { type: 'array', items: { type: 'number' } },
           statement: { type: 'string' },
         },
@@ -63,11 +64,27 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
             const steps = await store.listSteps(w.tx, w.f.id);
             const position = optionalNumber(args, 'step');
             const step = position !== undefined ? steps.find((s) => s.position === position) : (steps.find((s) => s.status === 'open' && s.method !== null) ?? steps.find((s) => s.status === 'pending' && s.method !== null));
-            if (!step) throw new Refusal('bad_input', 'There is no deciding step to change.');
+            if (!step) throw new Refusal('bad_input', 'There is no step that is decided by a vote, so there is no method to change.');
+            if (step.method === null) {
+              throw new Refusal(
+                'not_a_deciding_step',
+                `Step ${String(step.position)} ("${step.title}") is not decided by a vote, so it has no method to change. If the group wants to move on or go to the vote, call facilitation_step with action "close". Nothing was put to the group.`,
+              );
+            }
             const method = oneOf(args, 'method', METHODS) ?? step.method;
-            if (!method) throw new Refusal('bad_input', "'method' is required.");
             const labels = stringList(args, 'options');
-            const options = labels ? toOptions(labels) : step.options;
+            // Options come from the step. A model that fills them in from the
+            // chat or from the agenda would put a vote to the group that
+            // nobody asked for.
+            const own = (list: readonly string[]): string => [...list].map((l) => l.trim().toLowerCase()).sort().join('\u0000');
+            const differs = labels !== undefined && step.options.length > 0 && own(labels) !== own(step.options.map((o) => o.label));
+            if (differs && args['replaceOptions'] !== true) {
+              throw new Refusal(
+                'foreign_options',
+                `These are not the options of this step (${step.options.map((o) => o.label).join(', ')}). Leave 'options' out to keep them. Only if a participant proposed to vote on different options, pass them with replaceOptions: true. Nothing was put to the group.`,
+              );
+            }
+            const options = labels && (differs || step.options.length === 0) ? toOptions(labels) : step.options;
             if (method !== 'consent' && options.length < (method === 'assignment' ? 1 : 2)) throw new Refusal('bad_options', 'Name the options (at least two).');
             const points = numberList(args, 'points');
             const statement = optionalString(args, 'statement');
