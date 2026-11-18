@@ -309,7 +309,7 @@ export const listStakeholders = (q: Queryable, facilitationId: string): Promise<
   ]);
 
 export const listClusters = (q: Queryable, facilitationId: string): Promise<Cluster[]> =>
-  rows<Cluster>(q, 'SELECT * FROM facilitation_clusters WHERE facilitation_id = $1 ORDER BY created_at, id', [
+  rows<Cluster>(q, 'SELECT * FROM facilitation_clusters WHERE facilitation_id = $1 ORDER BY seq', [
     facilitationId,
   ]);
 

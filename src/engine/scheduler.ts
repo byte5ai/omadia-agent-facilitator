@@ -15,7 +15,7 @@ import { formatWhen, texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { advance, castBallots, evaluateStep } from './decide.js';
 import { scheduleJob } from './jobs.js';
-import { releaseOnEnd } from './lifecycle.js';
+import { abortInWork } from './lifecycle.js';
 import { participationOf } from './status.js';
 
 export const LEASE_MS = 2 * MINUTE_MS;
@@ -79,11 +79,7 @@ async function jobFailed(engine: EngineCore, job: Job, err: unknown): Promise<vo
   try {
     await engine.work(job.facilitationId, async (w) => {
       if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
-      const reason = texts(w.f.language).abortJobFailed();
-      await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: `${reason} (${job.kind})` });
-      await releaseOnEnd(w, w.config.retentionDays);
-      w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).aborted(reason) });
-      await w.event('aborted', 'engine', { reason, job: job.kind, error: message });
+      await abortInWork(w, { reason: texts(w.f.language).abortJobFailed(), actor: 'engine', detail: { job: job.kind, error: message } });
     });
   } catch (abortErr) {
     engine.log(`facilitation ${job.facilitationId}: abort after failed job did not go through: ${abortErr instanceof Error ? abortErr.message : String(abortErr)}`);
@@ -181,11 +177,7 @@ const reminder: JobHandler = async (w, job) => {
 /** At the deadline the engine closes with the state at that moment. */
 const deadline: JobHandler = async (w) => {
   if (w.f.phase === 'configuring') {
-    const reason = texts(w.f.language).abortNothing();
-    await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: reason });
-    await releaseOnEnd(w, w.config.retentionDays);
-    w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).aborted(reason) });
-    await w.event('aborted', 'engine', { reason });
+    await abortInWork(w, { reason: texts(w.f.language).abortNothing(), actor: 'engine' });
     return;
   }
   for (const hook of beforeDeadline) await hook(w);

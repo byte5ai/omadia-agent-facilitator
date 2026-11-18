@@ -16,6 +16,7 @@ import type { Participant, Proposal, ProposalObjection } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
+import { advance } from './decide.js';
 import { PRIORITY, isPositiveReaction, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
@@ -201,6 +202,8 @@ export function installProposals(): void {
     const proposal = await store.openProposal(w.tx, w.f.id);
     if (!proposal || proposal.id !== job.payload['proposalId']) return;
     await settleIfDue(w, proposal, true);
+    // The proposal was in the way of an evaluation: look again now.
+    await advance(w, 'contribution');
   });
   // No evaluation concludes while a proposal is open: it is decided first,
   // and never past the deadline.

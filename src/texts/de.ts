@@ -8,19 +8,6 @@ export const de: Texts = {
     return `${items.slice(0, -1).join(', ')} und ${items[items.length - 1] ?? ''}`;
   },
 
-  handshake: (h) =>
-    [
-      `Hallo, ich bin ${h.facilitator} und moderiere diese Unterhaltung ab jetzt. Ich bin neutral: Ich strukturiere den Weg, ihr entscheidet.`,
-      `Gestartet von: ${h.initiator}`,
-      `Ziel: ${h.goal}`,
-      `Fertig, wenn: ${h.definitionOfDone}`,
-      `Teilnehmende: ${h.participants.join(', ')}`,
-      ...(h.deadline ? [`Deadline: ${h.deadline}`] : []),
-      ...(h.rules ?? []),
-      `Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt.`,
-      'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
-    ].join('\n'),
-
   echoRecorded: (name, summary) => `Für dich erfasst, ${name}: ${summary}`,
   echoInterpreted: (name, summary) =>
     `${name}, ich habe deine Nachricht so verstanden: ${summary}. Antworte mit "ja" (oder reagiere mit 👍), um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
@@ -39,15 +26,6 @@ export const de: Texts = {
   left: (name) => `${name} hat die Unterhaltung verlassen. Die bisherigen Beiträge bleiben gezählt.`,
   initiatorLeft: (name) =>
     `${name} hat diese Moderation gestartet und die Unterhaltung verlassen. Ab jetzt erhält ${name} weder weitere Beiträge noch den Bericht.`,
-
-  statusBasics: (s) =>
-    [
-      `Status: ${s.phase}. Ziel: ${s.goal}`,
-      `Definition of Done: Version ${String(s.dodVersion)}`,
-      `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'noch niemand'}`,
-      `Noch offen: ${s.missing.length > 0 ? s.missing.join(', ') : 'niemand'}`,
-      ...(s.deadline ? [`Deadline: ${s.deadline}`] : []),
-    ].join('\n'),
 
   words: { abstention: 'Enthaltung', consent: 'Zustimmung', objection: 'Einwand', declined: 'abgelehnt' },
 
@@ -100,6 +78,8 @@ export const de: Texts = {
     [
       `Ergebnis zu "${r.goal}":`,
       ...r.decisions.map((d) => `- ${d}`),
+      ...(r.actions && r.actions.length > 0 ? ['Nächste Schritte:', ...r.actions.map((a) => `- ${a}`)] : []),
+      ...(r.open && r.open.length > 0 ? ['Offene Punkte:', ...r.open.map((o) => `- ${o}`)] : []),
       ...(r.atDeadline ? [`Die Deadline ist erreicht; ${String(r.atDeadline.contributed)} von ${String(r.atDeadline.of)} haben beigetragen, und dies ist das Ergebnis der abgegebenen Beiträge.`] : []),
       'Diese Moderation ist abgeschlossen. Danke euch.',
     ].join('\n'),
@@ -216,6 +196,72 @@ export const de: Texts = {
     outcome: 'Ergebnis',
     none: 'keine',
   },
+
+  // ── Transparenz ──────────────────────────────────────────────────────────
+  formats: {
+    decision: 'Entscheidung',
+    prioritisation: 'Priorisierung',
+    assignment: 'Rollen- oder Aufgabenverteilung',
+    ideas: 'Ideensammlung',
+    retrospective: 'Retrospektive',
+    alignment: 'Abstimmung',
+    custom: 'Mit euch vereinbart',
+  },
+  handshakeFull: (h) =>
+    [
+      `Hallo, ich bin ${h.facilitator} und moderiere diese Unterhaltung ab jetzt. Ich bin neutral: Ich strukturiere den Weg, ihr entscheidet. Ich stimme nie mit ab und behandle jeden Beitrag gleich.`,
+      `Gestartet von: ${h.initiator}`,
+      `Ziel: ${h.goal}`,
+      `Fertig, wenn (Version 1): ${h.definitionOfDone}`,
+      `Format: ${h.format}`,
+      ...(h.agenda.length > 0 ? ['Agenda:', ...h.agenda] : []),
+      ...h.rules,
+      `Teilnehmende: ${h.participants.join(', ')}`,
+      h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: keine vereinbart',
+      ...(h.reminders ? [`Erinnerungen: ${h.reminders} vor der Deadline, nur solange Beiträge offen sind; in der Gruppe ohne Namen und privat an die Betroffenen, wo ich sie erreiche.`] : []),
+      h.followUp
+        ? 'Aufgaben: Ich erinnere die Verantwortlichen vor der Fälligkeit und höre auf, wenn alles erledigt oder überfällig ist.'
+        : 'Aufgaben: keine Nachverfolgung nach dem Abschluss, außer ihr wünscht sie.',
+      `Änderungen: Jede:r kann vorschlagen, die Definition of Done, die Methode oder die Deadline zu ändern. Eine Änderung gilt, wenn innerhalb von ${String(h.changeWindowHours)} Stunden niemand widerspricht (nie über die Deadline hinaus), und ich kündige sie mit neuer Version an.`,
+      ...(h.perception ? [h.perception] : []),
+      ...h.notes,
+      `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt.`,
+      'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
+    ].join('\n'),
+  reminderTimes: (hours) => hours.map((h) => `${String(h)} Std.`).join(', '),
+
+  status: (s) =>
+    [
+      `Status: ${s.phase}. Ziel: ${s.goal}`,
+      ...(s.step ? [`Aktueller Schritt: ${s.step}`] : []),
+      `Definition of Done (Version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
+      `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'noch niemand'}`,
+      `Noch offen: ${s.missing.length > 0 ? s.missing.join(', ') : 'niemand'}`,
+      ...(s.tally ? [`${s.provisional ? 'Vorläufiger Stand' : 'Stand'}: ${s.tally}`] : []),
+      ...(s.proposal ? [`Offener Vorschlag: ${s.proposal}`] : []),
+      s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: keine',
+    ].join('\n'),
+
+  initiatorReport: (name, outcome, protocol) =>
+    `Hallo ${name}, du hast diese Moderation gestartet, deshalb hier der Bericht. Er enthält nichts, was die Gruppe nicht erfahren hat.\n\n${outcome}\n\n${protocol}`,
+  initiatorUnreachable: (name) => `Ich konnte den Bericht nicht privat an ${name} senden. Es steht alles hier in der Gruppe.`,
+
+  change: {
+    definition_of_done: (text, version) => `die Definition of Done ändern in (Version ${String(version)}): ${text}`,
+    deadline: (when) => `die Deadline auf ${when} verlegen`,
+    close_rule: (rule) =>
+      rule === 'at_deadline' ? 'zur Deadline auswerten statt sobald alle beigetragen haben' : 'auswerten, sobald alle beigetragen haben, statt zur Deadline',
+    method: (title, rules) => `ändern, wie "${title}" entschieden wird. ${rules}`,
+    dod_met: (summary) => `die Definition of Done ist erfüllt, und wir schließen damit ab:\n${summary}`,
+  },
+  changed: {
+    definition_of_done: (version, text) => `Die Definition of Done gilt jetzt in Version ${String(version)}: ${text}`,
+    deadline: (when) => `Die Deadline ist jetzt ${when}. Die Erinnerungen verschieben sich mit.`,
+    close_rule: (rule) =>
+      rule === 'at_deadline' ? 'Ab jetzt wird das Ergebnis zur Deadline ausgewertet.' : 'Ab jetzt wird ausgewertet, sobald alle beigetragen haben.',
+    method: (title, rules) => `"${title}" wird jetzt so entschieden. ${rules}`,
+  },
+  actAgain: (names) => `Beiträge nach den alten Regeln passen nicht mehr. Bitte tragt noch einmal bei: ${names}.`,
 
   phase: {
     configuring: 'wird eingerichtet',

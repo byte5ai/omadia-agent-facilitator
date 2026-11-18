@@ -4,20 +4,13 @@
 // These texts are written by the engine, not by a model: a handshake, a
 // status or a report must be complete and exact every time.
 
-export interface HandshakeBasics {
-  facilitator: string;
-  initiator: string;
-  goal: string;
-  definitionOfDone: string;
-  participants: string[];
-  deadline?: string;
-  /** How to contribute, one line per rule of the method. */
-  rules?: string[];
-}
-
 export interface ResultInput {
   goal: string;
   decisions: string[];
+  /** Next steps with owner and due date. */
+  actions?: string[];
+  /** Open points from the parking lot. */
+  open?: string[];
   /** Set when the deadline closed it before everybody contributed. */
   atDeadline?: { contributed: number; of: number };
 }
@@ -27,19 +20,6 @@ export const en = {
     if (items.length <= 1) return items[0] ?? '';
     return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
   },
-
-  handshake: (h: HandshakeBasics): string =>
-    [
-      `Hello, I am ${h.facilitator} and I facilitate this conversation from now on. I am neutral: I structure the way, you decide.`,
-      `Started by: ${h.initiator}`,
-      `Goal: ${h.goal}`,
-      `Done when: ${h.definitionOfDone}`,
-      `Participants: ${h.participants.join(', ')}`,
-      ...(h.deadline ? [`Deadline: ${h.deadline}`] : []),
-      ...(h.rules ?? []),
-      `The result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`,
-      'Ask "status" at any time. "stop" ends the facilitation.',
-    ].join('\n'),
 
   echoRecorded: (name: string, summary: string): string => `Recorded for you, ${name}: ${summary}`,
   echoInterpreted: (name: string, summary: string): string =>
@@ -60,15 +40,6 @@ export const en = {
   left: (name: string): string => `${name} has left the conversation. Their contributions so far stay counted.`,
   initiatorLeft: (name: string): string =>
     `${name} started this facilitation and has left the conversation. From now on ${name} receives neither further contributions nor the report.`,
-
-  statusBasics: (s: { phase: string; goal: string; dodVersion: number; contributed: string[]; missing: string[]; deadline?: string }): string =>
-    [
-      `Status: ${s.phase}. Goal: ${s.goal}`,
-      `Definition of done: version ${String(s.dodVersion)}`,
-      `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody yet'}`,
-      `Still open: ${s.missing.length > 0 ? s.missing.join(', ') : 'nobody'}`,
-      ...(s.deadline ? [`Deadline: ${s.deadline}`] : []),
-    ].join('\n'),
 
   words: { abstention: 'abstention', consent: 'consent', objection: 'objection', declined: 'declined' },
 
@@ -121,6 +92,8 @@ export const en = {
     [
       `Result for "${r.goal}":`,
       ...r.decisions.map((d) => `- ${d}`),
+      ...(r.actions && r.actions.length > 0 ? ['Next steps:', ...r.actions.map((a) => `- ${a}`)] : []),
+      ...(r.open && r.open.length > 0 ? ['Open points:', ...r.open.map((o) => `- ${o}`)] : []),
       ...(r.atDeadline ? [`The deadline has passed; ${String(r.atDeadline.contributed)} of ${String(r.atDeadline.of)} contributed, and this is the result of what was contributed.`] : []),
       'This facilitation is complete. Thank you.',
     ].join('\n'),
@@ -242,6 +215,99 @@ export const en = {
     outcome: 'Outcome',
     none: 'none',
   },
+
+  // ── transparency ─────────────────────────────────────────────────────────
+  formats: {
+    decision: 'Decision',
+    prioritisation: 'Prioritisation',
+    assignment: 'Role or task assignment',
+    ideas: 'Idea collection',
+    retrospective: 'Retrospective',
+    alignment: 'Alignment',
+    custom: 'Agreed with you',
+  },
+  handshakeFull: (h: {
+    facilitator: string;
+    initiator: string;
+    goal: string;
+    definitionOfDone: string;
+    format: string;
+    agenda: string[];
+    rules: string[];
+    participants: string[];
+    deadline?: string;
+    reminders?: string;
+    followUp: boolean;
+    changeWindowHours: number;
+    perception?: string;
+    notes: string[];
+  }): string =>
+    [
+      `Hello, I am ${h.facilitator} and I facilitate this conversation from now on. I am neutral: I structure the way, you decide. I never vote and I treat every contribution the same.`,
+      `Started by: ${h.initiator}`,
+      `Goal: ${h.goal}`,
+      `Done when (version 1): ${h.definitionOfDone}`,
+      `Format: ${h.format}`,
+      ...(h.agenda.length > 0 ? ['Agenda:', ...h.agenda] : []),
+      ...h.rules,
+      `Participants: ${h.participants.join(', ')}`,
+      h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
+      ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
+      h.followUp
+        ? 'Action items: I remind each owner before the due date and stop when everything is done or past due.'
+        : 'Action items: no follow-up after the close, unless you ask for it.',
+      `Changes: anyone can propose to change the definition of done, the method or the deadline. A change holds when nobody objects within ${String(h.changeWindowHours)} hours (never past the deadline), and I announce it with its new version.`,
+      ...(h.perception ? [h.perception] : []),
+      ...h.notes,
+      `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`,
+      'Ask "status" at any time. "stop" ends the facilitation.',
+    ].join('\n'),
+  reminderTimes: (hours: readonly number[]): string => hours.map((h) => `${String(h)} h`).join(', '),
+
+  status: (s: {
+    phase: string;
+    goal: string;
+    step?: string;
+    dodVersion: number;
+    definitionOfDone: string;
+    contributed: string[];
+    missing: string[];
+    tally?: string;
+    provisional: boolean;
+    proposal?: string;
+    deadline?: string;
+  }): string =>
+    [
+      `Status: ${s.phase}. Goal: ${s.goal}`,
+      ...(s.step ? [`Current step: ${s.step}`] : []),
+      `Definition of done (version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
+      `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody yet'}`,
+      `Still open: ${s.missing.length > 0 ? s.missing.join(', ') : 'nobody'}`,
+      ...(s.tally ? [`${s.provisional ? 'Provisional tally' : 'Tally'}: ${s.tally}`] : []),
+      ...(s.proposal ? [`Open proposal: ${s.proposal}`] : []),
+      s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: none',
+    ].join('\n'),
+
+  initiatorReport: (name: string, outcome: string, protocol: string): string =>
+    `Hello ${name}, you started this facilitation, so here is the report. It contains nothing the group was not told.\n\n${outcome}\n\n${protocol}`,
+  initiatorUnreachable: (name: string): string => `I could not send the report to ${name} privately. It is all here in the group.`,
+
+  change: {
+    definition_of_done: (text: string, version: number): string => `change the definition of done to (version ${String(version)}): ${text}`,
+    deadline: (when: string): string => `move the deadline to ${when}`,
+    close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
+      rule === 'at_deadline' ? 'evaluate at the deadline instead of when everybody has contributed' : 'evaluate as soon as everybody has contributed instead of at the deadline',
+    method: (title: string, rules: string): string => `change how "${title}" is decided. ${rules}`,
+    dod_met: (summary: string): string => `the definition of done is met, and we close with this:\n${summary}`,
+  },
+  changed: {
+    definition_of_done: (version: number, text: string): string => `The definition of done is now version ${String(version)}: ${text}`,
+    deadline: (when: string): string => `The deadline is now ${when}. Reminders move with it.`,
+    close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
+      rule === 'at_deadline' ? 'From now on the result is evaluated at the deadline.' : 'From now on the result is evaluated as soon as everybody has contributed.',
+    method: (title: string, rules: string): string => `"${title}" is now decided like this. ${rules}`,
+  },
+  actAgain: (names: string): string => `Contributions made under the old rules no longer fit. Please contribute again: ${names}.`,
 
   phase: {
     configuring: 'being set up',

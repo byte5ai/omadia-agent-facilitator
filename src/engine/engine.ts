@@ -17,6 +17,7 @@ import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
 import { processMembership } from './membership.js';
+import { installTransparency } from './transparency.js';
 import { runFacilitatorTurn } from './turn.js';
 
 const REPLAY_PAGE = 200;
@@ -36,6 +37,7 @@ export class FacilitationEngine {
     installProposals();
     installProcess();
     installActionItems();
+    installTransparency();
     onOpened(scheduleDeadlineJobs);
   }
 

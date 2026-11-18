@@ -99,7 +99,8 @@ test('race: the last vote lands between "reminder is due" and "reminder runs": n
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'A');
   h.clock.set(new Date((f.deadline as Date).getTime() - 24 * HOUR_MS + 1000));
   h.kernel.tickMs = 0; // the vote and the reminder in the same second
-  const dmsBefore = h.kernel.dms.length;
+  const reminders = (): number => h.kernel.dms.filter((d) => d.text.includes('is still open')).length;
+  const dmsBefore = reminders();
   h.hooks.beforeJob = async (job) => {
     if (job.kind !== 'reminder' || job.facilitationId !== f.id) return;
     delete h.hooks.beforeJob;
@@ -108,7 +109,7 @@ test('race: the last vote lands between "reminder is due" and "reminder runs": n
   await h.tick();
   h.kernel.tickMs = 1000;
   assert.equal(count(conv, 'Reminder:'), 0);
-  assert.equal(h.kernel.dms.length, dmsBefore, 'and nobody is reminded privately');
+  assert.equal(reminders(), dmsBefore, 'and nobody is reminded privately');
   assert.equal((await h.facilitation(conv)).phase, 'closed');
 });
 

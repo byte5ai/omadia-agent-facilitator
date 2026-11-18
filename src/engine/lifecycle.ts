@@ -16,7 +16,7 @@ import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
-import { formatWhen, texts } from '../texts/index.js';
+import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 
@@ -342,6 +342,12 @@ export function setStepOpener(opener: (w: Work, step: Step) => Promise<unknown>)
   openFirstStep = opener;
 }
 
+let handshake: (w: Work, onlyStep: Step | undefined) => Promise<string> = async (w) => w.f.goal;
+/** Who writes the opening handshake (transparency.ts). */
+export function setHandshake(builder: (w: Work, onlyStep: Step | undefined) => Promise<string>): void {
+  handshake = builder;
+}
+
 const onOpen: Array<(w: Work) => Promise<void>> = [];
 /** Work that starts with the facilitation (its reminders and its deadline). */
 export function onOpened(hook: (w: Work) => Promise<void>): void {
@@ -353,7 +359,6 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
   return engine.work(facilitationId, async (w) => {
     if (w.f.phase !== 'configuring') throw new Refusal('not_configuring', `The facilitation is ${w.f.phase}; only one that is being set up can be opened.`);
     const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
-    const dod = await store.currentDod(w.tx, w.f.id);
     const steps = await store.listSteps(w.tx, w.f.id);
     const first = steps[0];
     // One step: the handshake carries its rules. An agenda: the handshake
@@ -362,22 +367,7 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
     const opened = single && first ? await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now }) : undefined;
     if (!single && first?.kind === 'open') await store.patchStep(w.tx, first.id, { status: 'closed', openedAt: w.now, closedAt: w.now });
     const f = await w.patch({ phase: 'active', activatedAt: w.now });
-    const t = texts(f.language);
-    w.post({
-      purpose: 'handshake',
-      key: 'opening',
-      to: 'group',
-      deliveryClass: 'essential',
-      text: t.handshake({
-        facilitator: facilitatorName(f),
-        initiator: displayNameOf(participants, f.initiatorParticipant, f.initiatorPrincipal),
-        goal: f.goal,
-        definitionOfDone: dod?.text ?? '',
-        participants: participants.map((p) => p.displayName),
-        ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
-        rules: single ? rulesOf(f, opened) : [`${t.protocol.agenda}:`, ...steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes))],
-      }),
-    });
+    w.post({ purpose: 'handshake', key: 'opening', to: 'group', deliveryClass: 'essential', text: await handshake(w, single ? opened : undefined) });
     await w.event('opened', 'facilitator', { participants: participants.length });
     for (const hook of onOpen) await hook(w);
     if (!single) {
@@ -401,17 +391,32 @@ export interface AbortInput {
   actor: string;
   /** The text for the group; defaults to the generic abort report. */
   groupText?: string;
+  /** Extra detail for the protocol. */
+  detail?: Record<string, unknown>;
 }
 
-/** End without a result, with an honest report to the group. Idempotent. */
+const onAbort: Array<(w: Work, report: string) => Promise<void>> = [];
+/** What an abort also does (the report to the initiator). */
+export function onAborted(hook: (w: Work, report: string) => Promise<void>): void {
+  if (!onAbort.includes(hook)) onAbort.push(hook);
+}
+
+/** End without a result inside a unit of work: an honest report to the group.
+ *  Idempotent. Nothing ends silently, so every way out goes through here. */
+export async function abortInWork(w: Work, input: AbortInput): Promise<void> {
+  if (w.f.phase === 'closed' || w.f.phase === 'aborted') return;
+  const text = input.groupText ?? texts(w.f.language).aborted(input.reason);
+  await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: input.reason });
+  await releaseOnEnd(w, w.config.retentionDays);
+  w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text });
+  await w.event('aborted', input.actor, { reason: input.reason, ...(input.detail ?? {}) });
+  for (const hook of onAbort) await hook(w, text);
+}
+
+/** End without a result. */
 export async function abortFacilitation(engine: EngineCore, facilitationId: string, input: AbortInput): Promise<Facilitation> {
   const ended = await engine.work(facilitationId, async (w) => {
-    if (w.f.phase === 'closed' || w.f.phase === 'aborted') return w.f;
-    const t = texts(w.f.language);
-    await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: input.reason });
-    await releaseOnEnd(w, engine.config.retentionDays);
-    w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text: input.groupText ?? t.aborted(input.reason) });
-    await w.event('aborted', input.actor, { reason: input.reason });
+    await abortInWork(w, input);
     return w.f;
   });
   await releaseConversation(engine, ended);

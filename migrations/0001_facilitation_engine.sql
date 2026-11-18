@@ -186,6 +186,8 @@ CREATE INDEX facilitation_contributions_by_step
 
 CREATE TABLE facilitation_clusters (
   id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- The order the clusters were proposed in.
+  seq                     bigserial NOT NULL,
   facilitation_id         uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
   step_id                 uuid NOT NULL REFERENCES facilitation_steps (id) ON DELETE CASCADE,
   label                   text NOT NULL,

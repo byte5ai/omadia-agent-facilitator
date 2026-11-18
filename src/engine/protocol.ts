@@ -11,6 +11,19 @@ import { facilitatorName } from './lifecycle.js';
 const CHANGE_EVENTS = ['proposal_accepted', 'proposal_rejected', 'runoff', 'proposal_amended'];
 const CAPABILITY_EVENTS = ['capability_used', 'capability_refused', 'grant_issued', 'grant_revoked'];
 
+/** What the group has, for the binding close. */
+export async function closingSummary(w: { tx: Queryable; f: Facilitation }): Promise<{ decisions: string[]; actions: string[]; open: string[] }> {
+  const t = texts(w.f.language);
+  const participants = await store.listParticipants(w.tx, w.f.id);
+  const name = (id: string): string => participants.find((p) => p.principalId === id)?.displayName ?? id;
+  const decisions = (await store.listDecisions(w.tx, w.f.id)).map((d) => d.statement);
+  const actions = (await store.listActionItems(w.tx, w.f.id))
+    .filter((a) => a.status !== 'declined')
+    .map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), formatWhen(a.dueDate, w.f.timezone, w.f.language), t.actionStatusWords[a.status]));
+  const open = (await store.listEvents(w.tx, w.f.id, ['parked'])).map((e) => String(e.payload['topic']));
+  return { decisions, actions, open };
+}
+
 export interface ProtocolOptions {
   /** Nothing after this moment is included (a participant who left). */
   until?: Date;

@@ -21,8 +21,9 @@ import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { displayNameOf, releaseConversation, releaseOnEnd } from './lifecycle.js';
+import { abortInWork, displayNameOf, releaseConversation, releaseOnEnd } from './lifecycle.js';
 import { onMembershipChange } from './membership.js';
+import { closingSummary } from './protocol.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
 const pointsOf = (step: Step): readonly number[] => {
@@ -219,9 +220,12 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
   const participants = await store.listParticipants(w.tx, w.f.id);
   const active = participants.filter((p) => p.status === 'active');
   const contributed = new Set((await store.listContributions(w.tx, w.f.id)).filter((c) => c.status === 'valid').map((c) => c.participantPrincipal));
+  const summary = await closingSummary(w);
   const text = t.result({
     goal: w.f.goal,
     decisions: decisions.map((d) => d.statement),
+    actions: summary.actions,
+    open: summary.open,
     ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length } } : {}),
   });
   await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), atDeadline: ctx.atDeadline } });
@@ -259,12 +263,7 @@ export async function closeWhenResultDelivered(engine: EngineCore, client: PoolC
   if (f.phase === 'closed' || f.phase === 'aborted') await releaseConversation(engine, f);
 }
 
-async function abortInWork(w: Work, reason: string): Promise<void> {
-  await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: reason });
-  await releaseOnEnd(w, w.config.retentionDays);
-  w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).aborted(reason) });
-  await w.event('aborted', 'engine', { reason });
-}
+const abort = (w: Work, reason: string): Promise<void> => abortInWork(w, { reason, actor: 'engine' });
 
 function scoreLine(options: readonly StepOption[], scores: Record<string, number>): string {
   return options.map((o) => `${o.label} ${String(scores[o.key] ?? 0)}`).join(', ');
@@ -275,7 +274,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   if (w.f.phase !== 'active') return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) {
-    if (trigger === 'deadline') await abortInWork(w, texts(w.f.language).abortNothing());
+    if (trigger === 'deadline') await abort(w, texts(w.f.language).abortNothing());
     return undefined;
   }
   const t = texts(w.f.language);
@@ -302,7 +301,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
     case 'tie': {
       const tied = outcome.tied.map((k) => optionLabel(options, k));
       if (deadlineReached) {
-        await abortInWork(w, t.abortTie(t.list(tied)));
+        await abort(w, t.abortTie(t.list(tied)));
         return outcome;
       }
       // Runoff among the tied options, same method; it ends at the earlier of
@@ -328,7 +327,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
     case 'objection': {
       const lines = outcome.objections.map((o) => `${name(o.principal)}: ${o.reason}`);
       if (deadlineReached) {
-        await abortInWork(w, t.abortObjection(lines.join('; ')));
+        await abort(w, t.abortObjection(lines.join('; ')));
         return outcome;
       }
       // Said once per state of the objections, not after every message.
@@ -350,7 +349,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
     case 'assignment_open': {
       if (deadlineReached) {
         const open = [...outcome.openItems, ...outcome.unconfirmed].map((k) => optionLabel(options, k));
-        await abortInWork(w, t.abortOpenItems(t.list(open)));
+        await abort(w, t.abortOpenItems(t.list(open)));
       }
       return outcome;
     }

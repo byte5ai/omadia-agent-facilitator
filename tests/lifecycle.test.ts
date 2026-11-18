@@ -31,7 +31,7 @@ test('start creates a configuring facilitation with the roster; open posts the h
   const posts = h.kernel.groupPosts(conv);
   assert.equal(posts.length, 1);
   assert.equal(posts[0]?.as, 'mira');
-  for (const part of ['I am Mira', 'Started by: Bert', 'Goal: Pick a venue', 'Done when: A venue is chosen', 'Anna, Bert, Cara, Dave', 'Deadline:', '"status"', '"stop"']) {
+  for (const part of ['I am Mira', 'Started by: Bert', 'Goal: Pick a venue', 'Done when (version 1): A venue is chosen', 'Anna, Bert, Cara, Dave', 'Deadline:', '"status"', '"stop"']) {
     assert.ok(posts[0]?.text.includes(part), `handshake lacks: ${part}`);
   }
   assert.match(await h.tool('facilitation_start', { goal: 'x', definitionOfDone: 'y' }, { conversation: conv }), /^Refused \(already_active\)/);

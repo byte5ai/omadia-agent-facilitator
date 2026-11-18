@@ -16,7 +16,7 @@ import type { Ack, Contribution, Participant } from '../model.js';
 import { texts } from '../texts/index.js';
 import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
-import { releaseOnEnd } from './lifecycle.js';
+import { abortInWork } from './lifecycle.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -69,11 +69,12 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
     return { outcome: 'status' };
   }
   if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring')) {
-    const reason = `stopped by ${author.displayName}`;
-    await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: reason });
-    await releaseOnEnd(w, w.config.retentionDays);
-    w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).stopped(author.displayName) });
-    await w.event('aborted', author.principalId, { reason, messageId: record.messageId });
+    await abortInWork(w, {
+      reason: `stopped by ${author.displayName}`,
+      actor: author.principalId,
+      groupText: texts(w.f.language).stopped(author.displayName),
+      detail: { messageId: record.messageId },
+    });
     return { outcome: 'stopped', ended: true };
   }
   return undefined;

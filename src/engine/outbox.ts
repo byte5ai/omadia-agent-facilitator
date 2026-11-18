@@ -201,6 +201,14 @@ async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Fa
     occurredAt: engine.now(),
     payload: { principal: row.targetPrincipal, purpose: row.purpose, code },
   });
+  if (row.purpose === 'initiator_report') {
+    // The report could not be sent privately: say so where everything is anyway.
+    const initiator = await store.getParticipant(client, f.id, row.targetPrincipal ?? '');
+    await engine.workOn(client, f.id, async (w) => {
+      w.post({ purpose: 'initiator_unreachable', key: 'once', to: 'group', deliveryClass: 'essential', text: texts(f.language).initiatorUnreachable(initiator?.displayName ?? '') });
+    });
+    return;
+  }
   if (f.settings.directNoticeSent === true || (f.phase !== 'active' && f.phase !== 'configuring')) return;
   await engine.workOn(client, f.id, async (w) => {
     // Not a state change: nothing that was computed becomes stale by it.
