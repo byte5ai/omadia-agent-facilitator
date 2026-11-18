@@ -78,6 +78,9 @@ export interface Outgoing {
   /** Droppable messages are bound to the state they were computed from
    *  unless this is false (an answer to a status question stays true enough). */
   versionBound?: boolean;
+  /** A private message only: what goes to the group instead when the person
+   *  cannot be reached privately. */
+  fallback?: { purpose: string; text: string; mentions?: { user: string; text: string }[] };
   /** Row to stamp with the channel's message id once the send returned. */
   link?: { kind: 'ack' | 'proposal'; id: string };
 }
@@ -284,11 +287,12 @@ export class EngineCore {
       this.log(`facilitation ${facilitationId}: outgoing ${m.purpose} refused by the text guard (${verdict.reason})`);
       if (verdict.reason === 'silent' || verdict.reason === 'empty') return;
     }
-    const payload: OutboxPayload & { link?: Outgoing['link'] } = {
+    const payload: OutboxPayload & { link?: Outgoing['link']; fallback?: Outgoing['fallback'] } = {
       text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),
       ...(m.link ? { link: m.link } : {}),
+      ...(m.fallback && m.to !== 'group' ? { fallback: m.fallback } : {}),
     };
     const versionBound = m.versionBound ?? m.deliveryClass === 'droppable';
     await insertIfAbsent<OutboxRow>(

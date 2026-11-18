@@ -185,6 +185,7 @@ export const en = {
   actionReminderGroup: (owner: string, number: number, description: string, due: string): string =>
     `${owner}, action item #${String(number)} is due ${due}: ${description}. Write "done ${String(number)}" when it is done.`,
   actionDone: (owner: string, number: number, description: string): string => `Done, thank you ${owner}: #${String(number)} ${description}`,
+  actionDoneWhich: (name: string, numbers: readonly number[]): string => `${name}, which one is done? Write ${numbers.map((n) => `"done ${String(n)}"`).join(' or ')}.`,
   actionNotYours: (name: string, number: number): string => `${name}, action item #${String(number)} is not yours to close.`,
   actionStatus: (lines: readonly string[]): string => `Status of the action items:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number: number, description: string, owner: string, due: string, status: string): string =>
@@ -272,7 +273,7 @@ export const en = {
       `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`,
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
-  reminderTimes: (hours: readonly number[]): string => hours.map((h) => `${String(h)} h`).join(', '),
+  reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),
 
   status: (s: {
     phase: string;

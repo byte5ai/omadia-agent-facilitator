@@ -19,7 +19,11 @@ import { messageQuotaReached } from './quota.js';
 
 type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; message: string };
 
-type StoredPayload = OutboxPayload & { link?: { kind: 'ack' | 'proposal'; id: string } };
+type StoredPayload = OutboxPayload & {
+  link?: { kind: 'ack' | 'proposal'; id: string };
+  /** What goes to the group when this private message cannot arrive. */
+  fallback?: { purpose: string; text: string; mentions?: { user: string; text: string }[] };
+};
 
 /** How long one channel call may take. The facilitation's lock is held for
  *  that long at most; a call that does not answer in time has an unknown
@@ -183,6 +187,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   // not tried again in this facilitation.
   if (row.targetKind === 'direct' && row.deliveryClass === 'droppable' && (f.settings.unreachable ?? []).includes(row.targetPrincipal ?? '')) {
     await drop(client, row, 'this person could not be reached privately before');
+    await fallbackToGroup(engine, client, f, row);
     return;
   }
 
@@ -250,7 +255,10 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   if (row.deliveryClass === 'droppable') {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });
     engine.log(`facilitation ${f.id}: ${row.purpose} not delivered (${error}); not retried`);
-    if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
+    if (row.targetKind === 'direct') {
+      await noteUnreachable(engine, client, f, row, result.code);
+      await fallbackToGroup(engine, client, f, row);
+    }
     return;
   }
   const permanent = row.targetKind === 'direct' && PERMANENT_DIRECT_FAILURES.has(result.code);
@@ -269,6 +277,15 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   }
   await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
   engine.log(`facilitation ${f.id}: essential ${row.purpose} not delivered (${error}); will retry`);
+}
+
+/** A private message that names its group form: said there instead. */
+async function fallbackToGroup(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow): Promise<void> {
+  const fallback = (row.payload as StoredPayload).fallback;
+  if (!fallback) return;
+  await engine.workOn(client, f.id, async (w) => {
+    w.post({ purpose: fallback.purpose, key: row.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: fallback.text, ...(fallback.mentions ? { mentions: fallback.mentions } : {}) });
+  });
 }
 
 /** A private message did not arrive. The group is told once, neutrally and

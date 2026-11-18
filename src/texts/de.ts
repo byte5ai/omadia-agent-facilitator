@@ -167,6 +167,7 @@ export const de: Texts = {
   actionReminderGroup: (owner, number, description, due) =>
     `${owner}, Aufgabe #${String(number)} ist fällig ${due}: ${description}. Schreib "erledigt ${String(number)}", wenn sie erledigt ist.`,
   actionDone: (owner, number, description) => `Erledigt, danke ${owner}: #${String(number)} ${description}`,
+  actionDoneWhich: (name, numbers) => `${name}, welche ist erledigt? Schreib ${numbers.map((n) => `"erledigt ${String(n)}"`).join(' oder ')}.`,
   actionNotYours: (name, number) => `${name}, Aufgabe #${String(number)} kannst nicht du abschließen.`,
   actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number, description, owner, due, status) => `#${String(number)} ${description} (${owner}, fällig ${due}): ${status}`,
@@ -238,7 +239,7 @@ export const de: Texts = {
       `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt.`,
       'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
     ].join('\n'),
-  reminderTimes: (hours) => hours.map((h) => `${String(h)} Std.`).join(', '),
+  reminderTimes: (hours) => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} Min.` : `${String(h)} Std.`)).join(', '),
 
   status: (s) =>
     [

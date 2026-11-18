@@ -13,7 +13,7 @@ import { recordContribution, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { castBallots, conclude, setAfterStepDecided } from './decide.js';
-import { PRIORITY, registerInboundHandler } from './inbound.js';
+import { PRIORITY, isNo, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { announceStepOpened, announceVote, facilitatorName, rulesOf, setStepOpener } from './lifecycle.js';
@@ -299,7 +299,7 @@ const movingOn: InboundHandler = async ({ w, record, author, command }) => {
  * without a model. A question, a message addressed to the facilitator or one
  * about the process is conversation and goes to the facilitator's turn.
  */
-const collecting: InboundHandler = async ({ w, record, author, retired }) => {
+const collecting: InboundHandler = async ({ w, record, author, command, retired }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   if (record.quoted === true || record.forwarded === true) return undefined;
@@ -308,6 +308,8 @@ const collecting: InboundHandler = async ({ w, record, author, retired }) => {
   if (!step || step.kind !== 'collect' || step.method !== null) return undefined;
   const text = (record.text ?? '').trim();
   if (text === '') return undefined;
+  // A bare yes or no answers something; it is not a point to collect.
+  if (isYes(command) || isNo(command)) return undefined;
   if (addressesProcess(text, facilitatorName(w.f))) return undefined;
   await recordContribution(w, { record, author, step, kind: 'idea', payload: { text }, summary: text, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'collected' };

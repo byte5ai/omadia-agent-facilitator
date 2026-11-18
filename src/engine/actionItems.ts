@@ -104,17 +104,34 @@ export async function actionStatusLines(w: Pick<Work, 'tx' | 'f'>): Promise<stri
 }
 
 const DONE = /^(?:(?:done|erledigt|fertig)\s*#?(\d{1,3})|#?(\d{1,3})\s*(?:done|erledigt|fertig))$/;
+/** "done" without saying which one. */
+const DONE_BARE = /^(?:done|erledigt|fertig)$/;
 
 /** "done 2" from the owner, during the facilitation or its follow-up. */
 const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || record.kind !== 'created') return undefined;
   if (w.f.phase !== 'active' && w.f.followupState !== 'active') return undefined;
   const match = DONE.exec(command);
-  if (!match) return undefined;
-  const number = Number(match[1] ?? match[2]);
+  const t = texts(w.f.language);
+  let number: number;
+  if (match) {
+    number = Number(match[1] ?? match[2]);
+  } else if (DONE_BARE.test(command)) {
+    // Without a number it can only mean the author's own open item. One: that
+    // is the one. Several: the engine asks which, and closes nothing.
+    const own = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.status === 'confirmed' && a.ownerPrincipal === author.principalId);
+    const only = own[0];
+    if (!only) return undefined;
+    if (own.length > 1) {
+      w.post({ purpose: 'action_done_which', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionDoneWhich(author.displayName, own.map((a) => a.number)) });
+      return { outcome: 'action_done_which' };
+    }
+    number = only.number;
+  } else {
+    return undefined;
+  }
   const item = (await store.listActionItems(w.tx, w.f.id)).find((a) => a.number === number);
   if (!item || item.status !== 'confirmed') return undefined;
-  const t = texts(w.f.language);
   if (item.ownerPrincipal !== author.principalId) {
     w.post({ purpose: 'action_not_yours', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionNotYours(author.displayName, number) });
     return { outcome: 'action_not_owner' };
@@ -151,9 +168,9 @@ export function installActionItems(): void {
     });
   };
 
-  // The owner is reminded before the due date: privately, and in the group,
-  // because who owns an action item is no secret and a private message may
-  // not arrive.
+  // The owner is reminded before the due date, privately. Only when that
+  // cannot arrive (no private messages here, or this person cannot be
+  // reached) the reminder is said in the group instead: once, not both.
   registerJobHandler('action_reminder', async (w, job) => {
     if (w.f.followupState !== 'active') return;
     const item = await one<ActionItem>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_action_items WHERE id = $1', [String(job.payload['itemId'])]);
@@ -162,8 +179,20 @@ export function installActionItems(): void {
     if (!owner) return;
     const t = texts(w.f.language);
     await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { remindersSent: item.remindersSent + 1 });
-    w.post({ purpose: 'action_reminder_direct', key: job.id, to: { principalId: owner.principalId }, deliveryClass: 'droppable', versionBound: false, text: t.actionReminder(owner.displayName, item.number, item.description, due(w, item)) });
-    w.post({ purpose: 'action_reminder', key: job.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] });
+    const inGroup = { purpose: 'action_reminder', text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] };
+    if (w.engine.deps.kernel.targetedSend() === undefined) {
+      w.post({ ...inGroup, key: job.id, to: 'group', deliveryClass: 'droppable', versionBound: false });
+    } else {
+      w.post({
+        purpose: 'action_reminder_direct',
+        key: job.id,
+        to: { principalId: owner.principalId },
+        deliveryClass: 'droppable',
+        versionBound: false,
+        text: t.actionReminder(owner.displayName, item.number, item.description, due(w, item)),
+        fallback: inGroup,
+      });
+    }
     await w.event('action_item_reminder', 'engine', { number: item.number });
   });
 

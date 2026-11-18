@@ -230,7 +230,7 @@ test('retrospective: ideas without mentions, clusters and decisions by consent, 
   await h.tick();
   assert.deepEqual(h.kernel.dms.slice(dms).map((d) => d.principal), ['user:bert']);
   assert.match(h.kernel.dms.at(-1)?.text ?? '', /Hello Bert, action item #2 is due .*write "done 2" in the group/);
-  assert.match(last(conv), /^Bert, action item #2 is due /);
+  assert.doesNotMatch(last(conv), /action item #2 is due/, 'privately only: the group is not pinged as well');
   await say(conv, 'cara', 'done 2');
   assert.equal(last(conv), 'Cara, action item #2 is not yours to close.');
   await say(conv, 'bert', 'done 2');

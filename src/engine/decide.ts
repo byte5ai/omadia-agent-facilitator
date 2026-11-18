@@ -234,7 +234,14 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
   const decisions = await store.listDecisions(w.tx, w.f.id);
   const participants = await store.listParticipants(w.tx, w.f.id);
   const active = participants.filter((p) => p.status === 'active');
-  const contributed = new Set((await store.listContributions(w.tx, w.f.id)).filter((c) => c.status === 'valid').map((c) => c.participantPrincipal));
+  // "N of M contributed" at a deadline is about what was decided: who voted
+  // in the last deciding step, not who said anything earlier.
+  const decided = [...(await store.listSteps(w.tx, w.f.id))].reverse().find((s) => s.method !== null);
+  const contributed = new Set(
+    (await store.listContributions(w.tx, w.f.id))
+      .filter((c) => c.status === 'valid' && (!decided || (c.stepId === decided.id && c.round === decided.round)))
+      .map((c) => c.participantPrincipal),
+  );
   const summary = await closingSummary(w);
   const text = t.result({
     goal: w.f.goal,
