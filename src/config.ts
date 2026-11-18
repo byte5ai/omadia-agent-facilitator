@@ -18,6 +18,42 @@ export interface FacilitatorConfig {
   autoSetup: boolean;
   /** #330 C3 — allow proactive group nudges (operator control over posts). */
   nudgesEnabled: boolean;
+  /** 0.7.0 — minimum spacing between two delivered nudges. */
+  nudgeMinIntervalHours: number;
+  /** 0.7.0 — local hours in which no nudge is posted; undefined = none. */
+  nudgeQuietHours: QuietHours | undefined;
+  /** IANA zone the quiet hours are read in. */
+  timezone: string;
+}
+
+/** Hours 0-23; `startHour` inclusive, `endHour` exclusive. A window that
+ *  wraps midnight has startHour > endHour (21-8 = 21:00 until 07:59). */
+export interface QuietHours {
+  startHour: number;
+  endHour: number;
+}
+
+const QUIET_HOURS_PATTERN = /^(\d{1,2})\s*-\s*(\d{1,2})$/;
+
+/** 'HH-HH' → window; '' / 'off' / 'none' → no quiet hours; anything else is invalid. */
+export function parseQuietHours(raw: string): QuietHours | undefined | 'invalid' {
+  const value = raw.trim().toLowerCase();
+  if (value === '' || value === 'off' || value === 'none') return undefined;
+  const match = QUIET_HOURS_PATTERN.exec(value);
+  if (!match) return 'invalid';
+  const startHour = Number(match[1]);
+  const endHour = Number(match[2]);
+  if (startHour > 23 || endHour > 23 || startHour === endHour) return 'invalid';
+  return { startHour, endHour };
+}
+
+export function isValidTimezone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const CONFIG_DEFAULTS: FacilitatorConfig = {
@@ -32,6 +68,9 @@ export const CONFIG_DEFAULTS: FacilitatorConfig = {
   discloseReportTarget: true,
   autoSetup: true,
   nudgesEnabled: true,
+  nudgeMinIntervalHours: 4,
+  nudgeQuietHours: { startHour: 20, endHour: 8 },
+  timezone: 'Europe/Berlin',
 };
 
 function nonEmptyString(value: unknown, fallback: string): string {
@@ -76,6 +115,33 @@ export function parseConfig(
   const nudgesEnabled =
     typeof rawNudges === 'boolean' ? rawNudges : rawNudges === 'false' ? false : CONFIG_DEFAULTS.nudgesEnabled;
 
+  const rawInterval = get<unknown>('nudge_min_interval_hours');
+  const intervalNumber = typeof rawInterval === 'string' ? Number(rawInterval) : rawInterval;
+  const nudgeMinIntervalHours =
+    typeof intervalNumber === 'number' && Number.isFinite(intervalNumber) && intervalNumber >= 0
+      ? intervalNumber
+      : CONFIG_DEFAULTS.nudgeMinIntervalHours;
+  if (rawInterval !== undefined && nudgeMinIntervalHours !== intervalNumber) {
+    log?.(`config: invalid nudge_min_interval_hours '${String(rawInterval)}' — using ${String(CONFIG_DEFAULTS.nudgeMinIntervalHours)}`);
+  }
+
+  const rawQuiet = get<unknown>('nudge_quiet_hours');
+  let nudgeQuietHours = CONFIG_DEFAULTS.nudgeQuietHours;
+  if (typeof rawQuiet === 'string') {
+    const parsed = parseQuietHours(rawQuiet);
+    if (parsed === 'invalid') {
+      log?.(`config: invalid nudge_quiet_hours '${rawQuiet}' (expected 'HH-HH' or 'off') — using the default`);
+    } else {
+      nudgeQuietHours = parsed;
+    }
+  }
+
+  const rawTimezone = nonEmptyString(get('timezone'), CONFIG_DEFAULTS.timezone);
+  const timezone = isValidTimezone(rawTimezone) ? rawTimezone : CONFIG_DEFAULTS.timezone;
+  if (timezone !== rawTimezone) {
+    log?.(`config: unknown timezone '${rawTimezone}' — using ${CONFIG_DEFAULTS.timezone}`);
+  }
+
   return {
     facilitatorAgentSlug: nonEmptyString(get('facilitator_agent_slug'), CONFIG_DEFAULTS.facilitatorAgentSlug),
     initiatorRoleKey: nonEmptyString(get('initiator_role_key'), CONFIG_DEFAULTS.initiatorRoleKey),
@@ -87,5 +153,8 @@ export function parseConfig(
     discloseReportTarget,
     autoSetup,
     nudgesEnabled,
+    nudgeMinIntervalHours,
+    nudgeQuietHours,
+    timezone,
   };
 }

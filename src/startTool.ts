@@ -68,7 +68,8 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
           goal: { type: 'string', description: 'The outcome the group must reach, in one sentence.' },
           definitionOfDone: {
             type: 'string',
-            description: 'Machine-checkable completion criterion (e.g. "every role carries exactly one confirmed name and the group agreed").',
+            description:
+              'Machine-checkable completion criterion in the INITIATOR’S wording (e.g. "all four voted or the deadline passed, and one option has the most points"). Pass it as stated: never add a condition nobody asked for (confirmation round, quorum, completeness or sum check). If it is too vague to check, ask the initiator instead of tightening it yourself.',
           },
           conversationId: {
             type: 'string',
@@ -194,6 +195,19 @@ export function buildStartTool(tc: ToolContext): LocalSubAgentTool {
           } catch (err) {
             deps.log(`lazy bind failed at start: ${err instanceof Error ? err.message : String(err)}`);
           }
+        }
+      }
+
+      // 0.7.0 — a restart must not leave the predecessor's hourly run behind
+      // (field report 2026-11-17: three runs ticked against one conversation
+      // and each of them nudged the group). facilitation_stop normally
+      // cancels it; this covers a stop whose cancel was unavailable or failed.
+      if (pending?.phase === 'stopped' && pending.runId && typeof ephemeralRuns.cancelOwnRun === 'function') {
+        try {
+          const result = await ephemeralRuns.cancelOwnRun({ agentId: deps.agentId, runId: pending.runId, reason: 'superseded_by_restart' });
+          deps.log(`predecessor run ${pending.runId} ${result.cancelled ? 'cancelled' : `not cancelled (${result.reason ?? 'unknown'})`} before restart`);
+        } catch (err) {
+          deps.log(`cancel of predecessor run ${pending.runId} failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 

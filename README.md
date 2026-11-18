@@ -86,6 +86,35 @@ ehrlichen Meldungen, solange etwas fehlt.
 - Alle neuen Kernel-Methoden sind optional: gegen einen älteren Kernel
   verhält sich das Plugin wie 0.5.x (State in-memory, Stop ohne Cancel).
 
+## Feldbericht-Fixes (0.7.0)
+
+Auslöser: eine Abstimmung in einem Teams-Gruppenchat, bei der drei
+Stundenschleifen dieselbe Konversation erinnerten (zwölf Nudges an einem Tag,
+drei davon nach Mitternacht und nach der letzten Stimme) und die
+Abschlussbedingung nur per Neustart zu korrigieren war.
+
+- **`facilitation_update(goal?, definitionOfDone?, deadline?)`** ändert den
+  Auftrag der laufenden Facilitation ohne Stop/Start. Der Run-Payload bleibt
+  der ursprüngliche Auftrag; der aktuelle Wortlaut liegt im Record und im
+  persistierten Run-State und gewinnt bei der Rehydration.
+- **Nudge-Disziplin im Tool** (`nudgePolicy.ts`), nicht nur im Prompt: kein
+  Nudge bei `dodMet`, nach Ablauf der Deadline, innerhalb des Mindestabstands
+  (`nudge_min_interval_hours`, Default 4) oder in der Ruhezeit
+  (`nudge_quiet_hours`, Default `20-8`, Zeitzone `timezone`).
+- **Der Status nennt den letzten Nudge** (Zeit + Text). Der Chat-Agent sieht
+  die Posts des Ticks nicht in seiner Session — so erfährt er, was die Gruppe
+  bereits gelesen hat.
+- **Teilnehmende:** `facilitation_progress(…, contributors)` hält fest, wessen
+  Beitrag erfasst ist; der Status zeigt Teilnehmerliste (live vom Kernel,
+  ohne Bots, nicht persistiert), Erfasste und Ausstehende. Ein Name, der
+  nicht auf genau EINEN Teilnehmer passt, wird als nicht zuordenbar gemeldet
+  statt geraten (zwei Personen mit gleichem Vornamen).
+- **Neustart räumt den Vorgänger ab:** `facilitation_start` bricht den Run
+  einer gestoppten Facilitation ab, falls der Stop das nicht konnte.
+- **Keine erfundenen Bedingungen:** Tool-Beschreibungen und Playbook
+  verlangen die DoD im Wortlaut des Initiators; `dodMet` gilt, sobald die DoD
+  wie formuliert erfüllt ist. Dazu gehört Kernel-Pattern `facilitation` v6.
+
 ## Grenzen (bewusst)
 
 - **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`

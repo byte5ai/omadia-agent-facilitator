@@ -11,6 +11,15 @@
 
 export type FacilitationPhase = 'pending' | 'active' | 'stopped';
 
+export interface FacilitationProgress {
+  dodMet: boolean;
+  summary: string;
+  updatedAt: string;
+  /** 0.7.0 — participants whose contribution (vote, answer, confirmation)
+   *  is recorded so far. Complete list as of this update, not a delta. */
+  contributors?: string[];
+}
+
 export interface FacilitationRecord {
   conversationId: string;
   /** The conversation's origin channel type, when the event carried one. */
@@ -31,9 +40,17 @@ export interface FacilitationRecord {
   roleKey?: string;
   /** #330 C3 — the group-side moderation records its state here; the hourly
    *  assess tick reads it (the tick turn shares no session with the group). */
-  progress?: { dodMet: boolean; summary: string; updatedAt: string };
+  progress?: FacilitationProgress;
   /** #330 C3 — nudge accounting for the per-facilitation cap. */
   nudgesSent?: number;
+  /** 0.7.0 — the last DELIVERED nudge. Drives the minimum spacing between
+   *  nudges and lets the chat-side agent (which never sees the tick's posts
+   *  in its own session) learn from the status what was posted. */
+  lastNudge?: { at: string; text: string };
+  /** 0.7.0 — set when goal/DoD/deadline were changed after the start
+   *  (facilitation_update). The run payload keeps the original wording; the
+   *  record and the persisted snapshot carry the current one. */
+  amendedAt?: string;
   /** #330 round 3 — set when the record came from `bot_present` (bot was
    *  already a member, nobody re-invited it): binding happens lazily in
    *  facilitation_start instead of eagerly on the event. */
@@ -139,8 +156,10 @@ export class FacilitationStateStore {
     goal?: string;
     definitionOfDone?: string;
     deadline?: string;
-    progress?: { dodMet: boolean; summary: string; updatedAt: string };
+    progress?: FacilitationProgress;
     nudgesSent?: number;
+    lastNudge?: { at: string; text: string };
+    amendedAt?: string;
     conversationUnknown?: boolean;
   }): FacilitationRecord | undefined {
     const existing = this.records.get(input.conversationId);
@@ -167,6 +186,8 @@ export class FacilitationStateStore {
       ...(input.deadline ? { deadline: input.deadline } : {}),
       ...(input.progress ? { progress: { ...input.progress } } : {}),
       ...(input.nudgesSent !== undefined ? { nudgesSent: input.nudgesSent } : {}),
+      ...(input.lastNudge ? { lastNudge: { ...input.lastNudge } } : {}),
+      ...(input.amendedAt ? { amendedAt: input.amendedAt } : {}),
       ...(input.conversationUnknown ? { conversationUnknown: true } : {}),
       restored: true,
       createdAt: existing?.createdAt ?? iso,
@@ -194,14 +215,58 @@ export class FacilitationStateStore {
     return next;
   }
 
-  recordProgress(conversationId: string, progress: { dodMet: boolean; summary: string }): FacilitationRecord | undefined {
+  /** `contributors` omitted = keep the previously recorded list (a summary
+   *  update must not wipe who already contributed); an array replaces it. */
+  recordProgress(
+    conversationId: string,
+    progress: { dodMet: boolean; summary: string; contributors?: readonly string[] },
+  ): FacilitationRecord | undefined {
     const record = this.records.get(conversationId);
     if (!record) return undefined;
+    const contributors = progress.contributors ?? record.progress?.contributors;
+    const iso = this.now().toISOString();
     const next: FacilitationRecord = {
       ...record,
-      progress: { ...progress, updatedAt: this.now().toISOString() },
-      updatedAt: this.now().toISOString(),
+      progress: {
+        dodMet: progress.dodMet,
+        summary: progress.summary,
+        updatedAt: iso,
+        ...(contributors ? { contributors: [...contributors] } : {}),
+      },
+      updatedAt: iso,
     };
+    this.records.set(conversationId, next);
+    return next;
+  }
+
+  /** facilitation_update — change goal/DoD/deadline of a running
+   *  facilitation in place. Only the passed fields change. */
+  amend(
+    conversationId: string,
+    input: { goal?: string; definitionOfDone?: string; deadline?: string },
+  ): FacilitationRecord | undefined {
+    const record = this.records.get(conversationId);
+    if (!record) return undefined;
+    const iso = this.now().toISOString();
+    const next: FacilitationRecord = {
+      ...record,
+      ...(input.goal ? { goal: input.goal } : {}),
+      ...(input.definitionOfDone ? { definitionOfDone: input.definitionOfDone } : {}),
+      ...(input.deadline ? { deadline: input.deadline } : {}),
+      amendedAt: iso,
+      updatedAt: iso,
+    };
+    this.records.set(conversationId, next);
+    return next;
+  }
+
+  /** Remember the nudge that was just delivered. `at` is the caller's clock:
+   *  the nudge policy compares it against that same clock. */
+  recordNudgeDelivered(conversationId: string, text: string, at: Date): FacilitationRecord | undefined {
+    const record = this.records.get(conversationId);
+    if (!record) return undefined;
+    const iso = at.toISOString();
+    const next: FacilitationRecord = { ...record, lastNudge: { at: iso, text }, updatedAt: iso };
     this.records.set(conversationId, next);
     return next;
   }

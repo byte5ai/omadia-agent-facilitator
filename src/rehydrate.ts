@@ -206,9 +206,10 @@ export class Hydrator {
     const phase: FacilitationPhase = state?.phase === 'stopped' ? 'stopped' : 'active';
     const channelType = state?.channelType ?? str(payload.channelType) ?? attachment?.channelType;
     const roleKey = state?.roleKey ?? str(payload.initiatorRoleKey) ?? attachment?.roleKey ?? undefined;
-    const goal = str(payload.goal);
-    const definitionOfDone = str(payload.definitionOfDone);
-    const deadline = str(payload.deadline);
+    // facilitation_update (0.7.0) wins over the immutable run payload.
+    const goal = state?.amended?.goal ?? str(payload.goal);
+    const definitionOfDone = state?.amended?.definitionOfDone ?? str(payload.definitionOfDone);
+    const deadline = state?.amended?.deadline ?? str(payload.deadline);
     const expiresAt = iso(run.expiresAt);
     const record = this.deps.store.restore({
       conversationId,
@@ -223,6 +224,8 @@ export class Hydrator {
       ...(deadline ? { deadline } : {}),
       ...(state?.progress ? { progress: state.progress } : {}),
       ...(state?.nudgesSent !== undefined ? { nudgesSent: state.nudgesSent } : {}),
+      ...(state?.lastNudge ? { lastNudge: state.lastNudge } : {}),
+      ...(state?.amended ? { amendedAt: state.amended.at } : {}),
       ...(conversationUnknown ? { conversationUnknown: true } : {}),
     });
     return record !== undefined;

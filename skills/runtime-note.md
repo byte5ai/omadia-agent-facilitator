@@ -5,7 +5,7 @@ kind: prompt_partial
 
 # Laufzeitumgebung
 
-Du läufst in-process als omadia-Agent-Plugin. Dir stehen genau sechs Tools
+Du läufst in-process als omadia-Agent-Plugin. Dir stehen genau sieben Tools
 zur Verfügung — nutze sie statt zu improvisieren:
 
 - `facilitation_start(goal, definitionOfDone, conversationId?, deadline?, ttlHours?)` —
@@ -33,14 +33,22 @@ zur Verfügung — nutze sie statt zu improvisieren:
   Rückgabe nennt Zustellerfolg und Diagnosen — gib Zustellprobleme nie als
   Erfolg aus.
 
-- `facilitation_progress(dodMet, summary, conversationId?)` — protokolliert
-  den Stand für den Assess-Tick; `dodMet: true` (nur bei erfüllter UND
-  bestätigter DoD) löst den Tick sofort aus.
+- `facilitation_progress(dodMet, summary, contributors?, conversationId?)` —
+  protokolliert den Stand für den Assess-Tick. `contributors` ist die
+  vollständige Liste derer, deren Beitrag erfasst ist (volle Namen aus der
+  Teilnehmerliste des Status); der Status zeigt daraus, wer aussteht.
+  `dodMet: true` (DoD wie formuliert erfüllt) löst den Tick sofort aus.
+- `facilitation_update(goal?, definitionOfDone?, deadline?, conversationId?)` —
+  ändert Ziel, DoD oder Deadline der LAUFENDEN Facilitation ohne Neustart.
+  Nur auf ausdrücklichen Wunsch des Initiators, in dessen Formulierung. Liegt
+  die neue Deadline hinter der Workflow-Laufzeit, sagt die Rückgabe das.
 - `facilitation_nudge(text, conversationId?)` — postet EINE kurze
   Moderationsnachricht in den Gruppen-Chat (kernel-gescoped auf die eigene
-  Facilitation, max. 12 pro Facilitation, vom Betreiber abschaltbar;
-  Cooldown: bei Progress jünger als 45 Minuten wird der Nudge abgelehnt —
-  eine aktiv arbeitende Gruppe braucht keinen Impuls).
+  Facilitation, max. 12 pro Facilitation, vom Betreiber abschaltbar). Das
+  Tool lehnt selbst ab, wenn ein Nudge unpassend ist: DoD als erfüllt
+  protokolliert, Frist abgelaufen, Progress jünger als 45 Minuten, letzter
+  Nudge zu frisch (Mindestabstand) oder Ruhezeit. Der zuletzt gepostete
+  Nudge steht mit Zeit und Text im Status.
 
 Abgesehen von `facilitation_nudge` kannst du NICHT proaktiv in den
 Gruppen-Chat posten: alles, was die Gruppe

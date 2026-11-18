@@ -1,4 +1,4 @@
-// The six facilitation_* tools (#330 C1/C3). The LLM loop (top-level agent
+// The seven facilitation_* tools (#330 C1/C3, facilitation_update since 0.7.0). The LLM loop (top-level agent
 // via query_facilitation, or the pattern's step-mode turns) drives them;
 // every degradation (missing kernel service, quota, unknown conversation)
 // comes back as an honest tool output — never a throw that kills the turn.
@@ -7,12 +7,15 @@
 // (rehydrate.ts — plugins activate BEFORE the kernel publishes its
 // Conductor services, so activate-time hydration alone finds nothing on a
 // cold boot), and every mutation is written through to the kernel's per-run
-// state blob (persistence.ts). facilitation_start/stop live in their own files.
+// state blob (persistence.ts). facilitation_start/stop/update/nudge live in
+// their own files.
 
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import type { FacilitatorConfig } from './config.js';
-import { RunStatePersister } from './persistence.js';
+import { buildNudgeTool, MAX_NUDGES_PER_FACILITATION } from './nudgeTool.js';
+import { buildParticipantOverview, describeParticipants, loadHumanRoster } from './participants.js';
+import { RunStatePersister, SNAPSHOT_CONTRIBUTOR_MAX_CHARS, SNAPSHOT_MAX_CONTRIBUTORS } from './persistence.js';
 import { Hydrator } from './rehydrate.js';
 import { sendReport } from './reporting.js';
 import type {
@@ -25,20 +28,11 @@ import type {
 } from './services.js';
 import { buildStartTool } from './startTool.js';
 import { buildStopTool } from './stopTool.js';
+import { buildUpdateTool } from './updateTool.js';
 import type { FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
 export { facilitationRoleKey } from './startTool.js';
 
-// The counter is part of the persisted run state (0.6.0), so the cap holds
-// per facilitation across restarts. Writes are best-effort: on a kernel
-// without saveRunState it degrades to the old per-process cap, and the TTL
-// still bounds the total blast radius.
-const MAX_NUDGES_PER_FACILITATION = 12;
-// Field report: the assess tick nudged eleven minutes into an actively
-// moderated conversation — reading as a SECOND facilitator. Fresh progress
-// is deterministic proof the group is working; the tool refuses instead of
-// trusting the model to hold back.
-const NUDGE_COOLDOWN_AFTER_PROGRESS_MS = 45 * 60 * 1000;
 // A one-line state, not a transcript — also keeps the persisted run state
 // well inside the kernel's 16 KiB cap.
 const MAX_PROGRESS_SUMMARY_CHARS = 1000;
@@ -120,7 +114,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     return active[0] ?? store.latest();
   }
 
-  function describe(record: FacilitationRecord): string {
+  async function describe(record: FacilitationRecord): Promise<string> {
     const lines = [
       de ? `Facilitation-Status: ${record.phase}` : `Facilitation status: ${record.phase}`,
       record.conversationUnknown
@@ -131,6 +125,13 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     ];
     if (record.goal) lines.push(de ? `Ziel: ${record.goal}` : `Goal: ${record.goal}`);
     if (record.definitionOfDone) lines.push(`Definition of Done: ${record.definitionOfDone}`);
+    if (record.amendedAt) {
+      lines.push(
+        de
+          ? `Ziel/DoD/Deadline zuletzt geändert am ${record.amendedAt} (facilitation_update) — es gilt der Stand HIER, nicht der ursprüngliche Auftrag.`
+          : `Goal/DoD/deadline last changed at ${record.amendedAt} (facilitation_update) — the wording HERE applies, not the original brief.`,
+      );
+    }
     if (record.invitedBy) lines.push(de ? `Eingeladen von: ${record.invitedBy}` : `Invited by: ${record.invitedBy}`);
     if (record.deadline) lines.push(`Deadline: ${record.deadline}`);
     if (record.expiresAt) {
@@ -156,8 +157,29 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
           : `Progress (as of ${record.progress.updatedAt}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
       );
     }
+    if (record.phase === 'active' && !record.conversationUnknown) {
+      const roster = await loadHumanRoster(deps.getConversationRosters(), record.channelType, record.conversationId, deps.log);
+      if (roster && roster.participants.length > 0) {
+        lines.push(...describeParticipants(buildParticipantOverview(roster, record.progress?.contributors ?? []), de));
+      } else if (record.progress?.contributors?.length) {
+        lines.push(
+          de
+            ? `Beitrag erfasst: ${record.progress.contributors.join(', ')} (Teilnehmerliste nicht verfügbar)`
+            : `Contribution recorded: ${record.progress.contributors.join(', ')} (participant list unavailable)`,
+        );
+      }
+    }
     if (record.nudgesSent) {
       lines.push(`Nudges: ${String(record.nudgesSent)}/${String(MAX_NUDGES_PER_FACILITATION)}`);
+    }
+    if (record.lastNudge) {
+      // The chat-side agent never sees the tick's posts in its own session —
+      // the status is where it learns what the group was already told.
+      lines.push(
+        de
+          ? `Letzter Nudge in den Gruppen-Chat (${record.lastNudge.at}): „${record.lastNudge.text}“`
+          : `Last nudge posted into the group chat (${record.lastNudge.at}): "${record.lastNudge.text}"`,
+      );
     }
     const reportRole = record.roleKey ?? config.initiatorRoleKey;
     lines.push(
@@ -175,7 +197,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     spec: {
       name: 'facilitation_status',
       description:
-        'Truthful transparency answer for "/facilitator status" and any question about whether/how this conversation is being moderated: phase, goal, definition of done, deadline, and who receives the report.',
+        'Truthful transparency answer for "/facilitator status" and any question about whether/how this conversation is being moderated: phase, goal, definition of done, deadline, recorded progress, participants (who contributed, who is still pending), the last nudge posted into the chat, and who receives the report.',
       input_schema: {
         type: 'object',
         properties: {
@@ -256,12 +278,22 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     spec: {
       name: 'facilitation_progress',
       description:
-        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
+        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary, contributors}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
       input_schema: {
         type: 'object',
         properties: {
-          dodMet: { type: 'boolean', description: 'true ONLY when the definition of done is met AND the group explicitly confirmed.' },
+          dodMet: {
+            type: 'boolean',
+            description:
+              'true as soon as the definition of done is met AS WORDED. A separate confirmation by the group is needed only when the definition of done itself asks for one — never invent extra conditions (confirmation round, quorum, completeness or sum checks).',
+          },
           summary: { type: 'string', description: 'One-line state of the result artifact (e.g. \'5/7 roles filled, QA contested\').' },
+          contributors: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'COMPLETE list of the participants whose contribution (vote, answer, confirmation) is recorded so far — full names as shown in the participant list of facilitation_status. Replaces the previous list; omit to keep it. Lets the status say who is still pending.',
+          },
           conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
         },
         required: ['dodMet', 'summary'],
@@ -269,8 +301,18 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     },
     async handle(input: unknown): Promise<string> {
       await hydrator.ensure();
-      const args = (input ?? {}) as { dodMet?: boolean; summary?: string; conversationId?: string };
+      const args = (input ?? {}) as { dodMet?: boolean; summary?: string; contributors?: unknown; conversationId?: string };
       const summary = typeof args.summary === 'string' ? args.summary.trim().slice(0, MAX_PROGRESS_SUMMARY_CHARS) : '';
+      const contributors = Array.isArray(args.contributors)
+        ? [
+            ...new Set(
+              args.contributors
+                .filter((c): c is string => typeof c === 'string')
+                .map((c) => c.trim().slice(0, SNAPSHOT_CONTRIBUTOR_MAX_CHARS))
+                .filter((c) => c.length > 0),
+            ),
+          ].slice(0, SNAPSHOT_MAX_CONTRIBUTORS)
+        : undefined;
       if (!summary) return de ? 'Progress abgelehnt: summary ist leer.' : 'Progress refused: summary is empty.';
       const resolved = await resolveRecordStrict(args.conversationId);
       if (resolved === 'ambiguous') {
@@ -285,7 +327,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
           : 'No active facilitation known — progress not recorded.';
       }
       const dodMet = args.dodMet === true;
-      store.recordProgress(record.conversationId, { dodMet, summary });
+      store.recordProgress(record.conversationId, { dodMet, summary, ...(contributors ? { contributors } : {}) });
       await persister.persist(record.conversationId);
       let pokeNote = '';
       if (dodMet && record.runId) {
@@ -310,86 +352,8 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     },
   };
 
-  const nudge: LocalSubAgentTool = {
-    spec: {
-      name: 'facilitation_nudge',
-      description:
-        'Post a short, activating moderation message INTO the facilitated group conversation (proactive — used by the hourly assess tick when the group looks stalled). The kernel only delivers into conversations this facilitation owns; capped per facilitation.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          text: { type: 'string', description: 'The nudge to post (short, activating, neutral).' },
-          conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
-        },
-        required: ['text'],
-      },
-    },
-    async handle(input: unknown): Promise<string> {
-      await hydrator.ensure();
-      const args = (input ?? {}) as { text?: string; conversationId?: string };
-      const text = typeof args.text === 'string' ? args.text.trim() : '';
-      if (!text) return de ? 'Nudge abgelehnt: text ist leer.' : 'Nudge refused: text is empty.';
-      if (!config.nudgesEnabled) {
-        return de ? 'Nudges sind deaktiviert (nudges_enabled=false).' : 'Nudges are disabled (nudges_enabled=false).';
-      }
-      const resolved = await resolveRecordStrict(args.conversationId);
-      if (resolved === 'ambiguous') {
-        return de
-          ? 'Mehrere aktive Facilitations — bitte conversationId angeben; ein Nudge darf sein Publikum nicht raten.'
-          : 'Multiple active facilitations — pass conversationId; a nudge must not guess its audience.';
-      }
-      const record = resolved;
-      if (!record || record.phase !== 'active') {
-        return de ? 'Kein aktives Facilitation-Ziel für einen Nudge.' : 'No active facilitation to nudge.';
-      }
-      if (record.conversationUnknown) {
-        return de
-          ? 'Kein Nudge gesendet: Die Konversation dieser (vor 0.6.0 gestarteten) Facilitation ist nach dem Neustart unbekannt.'
-          : 'No nudge sent: the conversation of this facilitation (started before 0.6.0) is unknown after the restart.';
-      }
-      if (record.progress?.updatedAt) {
-        const age = now().getTime() - new Date(record.progress.updatedAt).getTime();
-        if (Number.isFinite(age) && age >= 0 && age < NUDGE_COOLDOWN_AFTER_PROGRESS_MS) {
-          return de
-            ? 'Kein Nudge gesendet: Die Gruppe arbeitet aktiv (Progress vor weniger als 45 Minuten protokolliert) — ein Impuls würde als zweiter Facilitator wirken.'
-            : 'No nudge sent: the group is actively working (progress recorded less than 45 minutes ago) — an impulse would read as a second facilitator.';
-        }
-      }
-      const conversationSend = deps.getConversationSend();
-      if (!conversationSend) {
-        return de
-          ? "Nudge nicht möglich: der Kernel stellt keinen conversationSend-Service bereit (Kernel < #330 C3)."
-          : "Cannot nudge: the kernel does not publish the conversationSend service (kernel < #330 C3).";
-      }
-      const reserved = store.reserveNudge(record.conversationId, MAX_NUDGES_PER_FACILITATION);
-      if (reserved === undefined) {
-        return de
-          ? `Nudge-Limit erreicht (${String(MAX_NUDGES_PER_FACILITATION)} pro Facilitation) — nicht gesendet.`
-          : `Nudge cap reached (${String(MAX_NUDGES_PER_FACILITATION)} per facilitation) — not sent.`;
-      }
-      // Persist the reservation BEFORE delivery: a restart mid-send must
-      // count the nudge, never hand out a fresh slot.
-      await persister.persist(record.conversationId);
-      const outcome = await conversationSend
-        .sendToConversation({
-          agentSlug: config.facilitatorAgentSlug,
-          channelType: record.channelType ?? config.reportChannelType,
-          conversationId: record.conversationId,
-          message: { text },
-        })
-        .catch((err: unknown) => ({ outcome: 'unreachable' as const, code: 'error', message: err instanceof Error ? err.message : String(err) }));
-      if (outcome.outcome === 'delivered') {
-        return de
-          ? `Nudge gesendet (${String(reserved)}/${String(MAX_NUDGES_PER_FACILITATION)}).`
-          : `Nudge sent (${String(reserved)}/${String(MAX_NUDGES_PER_FACILITATION)}).`;
-      }
-      store.releaseNudge(record.conversationId);
-      await persister.persist(record.conversationId);
-      return de
-        ? `Nudge NICHT zugestellt: ${outcome.code} — ${outcome.message}`
-        : `Nudge NOT delivered: ${outcome.code} — ${outcome.message}`;
-    },
-  };
+  const update = buildUpdateTool(tc);
+  const nudge = buildNudgeTool(tc);
 
-  return [start, status, stop, report, progress, nudge];
+  return [start, status, stop, report, progress, nudge, update];
 }

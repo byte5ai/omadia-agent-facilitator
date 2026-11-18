@@ -16,7 +16,7 @@ identity:
   kind: "agent"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.6.0"
+  version: "0.7.0"
   description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
   authors:
     - name: "byte5 GmbH"
@@ -118,6 +118,24 @@ setup:
       help: "Default true: Der Assess-Tick darf bei Stillstand eine kurze aktivierende Moderationsnachricht in den Gruppen-Chat posten (kernel-seitig auf eigene Facilitations gescoped, max. 12 pro Facilitation). Auf false stellen, wenn proaktive Posts unerwünscht sind."
       required: false
       default: true
+    - key: "nudge_min_interval_hours"
+      type: "string"
+      label: "Mindestabstand zwischen Nudges (Stunden)"
+      help: "Default 4: So viele Stunden müssen zwischen zwei Erinnerungen in denselben Gruppen-Chat liegen. 0 hebt den Mindestabstand auf (dann gilt nur der 45-Minuten-Cooldown nach frischem Fortschritt)."
+      required: false
+      default: "4"
+    - key: "nudge_quiet_hours"
+      type: "string"
+      label: "Ruhezeit für Nudges"
+      help: "Default '20-8': In diesem Stundenfenster (Format 'HH-HH', Ortszeit laut 'Zeitzone') wird kein Nudge gepostet. 'off' schaltet die Ruhezeit ab."
+      required: false
+      default: "20-8"
+    - key: "timezone"
+      type: "string"
+      label: "Zeitzone"
+      help: "IANA-Zeitzone für die Ruhezeit (z.B. 'Europe/Berlin')."
+      required: false
+      default: "Europe/Berlin"
     - key: "auto_setup"
       type: "boolean"
       label: "Zero-Touch-Setup"

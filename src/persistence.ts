@@ -15,30 +15,66 @@
 //   the run payload and are not duplicated here.
 
 import type { EphemeralRunsService } from './services.js';
-import type { FacilitationPhase, FacilitationRecord, FacilitationStateStore } from './stateStore.js';
+import type { FacilitationPhase, FacilitationProgress, FacilitationRecord, FacilitationStateStore } from './stateStore.js';
 
 export const RUN_STATE_VERSION = 1;
 
 export interface RunStateSnapshot {
   v: typeof RUN_STATE_VERSION;
   phase: FacilitationPhase;
-  progress?: { dodMet: boolean; summary: string; updatedAt: string };
+  progress?: FacilitationProgress;
   nudgesSent?: number;
   roleKey?: string;
   channelType?: string;
+  /** 0.7.0 — last delivered nudge (time + capped text). */
+  lastNudge?: { at: string; text: string };
+  /** 0.7.0 — goal/DoD/deadline as changed by facilitation_update. The run
+   *  payload is immutable, so the CURRENT wording has to live here. */
+  amended?: { at: string; goal?: string; definitionOfDone?: string; deadline?: string };
 }
 
 /** Size guard: the kernel refuses state blobs over 16 KiB. The summary is the
  *  only free-text field — capped here even if a caller bypassed the tool cap
  *  (1000 chars ≤ 4 KB UTF-8 worst case). */
 export const SNAPSHOT_SUMMARY_MAX_CHARS = 1000;
+/** 0.7.0 caps for the other free-text fields — together with the summary
+ *  they keep a realistic snapshot far below the kernel's 16 KiB limit. */
+export const SNAPSHOT_GOAL_MAX_CHARS = 500;
+export const SNAPSHOT_DOD_MAX_CHARS = 1500;
+export const SNAPSHOT_NUDGE_MAX_CHARS = 300;
+export const SNAPSHOT_MAX_CONTRIBUTORS = 30;
+export const SNAPSHOT_CONTRIBUTOR_MAX_CHARS = 80;
+
+function capContributors(list: readonly string[]): string[] {
+  return list.slice(0, SNAPSHOT_MAX_CONTRIBUTORS).map((name) => name.slice(0, SNAPSHOT_CONTRIBUTOR_MAX_CHARS));
+}
 
 export function snapshotOf(record: FacilitationRecord): RunStateSnapshot {
   return {
     v: RUN_STATE_VERSION,
     phase: record.phase,
     ...(record.progress
-      ? { progress: { ...record.progress, summary: record.progress.summary.slice(0, SNAPSHOT_SUMMARY_MAX_CHARS) } }
+      ? {
+          progress: {
+            dodMet: record.progress.dodMet,
+            summary: record.progress.summary.slice(0, SNAPSHOT_SUMMARY_MAX_CHARS),
+            updatedAt: record.progress.updatedAt,
+            ...(record.progress.contributors ? { contributors: capContributors(record.progress.contributors) } : {}),
+          },
+        }
+      : {}),
+    ...(record.lastNudge
+      ? { lastNudge: { at: record.lastNudge.at, text: record.lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) } }
+      : {}),
+    ...(record.amendedAt
+      ? {
+          amended: {
+            at: record.amendedAt,
+            ...(record.goal ? { goal: record.goal.slice(0, SNAPSHOT_GOAL_MAX_CHARS) } : {}),
+            ...(record.definitionOfDone ? { definitionOfDone: record.definitionOfDone.slice(0, SNAPSHOT_DOD_MAX_CHARS) } : {}),
+            ...(record.deadline ? { deadline: record.deadline } : {}),
+          },
+        }
       : {}),
     ...(record.nudgesSent !== undefined ? { nudgesSent: record.nudgesSent } : {}),
     ...(record.roleKey ? { roleKey: record.roleKey } : {}),
@@ -65,7 +101,30 @@ export function parseSnapshot(raw: Record<string, unknown> | null | undefined): 
     typeof progress.summary === 'string' &&
     typeof progress.updatedAt === 'string'
   ) {
-    out.progress = { dodMet: progress.dodMet, summary: progress.summary, updatedAt: progress.updatedAt };
+    const contributors = Array.isArray(progress.contributors)
+      ? capContributors(progress.contributors.filter((c): c is string => typeof c === 'string' && c.trim().length > 0))
+      : undefined;
+    out.progress = {
+      dodMet: progress.dodMet,
+      summary: progress.summary,
+      updatedAt: progress.updatedAt,
+      ...(contributors ? { contributors } : {}),
+    };
+  }
+  const lastNudge = raw.lastNudge as Record<string, unknown> | undefined;
+  if (lastNudge && typeof lastNudge === 'object' && typeof lastNudge.at === 'string' && typeof lastNudge.text === 'string') {
+    out.lastNudge = { at: lastNudge.at, text: lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) };
+  }
+  const amended = raw.amended as Record<string, unknown> | undefined;
+  if (amended && typeof amended === 'object' && typeof amended.at === 'string') {
+    out.amended = {
+      at: amended.at,
+      ...(typeof amended.goal === 'string' && amended.goal.length > 0 ? { goal: amended.goal } : {}),
+      ...(typeof amended.definitionOfDone === 'string' && amended.definitionOfDone.length > 0
+        ? { definitionOfDone: amended.definitionOfDone }
+        : {}),
+      ...(typeof amended.deadline === 'string' && amended.deadline.length > 0 ? { deadline: amended.deadline } : {}),
+    };
   }
   if (typeof raw.nudgesSent === 'number' && Number.isInteger(raw.nudgesSent) && raw.nudgesSent >= 0) {
     out.nudgesSent = raw.nudgesSent;
