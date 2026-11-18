@@ -20,6 +20,8 @@ import { participationOf } from './status.js';
 
 export const LEASE_MS = 2 * MINUTE_MS;
 export const MAX_JOB_ATTEMPTS = 5;
+/** How late a reminder may be and still be sent. */
+export const REMINDER_GRACE_MS = 15 * MINUTE_MS;
 const BATCH = 50;
 
 export type JobHandler = (w: Work, job: Job, prepared: unknown) => Promise<void>;
@@ -187,6 +189,14 @@ async function waitingFor(w: Work): Promise<{ open: number; people: Participant[
  *  for contributions. Neutral in the group; the people it concerns privately. */
 const reminder: JobHandler = async (w, job) => {
   if (w.f.phase !== 'active') return;
+  // After downtime a reminder may come up long past its time, together with
+  // the next one and the deadline. A reminder that is late says nothing
+  // useful, and one after the deadline is wrong: it is skipped, on record.
+  const lateMs = w.now.getTime() - job.dueAt.getTime();
+  if (lateMs > REMINDER_GRACE_MS || (w.f.deadline !== null && w.now.getTime() >= w.f.deadline.getTime())) {
+    await w.event('reminder_skipped', 'engine', { hoursBefore: job.payload['hoursBefore'], lateMinutes: Math.round(lateMs / MINUTE_MS) });
+    return;
+  }
   const { open, people } = await waitingFor(w);
   if (open === 0) return;
   const t = texts(w.f.language);

@@ -337,3 +337,33 @@ test('review 2: a crash between "result sent" and the close is finished by the n
   assert.equal(count(conv, 'Result for'), 1, 'the result is not posted again');
   assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);
 });
+
+test('review 6: after downtime overdue reminders are not sent late, and never after the deadline', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('sc-burst', FOUR);
+  const f = await startActive(h, conv, { ...VOTE, deadline: inHours(72) });
+  const deadline = f.deadline as Date;
+  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'A');
+  const dms = h.kernel.dms.filter((d) => d.text.includes('is still open')).length;
+
+  // Down from before -24 h until three hours after it: that reminder is stale.
+  h.clock.set(new Date(deadline.getTime() - 21 * HOUR_MS));
+  await h.tick();
+  assert.equal(count(conv, 'Reminder:'), 0, 'three hours late is not sent');
+
+  // A few minutes late is still a reminder.
+  h.clock.set(new Date(deadline.getTime() - 2 * HOUR_MS + 5 * MINUTE_MS));
+  await h.tick();
+  assert.equal(count(conv, 'Reminder:'), 1);
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['reminder_skipped'])).length, 1);
+
+  // Down across the whole end: both reminders and the deadline are overdue at once.
+  const late = h.kernel.conversation('sc-burst-late', FOUR);
+  const g = await startActive(h, late, { ...VOTE, deadline: inHours(72) });
+  for (const who of ['anna', 'bert', 'cara']) await say(late, who, 'A');
+  h.clock.set(new Date((g.deadline as Date).getTime() + HOUR_MS));
+  await h.tick();
+  assert.equal(count(late, 'Reminder:'), 0, 'no reminder after the deadline');
+  assert.equal(count(late, 'Result for'), 1);
+  assert.equal((await h.facilitation(late)).phase, 'closed');
+  assert.equal(h.kernel.dms.filter((d) => d.text.includes('is still open')).length, dms + 1, 'one private reminder in all');
+});
