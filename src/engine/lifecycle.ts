@@ -202,6 +202,10 @@ export function registerStartCheck(check: StartCheck): void {
   if (!startChecks.includes(check)) startChecks.push(check);
 }
 
+/** A definition of done that is met as soon as everybody has contributed. */
+const DONE_WHEN_ALL =
+  /(?<!\p{L})(alle|jede[rs]?|everyone|everybody|all)(?!\p{L})[^.!?\n]{0,40}?(?<!\p{L})(abgestimmt|beigetragen|gewählt|geantwortet|voted|contributed|answered)(?!\p{L})/iu;
+
 const REPAIRABLE = new Set(['consent_missing', 'package_outdated']);
 const READINESS_UNVERIFIED = 'The channel could not confirm that I can read every message here (no readiness check available).';
 
@@ -234,6 +238,14 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   }
 
   const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
+  // The handshake states both the definition of done and when the engine
+  // evaluates. The two must not say opposite things.
+  if ((input.closeRule ?? existing?.closeRule) === 'at_deadline' && input.definitionOfDone !== undefined && DONE_WHEN_ALL.test(input.definitionOfDone)) {
+    throw new Refusal(
+      'close_rule_contradiction',
+      "The definition of done says it is done when everybody has contributed, but closeRule 'at_deadline' keeps it open until the deadline even then. Use closeRule 'all_contributed' (the default: it closes when everybody has contributed, at the latest at the deadline), or reword the definition of done. Nothing was created or changed.",
+    );
+  }
   if (existing && existing.facilitatorAgent !== input.agentSlug) {
     throw new Refusal('conversation_taken', 'Another facilitator already facilitates this conversation. One facilitation per conversation at a time.');
   }
