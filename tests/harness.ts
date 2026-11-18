@@ -40,8 +40,8 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(opts: { config?: Partial<EngineConfig>; start?: string } = {}): Promise<Harness> {
-  const db = await openTestDb();
+export async function createHarness(opts: { config?: Partial<EngineConfig>; start?: string; poolMax?: number } = {}): Promise<Harness> {
+  const db = await openTestDb(opts.poolMax);
   const clock = fakeClock(opts.start);
   const kernel = new FakeKernel(db.pool, clock);
   const logs: string[] = [];

@@ -22,11 +22,16 @@ export const LEASE_MS = 2 * MINUTE_MS;
 export const MAX_JOB_ATTEMPTS = 5;
 const BATCH = 50;
 
-export type JobHandler = (w: Work, job: Job) => Promise<void>;
+export type JobHandler = (w: Work, job: Job, prepared: unknown) => Promise<void>;
+/** What a job needs from the kernel, fetched BEFORE its unit of work: no
+ *  kernel call happens inside a transaction. */
+export type JobPreparation = (engine: EngineCore, job: Job) => Promise<unknown>;
 const handlers = new Map<string, JobHandler>();
+const preparations = new Map<string, JobPreparation>();
 
-export function registerJobHandler(kind: string, handler: JobHandler): void {
+export function registerJobHandler(kind: string, handler: JobHandler, prepare?: JobPreparation): void {
   handlers.set(kind, handler);
+  if (prepare) preparations.set(kind, prepare);
 }
 
 /** Lease the jobs that are due. `SKIP LOCKED` keeps replicas out of each
@@ -50,6 +55,7 @@ export async function leaseDueJobs(engine: EngineCore, now: Date): Promise<Job[]
 async function runJob(engine: EngineCore, job: Job): Promise<void> {
   await engine.deps.hooks?.beforeJob?.(job);
   try {
+    const prepared = await preparations.get(job.kind)?.(engine, job);
     await engine.work(job.facilitationId, async (w) => {
       // Under the lock: is it still mine to run? It may have been cancelled
       // by the vote that just concluded the facilitation.
@@ -57,7 +63,7 @@ async function runJob(engine: EngineCore, job: Job): Promise<void> {
       if (!current || current.status !== 'pending' || current.leaseOwner !== engine.instanceId) return;
       const handler = handlers.get(current.kind);
       if (!handler) throw new Error(`no handler for job kind '${current.kind}'`);
-      await handler(w, current);
+      await handler(w, current, prepared);
       await update(w.tx, 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { status: 'done', finishedAt: w.now, leaseOwner: null, leaseUntil: null });
     });
   } catch (err) {

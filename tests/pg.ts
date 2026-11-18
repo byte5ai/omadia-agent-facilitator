@@ -28,12 +28,12 @@ export interface TestDb {
   close(): Promise<void>;
 }
 
-export async function openTestDb(): Promise<TestDb> {
+export async function openTestDb(max = 12): Promise<TestDb> {
   if (!url) throw new Error('openTestDb() called without a database; guard the test with { skip: PG_SKIP }');
   const schema = `fac_test_${randomBytes(6).toString('hex')}`;
   const admin = new pg.Pool({ connectionString: url, max: 1 });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const pool = new pg.Pool({ connectionString: url, max: 12, options: `-c search_path=${schema}` });
+  const pool = new pg.Pool({ connectionString: url, max, options: `-c search_path=${schema}` });
 
   const runMigrations = async () => {
     const started = Date.now();

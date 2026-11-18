@@ -148,8 +148,9 @@ export class FakeKernel {
   /** Principals a private message cannot reach, with the channel's code. */
   readonly dmBlocked = new Map<string, string>();
   /** Group sends to fail next, in order: an outcome, or 'throw' / 'lost'
-   *  ('lost' delivers but reports failure: a lost confirmation). */
-  readonly sendFaults: Array<'throw' | 'lost' | { code: string; message: string }> = [];
+   *  ('lost' delivers but reports failure: a lost confirmation; 'hang' never
+   *  answers). */
+  readonly sendFaults: Array<'throw' | 'lost' | 'hang' | { code: string; message: string }> = [];
   /** Answers the facilitator's turn; default: says nothing. */
   onTurn: (request: AgentTurnRequest) => string | AgentTurnOutcome | Promise<string | AgentTurnOutcome> = () => '[silent]';
   followup: FacilitationFollowupService | undefined;
@@ -363,6 +364,8 @@ export class FakeKernel {
       if (!this.subscriptions.has(scopeKey(request))) return { outcome: 'unreachable', code: 'not_permitted', message: 'no subscription for this conversation' };
       const fault = this.sendFaults.shift();
       if (fault === 'throw') throw new Error('channel connection reset');
+      // A channel call that never answers.
+      if (fault === 'hang') return new Promise<ConversationSendOutcome>(() => undefined);
       if (fault && fault !== 'lost') return { outcome: 'unreachable', ...fault };
       const messageId = this.nextId('bot');
       const message = request.message;

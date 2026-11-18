@@ -258,9 +258,15 @@ export async function closeWhenResultDelivered(engine: EngineCore, client: PoolC
       await w.event('closed', 'engine', {});
       for (const hook of afterClose) await hook(w);
     });
-    return;
   }
-  if (f.phase === 'closed' || f.phase === 'aborted') await releaseConversation(engine, f);
+}
+
+/** After the lock is released: stop reading a conversation whose facilitation
+ *  has ended. Runs outside the lock because it queries the pool and calls the
+ *  kernel. */
+export async function releaseWhenEnded(engine: EngineCore, facilitationId: string): Promise<void> {
+  const f = await store.getFacilitation(engine.pool(), facilitationId);
+  if (f && (f.phase === 'closed' || f.phase === 'aborted')) await releaseConversation(engine, f);
 }
 
 const abort = (w: Work, reason: string): Promise<void> => abortInWork(w, { reason, actor: 'engine' });

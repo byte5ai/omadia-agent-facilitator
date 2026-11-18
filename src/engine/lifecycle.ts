@@ -166,6 +166,13 @@ const profileLanguage = (language: string | undefined): 'de' | 'en' | undefined 
   return base === 'de' || base === 'en' ? base : undefined;
 };
 
+export type ConfiguredHook = (engine: EngineCore, facilitation: Facilitation) => Promise<void>;
+const configured: ConfiguredHook[] = [];
+/** Runs once a facilitation was created, outside any transaction. */
+export function onConfigured(hook: ConfiguredHook): void {
+  if (!configured.includes(hook)) configured.push(hook);
+}
+
 export type StartCheck = (engine: EngineCore, facilitatorAgent: string, language: 'de' | 'en') => Promise<void>;
 const startChecks: StartCheck[] = [];
 /** What must hold before a new facilitation is created (quotas). */
@@ -289,7 +296,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
   const agenda = agendaFor({ ...input, language }, config);
   try {
-    return await poolTransaction(pool, async (tx) => {
+    const result = await poolTransaction(pool, async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
         facilitatorAgent: input.agentSlug,
         channelType: input.channelType,
@@ -360,6 +367,10 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       });
       return { facilitation, created: true, participants, notes };
     });
+    // What needs the kernel (the session's capabilities) is fetched now,
+    // outside any transaction.
+    for (const hook of configured) await hook(engine, result.facilitation);
+    return result;
   } catch (err) {
     // Nothing was created: do not keep reading a conversation we do not moderate.
     if (!(await store.findLiveByConversation(pool, input.channelType, input.conversationId))) await messages.unsubscribe(input);

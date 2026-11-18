@@ -6,7 +6,7 @@ import { Refusal } from '../engine/core.js';
 import { roundOptions } from '../engine/decide.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
-import { endSession, recordSpoken, scheduleSession, speakingOrder, startSession } from '../engine/sessions.js';
+import { endSession, prepareSessionStart, recordSpoken, scheduleSession, speakingOrder, startSession } from '../engine/sessions.js';
 import { parseBallot, resolvePerson } from '../methods/ballot.js';
 import { defineTool, liveFacilitation, oneOf, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ToolDefinition } from './toolkit.js';
@@ -36,6 +36,7 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
       async (args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
         const action = oneOf(args, 'action', ['schedule', 'start', 'end'] as const);
+        const prefetched = action === 'start' ? await prepareSessionStart(engine.core, f.id) : undefined;
         return engine.core.work(f.id, async (w) => {
           const sessions = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
           if (action === 'schedule') {
@@ -64,7 +65,7 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
           if (action === 'start') {
             const next = sessions.find((s) => s.status === 'scheduled');
             if (!next) throw new Refusal('no_session', 'No session is scheduled.');
-            await startSession(w, next);
+            await startSession(w, next, prefetched);
             return 'The session is running. The engine said what it perceives here.';
           }
           const running = sessions.find((s) => s.status === 'running');

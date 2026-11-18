@@ -21,6 +21,27 @@ type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; 
 
 type StoredPayload = OutboxPayload & { link?: { kind: 'ack' | 'proposal'; id: string } };
 
+/** How long one channel call may take. The facilitation's lock is held for
+ *  that long at most; a call that does not answer in time has an unknown
+ *  outcome and is treated like one. */
+export const sendLimits = { timeoutMs: 15_000 };
+
+export class CallTimeoutError extends Error {
+  constructor(what: string, ms: number) {
+    super(`timeout: ${what} did not answer within ${String(ms)} ms`);
+    this.name = 'CallTimeoutError';
+  }
+}
+
+/** Bound a call into the kernel or an integration. */
+export function withTimeout<T>(call: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new CallTimeoutError(what, ms)), ms);
+  });
+  return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promise<SendResult> {
   const payload = row.payload as StoredPayload;
   if (row.targetKind === 'group') {
@@ -166,9 +187,9 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 
   let result: SendResult;
   try {
-    result = await send(engine, f, row);
+    result = await withTimeout(send(engine, f, row), sendLimits.timeoutMs, `the channel send of ${row.purpose}`);
   } catch (err) {
-    result = { ok: false, code: 'exception', message: err instanceof Error ? err.message : String(err) };
+    result = { ok: false, code: err instanceof CallTimeoutError ? 'timeout' : 'exception', message: err instanceof Error ? err.message : String(err) };
   }
   await engine.deps.hooks?.afterChannelCall?.(row);
 

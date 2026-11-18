@@ -91,12 +91,33 @@ export interface Work {
   event(kind: string, actor: string, payload?: Record<string, unknown>): Promise<void>;
 }
 
-/** Runs after delivery, still under the facilitation's lock. */
+/** Runs after the lock was released; may use the pool and call the kernel. */
+export type AfterRelease = (engine: EngineCore, facilitationId: string) => Promise<void>;
+
+/** Runs after delivery, still under the facilitation's lock. It gets the
+ *  locked connection and must not take another one. */
 export type AfterDispatch = (engine: EngineCore, client: PoolClientLike, facilitationId: string) => Promise<void>;
 
 export class EngineCore {
   readonly instanceId: string;
   private readonly afterDispatch: AfterDispatch[] = [];
+  private readonly afterRelease: AfterRelease[] = [];
+
+  /** Register work for after the lock and its connection were given back
+   *  (releasing the conversation: a kernel call, and queries of its own). */
+  onAfterRelease(hook: AfterRelease): void {
+    this.afterRelease.push(hook);
+  }
+
+  private async released(facilitationId: string): Promise<void> {
+    for (const hook of this.afterRelease) {
+      try {
+        await hook(this, facilitationId);
+      } catch (err) {
+        this.log(`facilitation ${facilitationId}: follow-up after a unit of work failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
 
   /** Register follow-up work for after every delivery (closing once the
    *  result is out). */
@@ -139,11 +160,13 @@ export class EngineCore {
 
   /** One locked unit of work on a facilitation, followed by delivery. */
   async work<T>(facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
-    return withFacilitationLock(this.pool(), facilitationId, async (client) => {
-      const result = await this.workOn(client, facilitationId, fn);
+    const result = await withFacilitationLock(this.pool(), facilitationId, async (client) => {
+      const value = await this.workOn(client, facilitationId, fn);
       await this.delivered(client, facilitationId);
-      return result;
+      return value;
     });
+    await this.released(facilitationId);
+    return result;
   }
 
   /** The transaction of a unit of work, on a connection that already holds
@@ -191,6 +214,7 @@ export class EngineCore {
   /** Deliver whatever is pending for a facilitation, under its lock. */
   async flush(facilitationId: string): Promise<void> {
     await withFacilitationLock(this.pool(), facilitationId, (client) => this.delivered(client, facilitationId));
+    await this.released(facilitationId);
   }
 
   private async enqueue(tx: Queryable, facilitationId: string, version: number, now: Date, m: Outgoing): Promise<void> {

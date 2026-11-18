@@ -22,8 +22,9 @@ import { recordBallot, roundOptions } from './decide.js';
 import { PRIORITY, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { scheduleJob } from './jobs.js';
-import { onStepOpened, onVoteOpened } from './lifecycle.js';
+import { onConfigured, onStepOpened, onVoteOpened } from './lifecycle.js';
 import { baselineSnapshot, describeMeans, diffSnapshots, perceptionStatement, planMeans } from './media.js';
+import { withTimeout } from './outbox.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { registerJobHandler } from './scheduler.js';
 import { registerHandshakeNote } from './transparency.js';
@@ -32,20 +33,10 @@ import { registerContextSection } from './turn.js';
 const TIME_NOTICE_MINUTES = 5;
 const MIN_TIMEBOX_FOR_NOTICE = 10;
 const POLL_MAX_OPTIONS = 6;
+const SNAPSHOT_TIMEOUT_MS = 3_000;
 
 type Snapshot = Pick<SessionCapabilitySnapshot, 'inputs' | 'outputs' | 'modality'>;
 const snapshotOf = (session: Session | undefined): Snapshot | undefined => (session?.capabilitySnapshot as Snapshot | null | undefined) ?? undefined;
-
-async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f: Facilitation, sessionRef?: string): Promise<SessionCapabilitySnapshot> {
-  const service = engine.deps.kernel.sessionCapabilities();
-  if (!service) return baselineSnapshot(f.channelType, f.conversationId, engine.now());
-  try {
-    return await service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, ...(sessionRef ? { sessionRef } : {}) });
-  } catch {
-    // A missing capability is information, never an error: assume the baseline.
-    return baselineSnapshot(f.channelType, f.conversationId, engine.now());
-  }
-}
 
 /** The session that is going on: a running meeting, otherwise the chat. */
 export async function currentSession(q: Queryable, facilitationId: string): Promise<Session | undefined> {
@@ -53,20 +44,57 @@ export async function currentSession(q: Queryable, facilitationId: string): Prom
   return sessions.find((s) => s.kind === 'live' && s.status === 'running') ?? sessions.find((s) => s.kind === 'async');
 }
 
-/** The chat phase of a facilitation, with what the channel offers there. */
+/** The capabilities of a conversation or a meeting, asked of the kernel.
+ *  Never called inside a transaction. */
+export async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f: Facilitation, sessionRef?: string): Promise<SessionCapabilitySnapshot> {
+  const service = engine.deps.kernel.sessionCapabilities();
+  if (!service) return baselineSnapshot(f.channelType, f.conversationId, engine.now());
+  try {
+    return await withTimeout(
+      service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, ...(sessionRef ? { sessionRef } : {}) }),
+      SNAPSHOT_TIMEOUT_MS,
+      'the capability snapshot',
+    );
+  } catch {
+    // A missing capability is information, never an error: assume the baseline.
+    return baselineSnapshot(f.channelType, f.conversationId, engine.now());
+  }
+}
+
+/** The chat phase of a facilitation is created with it, with what the channel
+ *  offers there. */
+async function createChatSession(engine: EngineCore, f: Facilitation): Promise<void> {
+  const snapshot = await fetchSnapshot(engine, f);
+  const pool = engine.pool();
+  if ((await store.listSessions(pool, f.id)).some((s) => s.kind === 'async')) return;
+  await insert<Session>(pool, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'running', startedAt: engine.now(), createdAt: engine.now() });
+}
+
+/** The chat session inside a unit of work. If it is missing it is created
+ *  with the baseline; the kernel is not asked here. */
 async function ensureChatSession(w: Work): Promise<Session> {
   const existing = (await store.listSessions(w.tx, w.f.id)).find((s) => s.kind === 'async');
   if (existing) return existing;
-  const snapshot = await fetchSnapshot(w.engine, w.f);
   return insert<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', {
     facilitationId: w.f.id,
     kind: 'async',
     modality: 'chat',
-    capabilitySnapshot: snapshot,
+    capabilitySnapshot: baselineSnapshot(w.f.channelType, w.f.conversationId, w.now),
     status: 'running',
     startedAt: w.now,
     createdAt: w.now,
   });
+}
+
+/** What a session start needs from the kernel, fetched before its unit of work. */
+export async function prepareSessionStart(engine: EngineCore, facilitationId: string, sessionId?: string): Promise<SessionCapabilitySnapshot | undefined> {
+  const pool = engine.pool();
+  const f = await store.getFacilitation(pool, facilitationId);
+  if (!f) return undefined;
+  const sessions = (await store.listSessions(pool, f.id)).filter((s) => s.kind === 'live');
+  const session = sessionId ? sessions.find((s) => s.id === sessionId) : sessions.find((s) => s.status === 'scheduled');
+  if (!session || session.status !== 'scheduled') return undefined;
+  return fetchSnapshot(engine, f, session.meetingRef ?? undefined);
 }
 
 // ── live sessions ───────────────────────────────────────────────────────────
@@ -121,10 +149,12 @@ async function sendAgenda(w: Work, session: Session): Promise<void> {
   await w.event('session_agenda_sent', 'engine', { sessionId: session.id });
 }
 
-export async function startSession(w: Work, session: Session): Promise<Session> {
+export async function startSession(w: Work, session: Session, prefetched?: SessionCapabilitySnapshot): Promise<Session> {
   if (session.status !== 'scheduled') return session;
   const t = texts(w.f.language);
-  const snapshot = await fetchSnapshot(w.engine, w.f, session.meetingRef ?? undefined);
+  // Without a snapshot for the meeting the chat's capabilities are assumed.
+  const chat = snapshotOf(await ensureChatSession(w));
+  const snapshot: SessionCapabilitySnapshot = prefetched ?? { ...baselineSnapshot(w.f.channelType, w.f.conversationId, w.now), ...(chat ? { inputs: chat.inputs, outputs: chat.outputs } : {}) };
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
   const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
   await sendAgenda(w, session);
@@ -335,6 +365,7 @@ export function installSessions(): void {
   registerInboundHandler(stopListening, PRIORITY.commands + 5);
   registerInboundHandler(pollAnswers, PRIORITY.proposals + 2);
   onVoteOpened(postPoll);
+  onConfigured(createChatSession);
 
   // In the handshake the facilitator says what it perceives here.
   registerHandshakeNote(async (w) => {
@@ -356,12 +387,16 @@ export function installSessions(): void {
     w.post({ purpose: 'time_notice', key: job.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], versionBound: false, text: texts(w.f.language).timeNotice(step.title, TIME_NOTICE_MINUTES) });
   });
 
-  const withSession = (fn: (w: Work, session: Session) => Promise<unknown>) => async (w: Work, job: { payload: Record<string, unknown> }): Promise<void> => {
+  const withSession = (fn: (w: Work, session: Session, prepared: unknown) => Promise<unknown>) => async (w: Work, job: { payload: Record<string, unknown> }, prepared: unknown): Promise<void> => {
     const session = await getSession(w.tx, String(job.payload['sessionId']));
-    if (session && (w.f.phase === 'active' || w.f.phase === 'configuring')) await fn(w, session);
+    if (session && (w.f.phase === 'active' || w.f.phase === 'configuring')) await fn(w, session, prepared);
   };
   registerJobHandler('session_agenda', withSession(sendAgenda));
-  registerJobHandler('session_start', withSession(startSession));
+  registerJobHandler(
+    'session_start',
+    withSession((w, session, prepared) => startSession(w, session, prepared as SessionCapabilitySnapshot | undefined)),
+    (engine, job) => prepareSessionStart(engine, job.facilitationId, String(job.payload['sessionId'])),
+  );
   registerJobHandler('session_end', withSession(endSession));
   registerJobHandler('media_consent', withSession(async (w, session) => (session.status === 'running' ? askMediaConsent(w, { ...session, mediaConsent: 'not_needed' }) : undefined)));
 

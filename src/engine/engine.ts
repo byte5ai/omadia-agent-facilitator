@@ -11,14 +11,14 @@ import { installCapabilities } from './capabilities.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installActionItems } from './actionItems.js';
-import { closeWhenResultDelivered, installDecisionMethods } from './decide.js';
+import { closeWhenResultDelivered, installDecisionMethods, releaseWhenEnded } from './decide.js';
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
 import { installGovernance, purgeExpired } from './governance.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
-import { applySnapshot, endSession, installSessions, startSession } from './sessions.js';
+import { applySnapshot, endSession, installSessions, prepareSessionStart, startSession } from './sessions.js';
 import { processMembership } from './membership.js';
 import { installTransparency } from './transparency.js';
 import { runFacilitatorTurn } from './turn.js';
@@ -62,6 +62,7 @@ export class FacilitationEngine {
     this.core = new EngineCore(deps);
     installOnce();
     this.core.onAfterDispatch(closeWhenResultDelivered);
+    this.core.onAfterRelease(releaseWhenEnded);
   }
 
   /** Whether the engine can keep state at all. */
@@ -144,6 +145,8 @@ export class FacilitationEngine {
         try {
           const live = (await store.listSubscribed(this.core.pool())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
           if (!live) return;
+          // The meeting's capabilities are asked before the unit of work.
+          const prefetched = event.kind === 'session_started' ? await prepareSessionStart(this.core, live.id) : undefined;
           await this.core.work(live.id, async (w) => {
             const sessions = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
             const session = sessions.find((s) => s.meetingRef === event.sessionRef) ?? sessions.find((s) => s.status === 'scheduled' || s.status === 'running');
@@ -152,7 +155,7 @@ export class FacilitationEngine {
               return;
             }
             if (!session) return;
-            if (event.kind === 'session_started') await startSession(w, session);
+            if (event.kind === 'session_started') await startSession(w, session, prefetched);
             else if (event.kind === 'session_ended') await endSession(w, session);
           });
         } catch (err) {
