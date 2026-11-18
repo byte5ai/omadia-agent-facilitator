@@ -24,7 +24,7 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
       {
         name: 'facilitation_propose_change',
         description:
-          'Put a change of the RULES to the group when somebody proposes one: the definition of done, the deadline, the close rule, or the method of a step that is decided by a vote. This is not how the group moves on: to close the open step, skip ahead or go to the vote, use facilitation_step. Anyone may propose. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
+          'Put a change of the RULES to the group when somebody proposes one: the definition of done, the deadline, the close rule, or the method of a step that is decided by a vote. This is not how the group moves on: to close the open step, skip ahead or go to the vote, use facilitation_step. Anyone may propose: when a participant proposes a change, pass it on with this tool in the same turn; do not question it, do not decide it yourself and do not answer it from memory. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
         properties: {
           change: { type: 'string', enum: [...CHANGES] },
           messageId: { type: 'string', description: 'The message in which a participant proposed the change (from the turn input).' },

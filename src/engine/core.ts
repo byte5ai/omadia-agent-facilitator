@@ -116,8 +116,18 @@ const TURN_MEMORY_MS = 60 * 60_000;
 
 export class EngineCore {
   readonly instanceId: string;
-  /** Inbound events whose turn had a tool post in the group, with the time. */
-  private readonly postedInTurn = new Map<string, number>();
+  private readonly afterDispatch: AfterDispatch[] = [];
+  private readonly afterRelease: AfterRelease[] = [];
+  /** What the tools of a turn did, by the inbound event the turn answers. */
+  private readonly turnNotes = new Map<string, { posted: boolean; refusals: string[]; at: number }>();
+
+  private noteOf(inboundEventId: string): { posted: boolean; refusals: string[]; at: number } {
+    const now = Date.now();
+    for (const [eventId, note] of this.turnNotes) if (now - note.at > TURN_MEMORY_MS) this.turnNotes.delete(eventId);
+    const note = this.turnNotes.get(inboundEventId) ?? { posted: false, refusals: [], at: now };
+    this.turnNotes.set(inboundEventId, note);
+    return note;
+  }
 
   /**
    * Run a tool call and note whether it made the facilitator post in the
@@ -130,22 +140,22 @@ export class EngineCore {
     try {
       return await toolCall.run(scope, run);
     } finally {
-      if (inboundEventId !== undefined && scope.groupPosts > 0) {
-        const now = Date.now();
-        for (const [eventId, at] of this.postedInTurn) if (now - at > TURN_MEMORY_MS) this.postedInTurn.delete(eventId);
-        this.postedInTurn.set(inboundEventId, now);
-      }
+      if (inboundEventId !== undefined && scope.groupPosts > 0) this.noteOf(inboundEventId).posted = true;
     }
   }
 
-  /** Did a tool of the turn for this inbound event post in the group? Asked
-   *  once, when the turn is over. */
-  takePostedInTurn(inboundEventId: string): boolean {
-    return this.postedInTurn.delete(inboundEventId);
+  /** A tool of the turn refused what it was asked to do. */
+  noteRefusal(inboundEventId: string | undefined, code: string): void {
+    if (inboundEventId !== undefined) this.noteOf(inboundEventId).refusals.push(code);
   }
 
-  private readonly afterDispatch: AfterDispatch[] = [];
-  private readonly afterRelease: AfterRelease[] = [];
+  /** What the tools of the turn for this inbound event did. Asked once, when
+   *  the turn is over. */
+  takeTurnNotes(inboundEventId: string): { posted: boolean; refusals: readonly string[] } {
+    const note = this.turnNotes.get(inboundEventId);
+    this.turnNotes.delete(inboundEventId);
+    return { posted: note?.posted ?? false, refusals: note?.refusals ?? [] };
+  }
 
   /** Register work for after the lock and its connection were given back
    *  (releasing the conversation: a kernel call, and queries of its own). */

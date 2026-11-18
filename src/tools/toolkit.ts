@@ -127,7 +127,11 @@ export function defineTool(
         engine.ensureAttached(ctx.agentSlug);
         return await engine.core.inToolCall(ctx.inboundEventId, () => run(asObject(input), ctx));
       } catch (err) {
-        if (err instanceof Refusal) return err.code === 'no_context' ? err.message : `Refused (${err.code}): ${err.message}`;
+        if (err instanceof Refusal) {
+          if (err.code === 'no_context') return err.message;
+          engine.core.noteRefusal(context?.inboundEventId, err.code);
+          return `Refused (${err.code}): ${err.message}`;
+        }
         if (err instanceof EngineUnavailableError) {
           // The reason is for the operator (log, status endpoint), not for the chat.
           engine.core.log(`tool ${spec.name} refused: ${err.message}`);

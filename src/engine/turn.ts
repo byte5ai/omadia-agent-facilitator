@@ -11,11 +11,12 @@ import type { ConversationMessageRecord } from '@omadia/plugin-api';
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import type { Facilitation } from '../model.js';
-import { formatWhen } from '../texts/index.js';
-import type { EngineCore } from './core.js';
+import { formatWhen, texts } from '../texts/index.js';
+import type { EngineCore, Work } from './core.js';
 import { isSilent } from './guard.js';
 import { playbook } from './playbook.js';
 import { participationOf } from './status.js';
+import { checkTurnText } from './turnGuard.js';
 
 export const SILENT = '[silent]';
 
@@ -82,31 +83,56 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     input: `From: ${record.author.displayName ?? record.author.id} (message id: ${record.messageId})\n${record.text ?? ''}`,
     engineContext: await buildEngineContext(pool, f),
   });
-  // A tool of this turn already made the facilitator post (the handshake, a
-  // step, a question to somebody). That was the answer; whatever the model
-  // wrote on top is not posted.
-  const posted = engine.takePostedInTurn(record.eventId);
+  // What the tools of this turn did. If one already made the facilitator post
+  // (the handshake, a step, a question to somebody), that was the answer:
+  // whatever the model wrote on top is not posted.
+  const { posted, refusals } = engine.takeTurnNotes(record.eventId);
   if (outcome.outcome !== 'completed') {
     const detail = outcome.outcome === 'refused' ? `${outcome.code}: ${outcome.message}` : outcome.message;
     engine.log(`facilitation ${f.id}: facilitator turn ${outcome.outcome} (${detail})`);
     await engine.work(f.id, (w) => w.event('turn_failed', 'engine', { outcome: outcome.outcome, detail, eventId: record.eventId }));
     return;
   }
+  const say = (w: Work, text: string): void =>
+    w.post({ purpose: 'moderation', key: `turn:${record.eventId}`, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['configuring', 'active'], text });
+
   // The marker anywhere in the answer means: say nothing.
-  if (isSilent(outcome.text)) return;
+  if (isSilent(outcome.text)) {
+    // Unless a tool refused what somebody asked for and nothing was posted:
+    // the group is not left without an answer.
+    const refused = refusals.find((code) => !UNSPEAKABLE_REFUSALS.has(code));
+    if (posted || refused === undefined) return;
+    await engine.work(f.id, async (w) => {
+      const t = texts(w.f.language);
+      await w.event('refusal_said', 'engine', { eventId: record.eventId, code: refused });
+      say(w, t.refusals[refused] ?? t.refusals['generic'] ?? '');
+    });
+    return;
+  }
   if (posted) {
     await engine.work(f.id, (w) => w.event('turn_text_dropped', 'engine', { eventId: record.eventId }));
     return;
   }
   await engine.work(f.id, async (w) => {
-    w.post({
-      purpose: 'moderation',
-      key: `turn:${record.eventId}`,
-      to: 'group',
-      deliveryClass: 'droppable',
-      versionBound: false,
-      requiredPhases: ['configuring', 'active'],
-      text: outcome.text.trim(),
+    // Checked against the state as it is now, not as the model saw it.
+    const participation = await participationOf(w.tx, w.f);
+    const verdict = checkTurnText(outcome.text, {
+      missing: w.f.phase === 'active' ? participation.missing.map((p) => p.displayName) : [],
+      voteOpen: participation.step?.method !== undefined && participation.step?.method !== null,
+      live: w.f.phase === 'configuring' || w.f.phase === 'active',
     });
+    if (verdict.ok) {
+      say(w, outcome.text.trim());
+      return;
+    }
+    const t = texts(w.f.language);
+    await w.event('text_refused', 'engine', { purpose: 'moderation', reason: verdict.reason, eventId: record.eventId });
+    engine.log(`facilitation ${w.f.id}: the text of a turn was replaced (${verdict.reason})`);
+    if (verdict.reason === 'names_missing') say(w, t.notEverybodyYet());
+    else say(w, t.stillOpen(participation.step?.title ?? w.f.goal, w.f.deadline ? formatWhen(w.f.deadline, w.f.timezone, w.f.language) : undefined));
   });
 }
+
+/** Refusals that are not an answer to the group (nothing could be posted, or
+ *  the call itself was malformed). */
+const UNSPEAKABLE_REFUSALS = new Set(['no_subscription', 'no_context', 'bad_input', 'unknown_message', 'no_facilitation']);
