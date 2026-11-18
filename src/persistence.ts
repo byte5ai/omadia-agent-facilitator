@@ -15,7 +15,13 @@
 //   the run payload and are not duplicated here.
 
 import type { EphemeralRunsService } from './services.js';
-import type { FacilitationPhase, FacilitationProgress, FacilitationRecord, FacilitationStateStore } from './stateStore.js';
+import type {
+  FacilitationContribution,
+  FacilitationPhase,
+  FacilitationProgress,
+  FacilitationRecord,
+  FacilitationStateStore,
+} from './stateStore.js';
 
 export const RUN_STATE_VERSION = 1;
 
@@ -26,6 +32,8 @@ export interface RunStateSnapshot {
   nudgesSent?: number;
   roleKey?: string;
   channelType?: string;
+  /** 0.7.3 — per-participant ledger (capped). */
+  contributions?: FacilitationContribution[];
   /** 0.7.1 — when the run was started (minimum nudge spacing from the start). */
   startedAt?: string;
   /** 0.7.0 — last delivered nudge (time + capped text). */
@@ -46,6 +54,8 @@ export const SNAPSHOT_DOD_MAX_CHARS = 1500;
 export const SNAPSHOT_NUDGE_MAX_CHARS = 300;
 export const SNAPSHOT_MAX_CONTRIBUTORS = 30;
 export const SNAPSHOT_CONTRIBUTOR_MAX_CHARS = 80;
+export const SNAPSHOT_MAX_CONTRIBUTIONS = 20;
+export const SNAPSHOT_CONTRIBUTION_MAX_CHARS = 200;
 
 function capContributors(list: readonly string[]): string[] {
   return list.slice(0, SNAPSHOT_MAX_CONTRIBUTORS).map((name) => name.slice(0, SNAPSHOT_CONTRIBUTOR_MAX_CHARS));
@@ -66,6 +76,15 @@ export function snapshotOf(record: FacilitationRecord): RunStateSnapshot {
         }
       : {}),
     ...(record.startedAt ? { startedAt: record.startedAt } : {}),
+    ...(record.contributions && record.contributions.length > 0
+      ? {
+          contributions: record.contributions.slice(0, SNAPSHOT_MAX_CONTRIBUTIONS).map((c) => ({
+            participant: c.participant.slice(0, SNAPSHOT_CONTRIBUTOR_MAX_CHARS),
+            text: c.text.slice(0, SNAPSHOT_CONTRIBUTION_MAX_CHARS),
+            at: c.at,
+          })),
+        }
+      : {}),
     ...(record.lastNudge
       ? { lastNudge: { at: record.lastNudge.at, text: record.lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) } }
       : {}),
@@ -115,6 +134,20 @@ export function parseSnapshot(raw: Record<string, unknown> | null | undefined): 
     };
   }
   if (typeof raw.startedAt === 'string' && Number.isFinite(Date.parse(raw.startedAt))) out.startedAt = raw.startedAt;
+  if (Array.isArray(raw.contributions)) {
+    const contributions = raw.contributions
+      .filter(
+        (c): c is FacilitationContribution =>
+          c !== null &&
+          typeof c === 'object' &&
+          typeof (c as FacilitationContribution).participant === 'string' &&
+          typeof (c as FacilitationContribution).text === 'string' &&
+          typeof (c as FacilitationContribution).at === 'string',
+      )
+      .slice(0, SNAPSHOT_MAX_CONTRIBUTIONS)
+      .map((c) => ({ participant: c.participant, text: c.text, at: c.at }));
+    if (contributions.length > 0) out.contributions = contributions;
+  }
   const lastNudge = raw.lastNudge as Record<string, unknown> | undefined;
   if (lastNudge && typeof lastNudge === 'object' && typeof lastNudge.at === 'string' && typeof lastNudge.text === 'string') {
     out.lastNudge = { at: lastNudge.at, text: lastNudge.text.slice(0, SNAPSHOT_NUDGE_MAX_CHARS) };

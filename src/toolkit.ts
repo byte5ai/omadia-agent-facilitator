@@ -1,4 +1,5 @@
-// The seven facilitation_* tools (#330 C1/C3, facilitation_update since 0.7.0). The LLM loop (top-level agent
+// The eight facilitation_* tools (#330 C1/C3, facilitation_update since 0.7.0,
+// facilitation_contribution since 0.7.3). The LLM loop (top-level agent
 // via query_facilitation, or the pattern's step-mode turns) drives them;
 // every degradation (missing kernel service, quota, unknown conversation)
 // comes back as an honest tool output — never a throw that kills the turn.
@@ -13,6 +14,7 @@
 import type { LocalSubAgentTool } from '@omadia/plugin-api';
 
 import type { FacilitatorConfig } from './config.js';
+import { buildContributionTool } from './contributionTool.js';
 import { withLocalTime } from './localTime.js';
 import { buildNudgeTool, MAX_NUDGES_PER_FACILITATION } from './nudgeTool.js';
 import { buildParticipantOverview, describeParticipants, loadHumanRoster } from './participants.js';
@@ -181,6 +183,10 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
           : `Progress (as of ${local(record.progress.updatedAt)}): dodMet=${String(record.progress.dodMet)} — ${record.progress.summary}`,
       );
     }
+    if (record.contributions && record.contributions.length > 0) {
+      lines.push(de ? 'Protokollierte Beiträge:' : 'Recorded contributions:');
+      for (const c of record.contributions) lines.push(`- ${c.participant} (${local(c.at)}): ${c.text}`);
+    }
     if (record.phase === 'active' && !record.conversationUnknown) {
       const roster = await loadHumanRoster(deps.getConversationRosters(), record.channelType, record.conversationId, deps.log);
       if (roster && roster.participants.length > 0) {
@@ -302,7 +308,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     spec: {
       name: 'facilitation_progress',
       description:
-        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary, contributors}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal — every contribution a participant posts (a vote, an answer) is one: record it, never turn it away yourself. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
+        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary, contributors}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal. A single participant's contribution (a vote, an answer) goes through facilitation_contribution instead — it keeps the list of contributors for you. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
       input_schema: {
         type: 'object',
         properties: {
@@ -395,7 +401,8 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
   };
 
   const update = buildUpdateTool(tc);
+  const contribution = buildContributionTool(tc);
   const nudge = buildNudgeTool(tc);
 
-  return [start, status, stop, report, progress, nudge, update];
+  return [start, status, stop, report, progress, nudge, update, contribution];
 }

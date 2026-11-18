@@ -227,6 +227,7 @@ export class Hydrator {
       ...(state?.lastNudge ? { lastNudge: state.lastNudge } : {}),
       ...(state?.amended ? { amendedAt: state.amended.at } : {}),
       ...(state?.startedAt ? { startedAt: state.startedAt } : {}),
+      ...(state?.contributions ? { contributions: state.contributions } : {}),
       ...(conversationUnknown ? { conversationUnknown: true } : {}),
     });
     return record !== undefined;
