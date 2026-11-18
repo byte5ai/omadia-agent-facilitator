@@ -130,6 +130,12 @@ export async function scheduleDeadlineJobs(w: Work): Promise<void> {
     if (at.getTime() > w.now.getTime()) await scheduleJob(w, 'reminder', `${stamp}:${String(hours)}`, at, { hoursBefore: hours });
   }
   await scheduleJob(w, 'deadline', stamp, deadline, {});
+  // A deadline beyond the maximum duration takes the lifetime with it.
+  await w.tx.query(
+    `UPDATE facilitation_jobs SET due_at = greatest(due_at, $2::timestamptz + interval '1 hour')
+      WHERE facilitation_id = $1 AND kind = 'lifetime' AND status = 'pending'`,
+    [w.f.id, deadline],
+  );
 }
 
 /** Who a reminder is for, by what the open step is waiting for. */

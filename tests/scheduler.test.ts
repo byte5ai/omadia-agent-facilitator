@@ -31,7 +31,7 @@ async function say(conv: string, who: string, text: string) {
   return record;
 }
 const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM facilitation_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
-const jobs = async (conv: string) => rows<Job>(h.db.pool, 'SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 ORDER BY due_at', [(await h.facilitation(conv)).id]);
+const jobs = async (conv: string) => rows<Job>(h.db.pool, `SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 AND kind <> 'lifetime' ORDER BY due_at`, [(await h.facilitation(conv)).id]);
 /** A deadline `hours` from the current clock, ISO. */
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 async function at(deadline: Date, hoursBefore: number, plusMs = 1000): Promise<void> {

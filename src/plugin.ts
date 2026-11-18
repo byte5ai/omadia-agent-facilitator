@@ -18,6 +18,7 @@ import { systemClock } from './clock.js';
 import { parseConfig } from './config.js';
 import type { EngineConfig } from './config.js';
 import { FacilitationEngine } from './engine/engine.js';
+import { OPERATOR_API_PREFIX, router as operatorRouter } from './http/operatorApi.js';
 import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js';
 import { buildTools } from './tools/index.js';
 
@@ -92,6 +93,15 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   // answers "not available, and why" instead of having no tools at all.
   const engine = new FacilitationEngine({ kernel, config, clock: systemClock, log });
   for (const tool of buildTools(engine)) disposers.push(ctx.tools.register(tool.spec, tool.handler));
+  // Operator API, behind the kernel's session gate.
+  disposers.push(
+    ctx.routes.register(
+      OPERATOR_API_PREFIX,
+      operatorRouter(engine, async (cookie) => (await ctx.operatorAuth?.sessionPrincipal?.(cookie))?.email),
+      { auth: 'session', body: 'json' },
+    ),
+  );
+
   if (info.available) {
     // The scheduler: reminders, deadlines, windows, delivery retries. The
     // interval bounds how late a reminder can be; leases keep replicas apart.

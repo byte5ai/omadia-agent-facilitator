@@ -61,7 +61,7 @@ test('templates are in the language of the facilitation and an agenda of the gro
 
 test('an agenda is announced in the handshake, the opening step is the handshake, the first working step opens with its instruction', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('pr-agenda', FOUR);
-  await tool(conv, 'facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', format: 'decision', facilitatorName: 'Mira' });
+  await tool(conv, 'facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', format: 'decision' });
   await tool(conv, 'facilitation_open');
   const [handshake, step] = posts(conv);
   assert.match(handshake ?? '', /Agenda:\n1\. Opening\n2\. Collect options and positions\n3\. Discuss\n4\. Decide\n5\. Close/);
@@ -154,7 +154,7 @@ test('a proposal: an objection keeps it from holding, agreeing lifts it, everybo
 test('retrospective: ideas without mentions, clusters and decisions by consent, action items confirmed by their owners, protocol, reminder before the due date', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('pr-retro', FOUR);
   const turns = h.kernel.turns.length;
-  await tool(conv, 'facilitation_start', { goal: 'Retrospective sprint 12', definitionOfDone: 'Actions with owners are agreed', format: 'retrospective', followUp: true, facilitatorName: 'Mira' });
+  await tool(conv, 'facilitation_start', { goal: 'Retrospective sprint 12', definitionOfDone: 'Actions with owners are agreed', format: 'retrospective', followUp: true });
   await tool(conv, 'facilitation_open');
   assert.match(posts(conv)[1] ?? '', /^Step 2 of 7: What went well, what did not\./);
 

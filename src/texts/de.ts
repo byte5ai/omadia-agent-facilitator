@@ -263,6 +263,21 @@ export const de: Texts = {
   },
   actAgain: (names) => `Beiträge nach den alten Regeln passen nicht mehr. Bitte tragt noch einmal bei: ${names}.`,
 
+  // ── Operator, Kontingente, Aufbewahrung ──────────────────────────────────
+  system: {
+    messageQuota: (max) =>
+      `Systemhinweis: Diese Moderation hat ihr Limit von ${String(max)} Nachrichten des Facilitators erreicht. Ab jetzt wird nur noch das Ergebnis oder ein Abbruchbericht gepostet. Ein Operator kann das Limit anheben.`,
+    activeQuota: (max) =>
+      `Systemhinweis: Dieser Facilitator führt bereits ${String(max)} Moderationen, das ist sein Limit. Er kann erst eine weitere starten, wenn eine davon beendet ist. Ein Operator kann das Limit anheben.`,
+    instanceQuota: (max) =>
+      `Systemhinweis: Diese Instanz führt bereits ${String(max)} Moderationen, das ist ihr Limit. Im Moment kann keine weitere gestartet werden.`,
+    startQuota: (max) =>
+      `Systemhinweis: Dieser Facilitator hat in der letzten Stunde ${String(max)} Moderationen gestartet, das ist sein Limit. Bitte versucht es später noch einmal.`,
+  },
+  abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
+  abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
+  notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',
+
   phase: {
     configuring: 'wird eingerichtet',
     active: 'läuft',

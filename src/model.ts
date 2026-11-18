@@ -58,7 +58,7 @@ export interface FacilitationSettings {
   changeWindowHours: number;
   runoffWindowHours: number;
   confirmWindowMinutes: number;
-  /** The facilitator's display name, as it introduced itself at start. */
+  /** The facilitator's display name, from the kernel's profile at start. */
   facilitatorName?: string;
   /** The channel could not list every member: whoever writes joins. */
   openRoster?: boolean;

@@ -105,6 +105,9 @@ export class FakeKernel {
   onTurn: (request: AgentTurnRequest) => string | AgentTurnOutcome | Promise<string | AgentTurnOutcome> = () => '[silent]';
   followup: FacilitationFollowupService | undefined;
   snapshots = new Map<string, SessionCapabilitySnapshot>();
+  /** Display names and languages the kernel knows of facilitators. */
+  readonly names = new Map<string, string>();
+  readonly languages = new Map<string, string>();
   /** Services a test wants to be absent. */
   readonly absent = new Set<keyof Kernel>();
 
@@ -239,7 +242,7 @@ export class FakeKernel {
 
   /** The tool call context the kernel states for a turn in a conversation. */
   context(agentSlug: string, conversationId: string, callerId: string, inboundEventId?: string) {
-    return { agentSlug, channelType: this.channelType, conversationId, callerPrincipalId: `user:${callerId.toLowerCase()}`, ...(inboundEventId ? { inboundEventId } : {}) };
+    return { agentSlug, channelType: this.channelType, conversationId, callerPrincipalId: `user:${callerId.toLowerCase()}`, callerUserRef: { kind: 'teams-aad', id: callerId }, ...(inboundEventId ? { inboundEventId } : {}) };
   }
 
   groupPosts(conversationId: string, as?: string): Post[] {
@@ -326,6 +329,13 @@ export class FakeKernel {
       const answer = await this.onTurn(request);
       return typeof answer === 'string' ? { outcome: 'completed', text: answer } : answer;
     },
+    getProfile: async (agentSlug) => ({
+      agentSlug,
+      kind: 'facilitator',
+      displayName: this.names.get(agentSlug) ?? `${agentSlug.charAt(0).toUpperCase()}${agentSlug.slice(1)}`,
+      ...(this.languages.has(agentSlug) ? { language: this.languages.get(agentSlug) as string } : {}),
+      ownIdentityChannelTypes: this.noIdentity.has(agentSlug) ? [] : [this.channelType],
+    }),
   };
 
   private readonly readinessService: ChannelReadinessService = {

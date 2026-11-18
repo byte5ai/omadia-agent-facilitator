@@ -197,6 +197,16 @@ setup:
         de: "Facilitation-Daten und Protokoll werden so viele Tage nach Abschluss gelöscht. Das Ergebnis im Chat bleibt, wo der Channel es aufbewahrt."
       required: false
       default: 90
+    - key: "max_lifetime_days"
+      type: "number"
+      label:
+        en: "Maximum duration (days)"
+        de: "Maximale Dauer (Tage)"
+      help:
+        en: "A facilitation that is still open after this many days, and past its deadline if it has one, ends with an abort report in the group. Nothing ends silently."
+        de: "Eine Facilitation, die nach so vielen Tagen noch offen ist und ihre Deadline (falls vorhanden) überschritten hat, endet mit einem Abbruchbericht in der Gruppe. Nichts endet still."
+      required: false
+      default: 30
     - key: "max_active_per_facilitator"
       type: "number"
       label:

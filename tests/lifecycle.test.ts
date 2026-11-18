@@ -16,7 +16,7 @@ after(async () => {
 
 test('start creates a configuring facilitation with the roster; open posts the handshake as the facilitator', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('lc-start', FOUR);
-  const answer = await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', deadline: '2026-11-21T09:00:00Z', facilitatorName: 'Mira' }, { conversation: conv, caller: 'bert' });
+  const answer = await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', deadline: '2026-11-21T09:00:00Z' }, { conversation: conv, caller: 'bert' });
   assert.match(answer, /^Facilitation created, phase: configuring/);
   assert.match(answer, /Participants: Anna, Bert, Cara, Dave/);
   let f = await h.facilitation(conv);

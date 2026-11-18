@@ -15,6 +15,7 @@ import * as store from '../db/store.js';
 import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore } from './core.js';
+import { messageQuotaReached } from './quota.js';
 
 type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; message: string };
 
@@ -136,6 +137,20 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   }
   if (row.requiredStateVersion !== null && row.requiredStateVersion !== f.stateVersion) {
     await drop(client, row, `state moved from version ${String(row.requiredStateVersion)} to ${String(f.stateVersion)}`);
+    return;
+  }
+
+  // Quota: beyond the limit only essential messages go out, and the group is
+  // told once.
+  if (row.deliveryClass === 'droppable' && messageQuotaReached(f, engine.config.maxMessagesPerFacilitation)) {
+    await drop(client, row, 'message quota of the facilitation reached');
+    if (!f.quotaNoticeSent) {
+      await client.query('UPDATE facilitations SET quota_notice_sent = true WHERE id = $1', [f.id]);
+      await store.appendEvent(client, { facilitationId: f.id, kind: 'quota_reached', actor: 'engine', occurredAt: engine.now(), payload: { quota: 'messages', max: engine.config.maxMessagesPerFacilitation } });
+      await engine.workOn(client, f.id, async (w) => {
+        w.post({ purpose: 'system_notice', key: 'message_quota', to: 'group', deliveryClass: 'essential', text: texts(f.language).system.messageQuota(engine.config.maxMessagesPerFacilitation) });
+      });
+    }
     return;
   }
 

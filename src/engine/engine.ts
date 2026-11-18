@@ -13,6 +13,7 @@ import { installActionItems } from './actionItems.js';
 import { installDecisionMethods } from './decide.js';
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
+import { installGovernance, purgeExpired } from './governance.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
@@ -38,6 +39,7 @@ export class FacilitationEngine {
     installProcess();
     installActionItems();
     installTransparency();
+    installGovernance();
     onOpened(scheduleDeadlineJobs);
   }
 
@@ -161,6 +163,7 @@ export class FacilitationEngine {
     await this.track(
       (async () => {
         await tick(this.core);
+        await purgeExpired(this.core);
         for (const f of await store.listSubscribed(this.core.pool())) {
           this.attach(f.facilitatorAgent);
           await this.replay(f);

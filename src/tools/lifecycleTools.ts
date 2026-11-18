@@ -57,7 +57,6 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           deadline: { type: 'string', description: 'ISO 8601 with offset, e.g. 2026-11-21T17:00:00+01:00.' },
           timezone: { type: 'string', description: 'IANA timezone of the group.' },
           language: { type: 'string', enum: ['de', 'en'] },
-          facilitatorName: { type: 'string', description: 'Your own display name, for the handshake.' },
           method: { type: 'string', enum: [...METHODS], description: 'When the facilitation is one decision: ranked (points per rank), single (one option), approval (any set), consent (no standing objection), assignment (one confirmed name per item).' },
           options: { type: 'array', items: { type: 'string' }, description: 'The options to decide between, or the items to assign. The engine labels them A, B, C.' },
           points: { type: 'array', items: { type: 'number' }, description: 'Ranked vote: points per rank, first rank first. Default 3, 2, 1.' },
@@ -89,7 +88,6 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const deadline = optionalString(args, 'deadline');
         const timezone = optionalString(args, 'timezone');
         const language = oneOf(args, 'language', ['de', 'en'] as const);
-        const name = optionalString(args, 'facilitatorName');
         const method = oneOf(args, 'method', METHODS);
         const closeRule = oneOf(args, 'closeRule', ['all_contributed', 'at_deadline'] as const);
         const statement = optionalString(args, 'statement');
@@ -120,7 +118,6 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(deadline ? { deadline } : {}),
           ...(timezone ? { timezone } : {}),
           ...(language ? { language } : {}),
-          ...(name ? { facilitatorName: name } : {}),
           ...(closeRule ? { closeRule } : {}),
           ...(format ? { format } : {}),
           ...(agenda ? { agenda } : {}),

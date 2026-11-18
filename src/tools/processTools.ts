@@ -11,6 +11,7 @@ import type { Work } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { balanceOf, closeStep, extendStep, inviteSilentVoices, numberedContributions, proposeClusters, setDecision } from '../engine/process.js';
 import { openProposal } from '../engine/proposals.js';
+import { protocolFor } from '../engine/governance.js';
 import { buildProtocol } from '../engine/protocol.js';
 import { texts } from '../texts/index.js';
 import { asObject, defineTool, liveFacilitation, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
@@ -298,7 +299,8 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
-        return buildProtocol(engine.core.pool(), f);
+        // Visible to its participants only; an engine-started turn has no caller.
+        return ctx.callerPrincipalId ? protocolFor(engine.core.pool(), f, ctx.callerPrincipalId) : buildProtocol(engine.core.pool(), f);
       },
     ),
   ];

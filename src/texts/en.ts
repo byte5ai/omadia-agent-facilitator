@@ -309,6 +309,21 @@ export const en = {
   },
   actAgain: (names: string): string => `Contributions made under the old rules no longer fit. Please contribute again: ${names}.`,
 
+  // ── operator, quotas, retention ──────────────────────────────────────────
+  system: {
+    messageQuota: (max: number): string =>
+      `System notice: this facilitation has reached its limit of ${String(max)} messages from the facilitator. From now on only the result or an abort report will be posted. An operator can raise the limit.`,
+    activeQuota: (max: number): string =>
+      `System notice: this facilitator already runs ${String(max)} facilitations, which is its limit. It cannot start another one until one of them has ended. An operator can raise the limit.`,
+    instanceQuota: (max: number): string =>
+      `System notice: this instance already runs ${String(max)} facilitations, which is its limit. No further facilitation can be started right now.`,
+    startQuota: (max: number): string =>
+      `System notice: this facilitator has started ${String(max)} facilitations within the last hour, which is its limit. Please try again later.`,
+  },
+  abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
+  abortOperator: (reason: string): string => `an operator ended it (${reason})`,
+  notVisible: (): string => 'You are not a participant of this facilitation, so its protocol is not available to you.',
+
   phase: {
     configuring: 'being set up',
     active: 'running',

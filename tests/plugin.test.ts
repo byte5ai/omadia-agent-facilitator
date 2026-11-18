@@ -10,10 +10,18 @@ function bareContext(overrides: Partial<Record<string, unknown>> = {}) {
   const logs: string[] = [];
   const provided = new Map<string, unknown>();
   const tools: string[] = [];
+  const routes: string[] = [];
   const ctx = {
     agentId: '@omadia/agent-facilitator',
     log: (...args: unknown[]) => logs.push(args.join(' ')),
     config: { get: () => undefined },
+    routes: {
+      register: (prefix: string) => {
+        routes.push(prefix);
+        return () => undefined;
+      },
+    },
+    jobs: { register: () => () => undefined },
     tools: {
       register: (spec: { name: string }) => {
         tools.push(spec.name);
@@ -31,7 +39,7 @@ function bareContext(overrides: Partial<Record<string, unknown>> = {}) {
     },
     ...overrides,
   } as unknown as PluginContext;
-  return { ctx, logs, provided, tools };
+  return { ctx, logs, provided, tools, routes };
 }
 
 test('without the SQL grant the engine activates, reports itself unavailable and says why', async () => {

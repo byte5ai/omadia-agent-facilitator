@@ -17,6 +17,8 @@ export interface EngineConfig {
   readonly rankedPoints: readonly number[];
   readonly actionReminderLeadHours: number;
   readonly retentionDays: number;
+  /** A facilitation that is still open after this many days ends with an abort report. */
+  readonly maxLifetimeDays: number;
   readonly maxActivePerFacilitator: number;
   readonly maxActiveInstance: number;
   readonly startsPerHourPerFacilitator: number;
@@ -34,6 +36,7 @@ export const CONFIG_DEFAULTS: EngineConfig = {
   rankedPoints: [3, 2, 1],
   actionReminderLeadHours: 24,
   retentionDays: 90,
+  maxLifetimeDays: 30,
   maxActivePerFacilitator: 10,
   maxActiveInstance: 50,
   startsPerHourPerFacilitator: 20,
@@ -118,6 +121,7 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     rankedPoints: list('ranked_points', CONFIG_DEFAULTS.rankedPoints),
     actionReminderLeadHours: positive('action_reminder_lead_hours', CONFIG_DEFAULTS.actionReminderLeadHours),
     retentionDays: positive('retention_days', CONFIG_DEFAULTS.retentionDays, { integer: true }),
+    maxLifetimeDays: positive('max_lifetime_days', CONFIG_DEFAULTS.maxLifetimeDays, { integer: true }),
     maxActivePerFacilitator: positive('max_active_per_facilitator', CONFIG_DEFAULTS.maxActivePerFacilitator, { integer: true }),
     maxActiveInstance: positive('max_active_instance', CONFIG_DEFAULTS.maxActiveInstance, { integer: true }),
     startsPerHourPerFacilitator: positive('starts_per_hour_per_facilitator', CONFIG_DEFAULTS.startsPerHourPerFacilitator, { integer: true }),

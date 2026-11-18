@@ -213,7 +213,7 @@ test('moving the deadline moves the reminders with it', { skip: PG_SKIP }, async
   await say(conv, 'bert', 'agreed');
   assert.match(last(conv), /^The deadline is now .*Reminders move with it\./);
   assert.equal((await h.facilitation(conv)).deadline?.toISOString(), next);
-  const pending = (await rows<Job>(h.db.pool, `SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 AND status = 'pending' ORDER BY due_at`, [f.id])).map((j) => [j.kind, j.dueAt.toISOString()]);
+  const pending = (await rows<Job>(h.db.pool, `SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime' ORDER BY due_at`, [f.id])).map((j) => [j.kind, j.dueAt.toISOString()]);
   const at = (hours: number): string => new Date(Date.parse(next) - hours * HOUR_MS).toISOString();
   assert.deepEqual(pending, [['reminder', at(24)], ['reminder', at(2)], ['deadline', next]]);
 });

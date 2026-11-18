@@ -9,12 +9,14 @@
 
 import { DAY_MS } from '../clock.js';
 import { isValidTimezone } from '../config.js';
+import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { poolTransaction } from '../db/tx.js';
 import { principalKey } from '../kernel.js';
 import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
+import { lifetimeEnd } from './lifetime.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
@@ -49,7 +51,6 @@ export interface ConfigureInput extends ConversationRef {
   language?: 'de' | 'en';
   closeRule?: CloseRule;
   reminderOffsetsHours?: number[];
-  facilitatorName?: string;
   /** The decision the facilitation is about, when it is one vote. */
   decision?: DecisionSetup;
   /** An agenda of its own instead of the format's template. */
@@ -160,6 +161,18 @@ export interface ConfigureResult {
   notes: string[];
 }
 
+const profileLanguage = (language: string | undefined): 'de' | 'en' | undefined => {
+  const base = language?.toLowerCase().split('-')[0];
+  return base === 'de' || base === 'en' ? base : undefined;
+};
+
+export type StartCheck = (engine: EngineCore, facilitatorAgent: string, language: 'de' | 'en') => Promise<void>;
+const startChecks: StartCheck[] = [];
+/** What must hold before a new facilitation is created (quotas). */
+export function registerStartCheck(check: StartCheck): void {
+  if (!startChecks.includes(check)) startChecks.push(check);
+}
+
 const OWN_IDENTITY_REQUIRED =
   'This facilitator has no identity of its own on this channel. A facilitator never speaks through another bot, so it cannot start a facilitation here. An operator has to give it its own channel identity first.';
 
@@ -217,7 +230,6 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         ...(input.language ? { language: input.language } : {}),
         ...(input.closeRule ? { closeRule: input.closeRule } : {}),
         ...(input.reminderOffsetsHours ? { reminderPolicy: { offsetsHours: [...input.reminderOffsetsHours].sort((a, b) => b - a) } } : {}),
-        ...(input.facilitatorName ? { settings: { ...existing.settings, facilitatorName: input.facilitatorName } } : {}),
         ...(input.followUp !== undefined || statusAt
           ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) } }
           : {}),
@@ -225,6 +237,11 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     });
     return { facilitation, created: false, participants: await store.listParticipants(pool, existing.id), notes };
   }
+
+  // Name and language come from the kernel's record of the facilitator, not
+  // from the model.
+  const profile = await kernel.agentTurn()?.getProfile?.(input.agentSlug);
+  for (const check of startChecks) await check(engine, input.agentSlug, input.language ?? profileLanguage(profile?.language) ?? config.language);
 
   const messages = kernel.messages();
   if (!messages) {
@@ -259,7 +276,8 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   if (openRoster) notes.push('The channel could not list every member of this conversation; whoever writes here counts as a participant.');
   const initiator = members.find((m) => matchesCaller(m, input.callerPrincipalId));
 
-  const agenda = agendaFor(input, config);
+  const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
+  const agenda = agendaFor({ ...input, language }, config);
   try {
     return await poolTransaction(pool, async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
@@ -270,7 +288,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         initiatorParticipant: initiator ? principalKey(initiator.userRef) : null,
         goal: input.goal,
         format: input.format ?? 'custom',
-        language: input.language ?? config.language,
+        language,
         timezone: input.timezone ?? config.timezone,
         closeRule: input.closeRule ?? 'all_contributed',
         reminderPolicy: { offsetsHours: [...(input.reminderOffsetsHours ?? config.reminderOffsetsHours)].sort((a, b) => b - a) },
@@ -279,7 +297,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
-          ...(input.facilitatorName ? { facilitatorName: input.facilitatorName } : {}),
+          ...(profile?.displayName ? { facilitatorName: profile.displayName } : {}),
           ...(openRoster ? { openRoster: true } : {}),
         },
         deadline: deadline ?? null,
@@ -309,6 +327,20 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         });
         if (added) participants.push(added);
       }
+      // No facilitation stays open forever.
+      await insertIfAbsent(
+        tx,
+        'facilitation_jobs',
+        {
+          facilitationId: facilitation.id,
+          kind: 'lifetime',
+          dedupeKey: `${facilitation.id}:lifetime`,
+          dueAt: lifetimeEnd(now, deadline ?? null, config.maxLifetimeDays),
+          payload: {},
+          createdAt: now,
+        },
+        '(dedupe_key)',
+      );
       await store.appendEvent(tx, {
         facilitationId: facilitation.id,
         kind: 'configured',

@@ -100,7 +100,7 @@ export async function createHarness(opts: { config?: Partial<EngineConfig>; star
 
 /** Set up and open a facilitation the short way. */
 export async function startActive(h: Harness, conversation: string, extra: Record<string, unknown> = {}, agent = 'mira'): Promise<Facilitation> {
-  const started = await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', facilitatorName: 'Mira', ...extra }, { agent, conversation });
+  const started = await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', ...extra }, { agent, conversation });
   if (!started.startsWith('Facilitation created')) throw new Error(started);
   const opened = await h.tool('facilitation_open', {}, { agent, conversation });
   if (!opened.startsWith('Opened')) throw new Error(opened);
