@@ -65,7 +65,7 @@ test('an agenda is announced in the handshake, the opening step is the handshake
   await tool(conv, 'facilitation_open');
   const [handshake, step] = posts(conv);
   assert.match(handshake ?? '', /Agenda:\n1\. Opening\n2\. Collect options and positions\n3\. Discuss\n4\. Decide\n5\. Close/);
-  assert.equal(step, 'Step 2 of 5: Collect options and positions. Write what you want to bring in, one point per message.');
+  assert.equal(step, 'Step 2 of 5: Collect options and positions. Write what you want to bring in, one point per message. Write "next" when everything is collected.');
   assert.equal((await openStep(conv))?.kind, 'collect');
 });
 

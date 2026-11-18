@@ -16,7 +16,7 @@ import { castBallots, conclude, setAfterStepDecided } from './decide.js';
 import { PRIORITY, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { announceStepOpened, announceVote, rulesOf, setStepOpener } from './lifecycle.js';
+import { announceStepOpened, announceVote, facilitatorName, rulesOf, setStepOpener } from './lifecycle.js';
 import { decideProposal, openProposal, registerProposalKind } from './proposals.js';
 import { closingSummary } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
@@ -59,7 +59,9 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
     await openProposal(w, { kind: 'close', summary, payload: { stepId: step.id }, proposedBy: 'engine', windowMinutes: w.f.settings.confirmWindowMinutes });
     return opened;
   }
-  const instruction = needsOptions(opened) ? t.needOptions(step.title) : [t.stepInstruction[step.kind], ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
+  const instruction = needsOptions(opened)
+    ? t.needOptions(step.title)
+    : [t.stepInstruction[step.kind], ...(step.kind === 'collect' && opened.method === null ? [t.moveOnHint()] : []), ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
   w.post({
     purpose: 'step_opened',
     key: step.id,
@@ -242,13 +244,34 @@ export async function setDecision(w: Work, step: Step, patch: Partial<Pick<Step,
   return updated;
 }
 
+/** The word that moves a collecting step on, as its announcement says. */
+const MOVE_ON = /^(next|weiter|move on|next step|n[aä]chster schritt)$/u;
+
+/**
+ * A message that is about the process, not a point to collect: it asks for
+ * the vote, to move on or to skip, or it speaks to the facilitator. Such a
+ * message is conversation and belongs to the facilitator's turn. A point that
+ * happens to match costs its author one confirmation; a request that is
+ * swallowed as a point costs the group its way forward.
+ */
+const ABOUT_PROCESS =
+  /(?<!\p{L})(abstimm\p{L}*|abstimmung|vote|voting|n[aä]chste[rnms]? (schritt|punkt)|next (step|item|point)|weitergehen|weitermachen|move on|[uü]berspring\p{L}*|skip|facilitator|moderator\p{L}*|moderation)(?!\p{L})/iu;
+
+function addressesProcess(text: string, facilitator: string): boolean {
+  if (text.endsWith('?') || /^@\S+/u.test(text)) return true;
+  if (ABOUT_PROCESS.test(text)) return true;
+  const name = facilitator.trim().toLowerCase();
+  return name !== '' && text.toLowerCase().split(/[^\p{L}\p{N}]+/u).includes(name);
+}
+
 /**
  * In a collecting step the announced format is "one point per message": a
  * participant's own message is their contribution, recorded at once and
- * without a model. A question, or a message addressed to the facilitator, is
- * conversation and goes to the facilitator's turn instead.
+ * without a model. "next" proposes to close the step (the group consents as
+ * for every close). A question, a message addressed to the facilitator or one
+ * about the process is conversation and goes to the facilitator's turn.
  */
-const collecting: InboundHandler = async ({ w, record, author, retired }) => {
+const collecting: InboundHandler = async ({ w, record, author, command, retired }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   if (record.quoted === true || record.forwarded === true) return undefined;
@@ -256,7 +279,17 @@ const collecting: InboundHandler = async ({ w, record, author, retired }) => {
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step || step.kind !== 'collect' || step.method !== null) return undefined;
   const text = (record.text ?? '').trim();
-  if (text === '' || text.endsWith('?') || /^@\S+/u.test(text)) return undefined;
+  if (text === '') return undefined;
+  if (record.kind === 'created' && MOVE_ON.test(command)) {
+    const t = texts(w.f.language);
+    if (await store.openProposal(w.tx, w.f.id)) {
+      w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.proposalBusy() });
+      return { outcome: 'move_on_busy' };
+    }
+    await openProposal(w, { kind: 'step_close', summary: step.title, payload: { stepId: step.id }, proposedBy: author.principalId, proposalMessageId: record.messageId, windowMinutes: w.f.settings.confirmWindowMinutes });
+    return { outcome: 'move_on' };
+  }
+  if (addressesProcess(text, facilitatorName(w.f))) return undefined;
   await recordContribution(w, { record, author, step, kind: 'idea', payload: { text }, summary: text, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'collected' };
 };

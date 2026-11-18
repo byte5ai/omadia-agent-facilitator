@@ -136,6 +136,7 @@ export const en = {
     assign: '',
     close: '',
   },
+  moveOnHint: (): string => 'Write "next" when everything is collected.',
   agendaLine: (position: number, title: string, timebox: number | null): string =>
     `${String(position)}. ${title}${timebox ? ` (${String(timebox)} min)` : ''}`,
   stepOpened: (position: number, total: number, title: string, instruction: string, until: string | undefined): string =>

@@ -122,6 +122,7 @@ export const de: Texts = {
     assign: '',
     close: '',
   },
+  moveOnHint: () => 'Schreibt "weiter", wenn alles gesammelt ist.',
   agendaLine: (position, title, timebox) => `${String(position)}. ${title}${timebox ? ` (${String(timebox)} Min.)` : ''}`,
   stepOpened: (position, total, title, instruction, until) =>
     [`Schritt ${String(position)} von ${String(total)}: ${title}.`, instruction, until ? `Timebox bis ${until}.` : ''].filter((l) => l !== '').join(' '),
