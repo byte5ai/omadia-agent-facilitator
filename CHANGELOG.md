@@ -8,7 +8,8 @@ The plugin becomes the facilitation engine for native facilitators
 ### Requires
 
 - A kernel with native facilitators and `@omadia/plugin-api` >= 1.55.0.
-- Postgres, and the operator's grant for `permissions.sql`.
+- Postgres (`graphPool`, a hard requirement), and the operator's grant for
+  `permissions.sql`.
 - A channel with one identity per facilitator and delivery of every message
   of a moderated conversation (`@omadia/channel-teams` >= 0.36.0).
 
@@ -73,6 +74,37 @@ The plugin becomes the facilitation engine for native facilitators
   conclusion on; stale reminders are skipped after downtime.
 - One guard for every outgoing text; bots never become participants;
   retention deletes in batches.
+
+### Fixed after the integration run (real kernel, real model)
+
+- The engine comes up after a middleware restart without operator action:
+  `graphPool` is a hard `requires`, and availability is no longer decided once
+  at activation. The engine looks for the database again on a timer, on every
+  scheduler pass and on every tool call, reports its state live and resumes
+  running facilitations.
+- A facilitation whose subscription the kernel ended (grant revoked, engine
+  reinstalled, agent disabled) is reconciled when the engine comes up, on
+  every scheduler pass and before a tool acts: the subscription is taken
+  again and the group is told once that the facilitation continues; when the
+  kernel keeps refusing for two minutes it ends as aborted with the reason on
+  record. An ended facilitation without a subscription gives its messages up
+  after three attempts; a later facilitation's subscription does not carry
+  them.
+- `facilitation_start` says that nothing is open yet and takes `open: true`;
+  `facilitation_open` reports a handshake that was not posted; no tool answers
+  created or opened for a facilitation that cannot be read.
+- In a collecting step "next" / "weiter" proposes to close it, the step
+  announcement says so, and a message about the process reaches the
+  facilitator's turn instead of being recorded as a point.
+- `facilitation_propose_change` refuses a method change for a step that is not
+  decided by a vote and options that are not the step's own (unless
+  `replaceOptions`).
+- The text of a turn is dropped when one of its tools already posted in the
+  group; no tool result names the machinery.
+- Protocol: a runoff line names its options; a grant that reaches nobody is
+  not listed; participants and initiator get the same protocol. The handshake
+  says "no private messages" only when there is no way to send them.
+- A send outcome without code or message is recorded readably.
 
 ### Fixed (defects of the field test, spec 4)
 

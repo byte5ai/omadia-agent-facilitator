@@ -28,7 +28,7 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 | What | Version |
 |---|---|
 | omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0 |
-| Postgres | required. The plugin declares `permissions.sql`; an operator grants it |
+| Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
 | Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |
 | Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0 |
 
@@ -114,6 +114,13 @@ All fields are optional; defaults in brackets.
   `POST /facilitations/:id/content` and `POST /facilitations/:id/terminate`
   (both need `{ "reason": "..." }` and are audited),
   `GET /facilitations/:id/audit`.
+
+- **After a restart or a grant change** the engine comes up by itself and
+  resumes what was running. A facilitation whose conversation the kernel no
+  longer lets it read (grant revoked, engine reinstalled, facilitator
+  disabled) is taken up again with a line to the group, or, when the kernel
+  keeps refusing for two minutes, ended as aborted with the reason in its
+  protocol. It is never left active.
 
 ## Upgrading from 0.7.x
 
