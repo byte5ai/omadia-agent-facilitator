@@ -166,6 +166,25 @@ const profileLanguage = (language: string | undefined): 'de' | 'en' | undefined 
   return base === 'de' || base === 'en' ? base : undefined;
 };
 
+const HEAD_PAGE = 500;
+const HEAD_MAX_PAGES = 40;
+
+/** The id of the newest event the kernel has stored for a subscription, so a
+ *  new facilitation starts reading after it. Bounded: beyond the bound the
+ *  time check of the inbound consumer still drops what is older. */
+async function headOfStored(engine: EngineCore, scope: ConversationRef): Promise<string | undefined> {
+  const messages = engine.deps.kernel.messages();
+  if (!messages) return undefined;
+  let after: string | undefined;
+  for (let page = 0; page < HEAD_MAX_PAGES; page += 1) {
+    const batch = await messages.listSince(scope, { ...(after !== undefined ? { after } : {}), limit: HEAD_PAGE });
+    const last = batch.events[batch.events.length - 1];
+    if (last) after = last.eventId;
+    if (!batch.nextCursor || !last) break;
+  }
+  return after;
+}
+
 export type ConfiguredHook = (engine: EngineCore, facilitation: Facilitation) => Promise<void>;
 const configured: ConfiguredHook[] = [];
 /** Runs once a facilitation was created, outside any transaction. */
@@ -370,6 +389,10 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     // What needs the kernel (the session's capabilities) is fetched now,
     // outside any transaction.
     for (const hook of configured) await hook(engine, result.facilitation);
+    // The conversation may still be read for an earlier facilitation (its
+    // follow-up). What the kernel stored so far is not this one's to read.
+    const cursor = await headOfStored(engine, input);
+    if (cursor !== undefined) await pool.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [result.facilitation.id, cursor]);
     return result;
   } catch (err) {
     // Nothing was created: do not keep reading a conversation we do not moderate.
@@ -496,16 +519,29 @@ export async function abortFacilitation(engine: EngineCore, facilitationId: stri
   return ended;
 }
 
-/** Stop reading a conversation once nothing of the facilitation needs it. */
+/** Stop reading a conversation once nothing needs it any more: not this
+ *  facilitation (its follow-up, an undelivered report), and no other
+ *  facilitation of the same facilitator in the same conversation. Called
+ *  outside the lock. Idempotent. */
 export async function releaseConversation(engine: EngineCore, f: Facilitation): Promise<void> {
-  if (f.followupState === 'active') return;
+  if (f.followupState === 'active' || f.settings.released === true) return;
+  const pool = engine.pool();
   // Posting as the facilitator rides on the subscription: keep it until the
   // report is out.
-  const undelivered = await engine.pool().query(
+  const undelivered = await pool.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND delivery_class = 'essential' AND status IN ('pending', 'sending') LIMIT 1`,
     [f.id],
   );
   if (undelivered.rows.length > 0) return;
+  const others = await pool.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_facilitations
+      WHERE id <> $1 AND facilitator_agent = $2 AND channel_type = $3 AND conversation_id = $4
+        AND (phase IN ('configuring', 'active', 'concluding') OR followup_state = 'active' OR NOT coalesce((settings->>'released')::boolean, false))
+      LIMIT 1`,
+    [f.id, f.facilitatorAgent, f.channelType, f.conversationId],
+  );
+  await pool.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"released": true}'::jsonb WHERE id = $1`, [f.id]);
+  if (others.rows.length > 0) return;
   try {
     await engine.deps.kernel.messages()?.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });
   } catch (err) {

@@ -138,6 +138,9 @@ export class FakeKernel {
   readonly turns: AgentTurnRequest[] = [];
   readonly events: ConversationMessageRecord[] = [];
   readonly subscriptions = new Set<string>();
+  /** Where each subscription began: like the real hub, a subscription sees
+   *  only what was stored since it started. */
+  private readonly subscribedFrom = new Map<string, number>();
   /** Agents without an identity of their own on the channel. */
   readonly noIdentity = new Set<string>();
   /** Per `agent|conversation`: what the readiness check reports missing. */
@@ -326,11 +329,13 @@ export class FakeKernel {
     subscribe: async (scope) => {
       if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
       if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
+      if (!this.subscriptions.has(scopeKey(scope))) this.subscribedFrom.set(scopeKey(scope), this.events.length);
       this.subscriptions.add(scopeKey(scope));
       return { outcome: 'subscribed' };
     },
     unsubscribe: async (scope) => {
       this.subscriptions.delete(scopeKey(scope));
+      this.subscribedFrom.delete(scopeKey(scope));
     },
     onMessage: (agentSlug, handler) => {
       const set = this.listeners.get(agentSlug) ?? new Set();
@@ -354,7 +359,9 @@ export class FakeKernel {
   };
 
   private forScope(scope: ConversationMessageScope): ConversationMessageRecord[] {
-    return this.events.filter((e) => e.receivedByChannelKey === `28:${scope.agentSlug}` && e.channelType === scope.channelType && e.conversationId === scope.conversationId);
+    const from = this.subscribedFrom.get(scopeKey(scope));
+    if (from === undefined) return [];
+    return this.events.slice(from).filter((e) => e.receivedByChannelKey === `28:${scope.agentSlug}` && e.channelType === scope.channelType && e.conversationId === scope.conversationId);
   }
 
   private readonly sendService: ConversationSendService = {

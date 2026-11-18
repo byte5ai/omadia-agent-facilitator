@@ -217,6 +217,15 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   });
   if (!claimed) return { outcome: 'duplicate' };
 
+  // A message from before this facilitation existed is not its to read:
+  // not as a ballot, not as a command, not as an answer to anything. (The
+  // conversation may have been read for an earlier facilitation.)
+  if (Date.parse(record.occurredAt) < w.f.createdAt.getTime()) {
+    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'before_facilitation');
+    await w.tx.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);
+    return { outcome: 'before_facilitation' };
+  }
+
   const author = await resolveAuthor(w, record);
   const ctx: InboundContext = { w, record, author, command: normaliseCommand(record.text) };
   let result: InboundResult | undefined;

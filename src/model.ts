@@ -79,6 +79,8 @@ export interface FacilitationSettings {
   unreachable?: string[];
   /** The facilitation-scoped grant for protocol dispatch and scheduling. */
   followupGrant?: 'active' | 'revoked';
+  /** This facilitation no longer needs the conversation to be read. */
+  released?: boolean;
 }
 
 export interface Facilitation {

@@ -235,6 +235,7 @@ export class FacilitationEngine {
       (async () => {
         await tick(this.core);
         await purgeExpired(this.core);
+        await this.releaseEnded();
         for (const f of await store.listSubscribed(this.core.pool())) {
           this.attach(f.facilitatorAgent);
           await this.replay(f);
@@ -242,6 +243,17 @@ export class FacilitationEngine {
       })(),
     );
     await this.idle();
+  }
+
+  /** A release that could not happen when a facilitation ended (a report was
+   *  still going out) is tried again here. */
+  private async releaseEnded(): Promise<void> {
+    const ended = await this.core.pool().query<{ id: string }>(
+      `SELECT id FROM plg_omadia_agent_facilitator_facilitations
+        WHERE phase IN ('closed', 'aborted') AND followup_state <> 'active' AND NOT coalesce((settings->>'released')::boolean, false)
+        ORDER BY closed_at LIMIT 50`,
+    );
+    for (const row of ended.rows) await releaseWhenEnded(this.core, row.id);
   }
 
   /** Read everything the kernel stored after the facilitation's cursor. */
