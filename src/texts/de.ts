@@ -137,8 +137,8 @@ export const de: Texts = {
     close: (summary) => `die Moderation mit dieser Zusammenfassung abschließen:\n${summary}`,
     media_consent: (what) => what,
   },
-  proposalAnnounce: (what, until, extendable) =>
-    `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht, oder sofort, wenn alle zugestimmt haben. Schreibt "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.`,
+  proposalAnnounce: (what, until, extendable, mustReply) =>
+    `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht, oder sofort, wenn alle zugestimmt haben. ${mustReply ? 'Antwortet auf diese Nachricht mit' : 'Schreibt'} "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.${mustReply ? ' Nur eine Antwort auf diese Nachricht (oder ein 👍 darauf) zählt dafür.' : ''}`,
   proposalAccepted: (what) => `Angenommen, niemand hat widersprochen: ${what}`,
   proposalRejected: (what, objections) =>
     `Nicht angenommen: ${what}\n${objections.length === 1 ? 'Stehender Einwand' : 'Stehende Einwände'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,

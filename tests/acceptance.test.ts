@@ -669,7 +669,8 @@ test('19. adaptation: transcribed audio appears mid-session; announced, consent 
   assert.ok(posts(conv).includes('Something changed in this session. I can now also perceive: what is said in the call, as a transcript with the speaker.'));
   assert.match(last(conv), /^Proposal: process the transcribed speech of this call/);
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Bert', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Refused \(no_consent\)/);
-  await everybody(conv, 'agreed', ['anna', 'bert', 'cara']);
+  const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
+  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Bert', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Recorded for Bert as unconfirmed/);
   assert.match(await status(conv), /Contributed: Anna\nStill open: Bert, Cara/, 'not counted before Bert confirmed');
   await say(conv, 'bert', 'yes');

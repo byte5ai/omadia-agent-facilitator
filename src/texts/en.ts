@@ -152,8 +152,8 @@ export const en = {
     close: (summary: string): string => `close the facilitation with this summary:\n${summary}`,
     media_consent: (what: string): string => what,
   },
-  proposalAnnounce: (what: string, until: string, extendable: boolean): string =>
-    `Proposal: ${what}\nIt holds if nobody objects until ${until}, or at once when everybody agreed. Write "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.`,
+  proposalAnnounce: (what: string, until: string, extendable: boolean, mustReply: boolean): string =>
+    `Proposal: ${what}\nIt holds if nobody objects until ${until}, or at once when everybody agreed. ${mustReply ? 'Reply to this message with' : 'Write'} "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.${mustReply ? ' Only a reply to this message (or a 👍 on it) counts for it.' : ''}`,
   proposalAccepted: (what: string): string => `Accepted, nobody objected: ${what}`,
   proposalRejected: (what: string, objections: readonly string[]): string =>
     `Not accepted: ${what}\nStanding objection${objections.length === 1 ? '' : 's'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,

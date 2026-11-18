@@ -24,8 +24,8 @@ after(async () => {
 const posts = (conv: string): string[] => h.kernel.groupPosts(conv).map((p) => p.text);
 const last = (conv: string): string => posts(conv).at(-1) ?? '';
 const tool = (conv: string, name: string, args: Record<string, unknown> = {}): Promise<string> => h.tool(name, args, { conversation: conv });
-async function say(conv: string, who: string, text: string) {
-  const record = await h.kernel.say(conv, who, text);
+async function say(conv: string, who: string, text: string, opts = {}) {
+  const record = await h.kernel.say(conv, who, text, opts);
   await h.settle();
   return record;
 }
@@ -211,7 +211,9 @@ test('adaptation mid-session: transcribed speech appears, the facilitator announ
   assert.match(proposal ?? '', /^Proposal: process the transcribed speech of this call.*Raw audio and video are not stored.*"stop listening"/s);
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Refused \(no_consent\)/, 'nothing spoken is processed before consent');
 
-  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
+  // Consent to being listened to is given as a reply to the request, nothing else.
+  const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
+  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
   assert.match(last(conv), /^I now follow the transcript of the call\./);
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Recorded for Anna as unconfirmed/);
   assert.equal(last(conv), 'Anna, I heard you say: Thai. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.');
@@ -237,7 +239,7 @@ test('explicit consent per participant: silence is not enough', { skip: PG_SKIP 
     await startActive(strict, conv, { method: 'single', options: ['Thai', 'Pizza'] });
     await strict.kernel.changeCapabilities('mira', strict.kernel.capabilities(conv, ['text', 'transcribed_speech'], ['text']));
     await strict.settle();
-    await strict.kernel.say(conv, 'anna', 'agreed');
+    await strict.kernel.say(conv, 'anna', 'agreed', { replyTo: strict.kernel.groupPosts(conv).at(-1)?.messageId ?? '' });
     await strict.settle();
     strict.clock.advance(HOUR_MS);
     await strict.tick();
@@ -245,4 +247,22 @@ test('explicit consent per participant: silence is not enough', { skip: PG_SKIP 
   } finally {
     await strict.close();
   }
+});
+
+test('review 7: consent to processing speech is never given by a message that is not a reply to the request', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('se-consent-bound', [ANNA, BERT]);
+  h.kernel.capabilities(conv, ['text'], ['text']);
+  await startActive(h, conv, { method: 'consent', statement: 'We record our meetings' });
+  await h.kernel.changeCapabilities('mira', h.kernel.capabilities(conv, ['text', 'transcribed_speech'], ['text']));
+  await h.settle();
+  const request = h.kernel.groupPosts(conv).at(-1);
+  // Both agree to the DECISION. That is not consent to being listened to.
+  await say(conv, 'anna', 'einverstanden');
+  await say(conv, 'bert', 'agreed');
+  const f = await h.facilitation(conv);
+  const session = (await store.listSessions(h.db.pool, f.id)).find((s) => s.kind === 'async');
+  assert.equal(session?.mediaConsent, 'pending');
+  assert.ok(!posts(conv).some((t) => t.startsWith('I now follow the transcript')));
+  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'position', summary: 'x' }), /^Refused \((no_consent|no_facilitation)\)/);
+  assert.ok(request?.text.includes('Reply to this message'));
 });

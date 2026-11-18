@@ -402,6 +402,8 @@ export function installSessions(): void {
 
   registerProposalKind('media_consent', {
     describe: (w, p) => texts(w.f.language).proposalKinds.media_consent(p.summary),
+    // Being listened to is never agreed to by a message meant for something else.
+    boundOnly: true,
     unanimous: (w) => w.config.mediaConsentExplicit,
     accept: async (w, p) => {
       await setConsent(w, String(p.payload['sessionId']), 'granted');

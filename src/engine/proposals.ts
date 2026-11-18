@@ -29,6 +29,9 @@ export interface ProposalKind {
   accept(w: Work, proposal: Proposal): Promise<void>;
   /** The proposal was rejected or withdrawn. */
   reject?(w: Work, proposal: Proposal): Promise<void>;
+  /** Answers count only as a reply to (or a reaction on) the proposal's own
+   *  message, never as a free-standing one. */
+  boundOnly?: boolean;
   /** Silence is not enough: every active participant has to agree. */
   unanimous?(w: Work, proposal: Proposal): boolean;
   /** "extend N" is an answer to this kind of proposal. */
@@ -73,6 +76,7 @@ export async function openProposal(w: Work, input: NewProposal): Promise<Proposa
     openedAt: w.now,
   });
   const definition = kindOf(proposal);
+  const mustReply = definition.boundOnly === true || (await consentVoteOpen(w));
   await scheduleJob(w, 'proposal_window', proposal.id, windowEndsAt, { proposalId: proposal.id });
   w.bump();
   await w.event('proposal_opened', input.proposedBy, { proposalId: proposal.id, kind: input.kind, summary: input.summary, until: windowEndsAt.toISOString() });
@@ -82,10 +86,16 @@ export async function openProposal(w: Work, input: NewProposal): Promise<Proposa
     to: 'group',
     deliveryClass: 'essential',
     requiredPhases: ['configuring', 'active'],
-    text: t.proposalAnnounce(await definition.describe(w, proposal), formatWhen(windowEndsAt, w.f.timezone, w.f.language), definition.extend !== undefined),
+    text: t.proposalAnnounce(await definition.describe(w, proposal), formatWhen(windowEndsAt, w.f.timezone, w.f.language), definition.extend !== undefined, mustReply),
     link: { kind: 'proposal', id: proposal.id },
   });
   return proposal;
+}
+
+/** A consent decision is being voted on: "agreed" and "objection" written
+ *  into the chat are ballots of that vote. */
+async function consentVoteOpen(w: Pick<Work, 'tx' | 'f'>): Promise<boolean> {
+  return (await store.openStepOf(w.tx, w.f.id))?.method === 'consent';
 }
 
 const patchProposal = (w: Work, id: string, patch: Partial<Proposal>): Promise<unknown> =>
@@ -167,13 +177,20 @@ const proposalAnswers: InboundHandler = async ({ w, record, author, command }) =
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   if (record.quoted === true || record.forwarded === true) return undefined;
 
+  // What does this message answer? A reply to the proposal's own message
+  // answers the proposal. A free-standing one does so only when nothing else
+  // could be meant: not while a consent vote is open (then it is a ballot),
+  // and never for a proposal that must be answered directly.
+  const definition = kindOf(proposal);
+  const bound = proposal.announceMessageId !== null && record.replyToMessageId === proposal.announceMessageId;
+  if (!bound && (definition.boundOnly === true || (await consentVoteOpen(w)))) return undefined;
+
   if (AGREED.test(command) || isYes(command)) {
     await agree(w, proposal, author);
     return { outcome: 'proposal_consent' };
   }
 
   const extend = EXTEND.exec(command);
-  const definition = kindOf(proposal);
   if (extend && definition.extend) {
     await patchProposal(w, proposal.id, { status: 'rejected', decidedAt: w.now });
     await cancelJobs(w, ['proposal_window']);

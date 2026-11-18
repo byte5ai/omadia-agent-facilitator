@@ -277,3 +277,26 @@ test('a deciding step without options waits for them; setting them announces how
   assert.equal(f.phase, 'closed', 'nothing but the close follows the decision: the result is in');
   assert.match(last(conv), /- Where to eat: Thai \(Thai 2, Pizza 0\)/);
 });
+
+test('review 7: while a consent vote is open, a free-standing answer is a ballot; only a reply to the proposal answers the proposal', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('pr-consent-vs-proposal', [ANNA, BERT, CARA]);
+  await tool(conv, 'facilitation_start', { goal: 'Buy the tool', definitionOfDone: 'Decided by consent', method: 'consent', statement: 'We buy the tool this quarter' });
+  await tool(conv, 'facilitation_open');
+  const f = await h.facilitation(conv);
+  await tool(conv, 'facilitation_propose_summary', { text: 'So far: budget is the open question.' });
+  const proposalPost = h.kernel.groupPosts(conv).at(-1);
+  assert.match(proposalPost?.text ?? '', /Reply to this message/, 'the announcement says how to answer it');
+
+  await say(conv, 'anna', 'Einwand: zu teuer');
+  assert.equal(last(conv), 'Recorded for you, Anna: objection: zu teuer', 'the objection is a ballot on the decision');
+  await say(conv, 'bert', 'einverstanden');
+  assert.equal(last(conv), 'Recorded for you, Bert: consent');
+  let proposal = await store.openProposal(h.db.pool, f.id);
+  assert.deepEqual([proposal?.objections, proposal?.consents], [[], []], 'nothing of it went to the proposal');
+
+  await say(conv, 'cara', 'agreed', { replyTo: proposalPost?.messageId ?? '' });
+  proposal = await store.openProposal(h.db.pool, f.id);
+  assert.deepEqual(proposal?.consents, ['user:cara']);
+  const ballots = (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid').map((c) => c.participantPrincipal).sort();
+  assert.deepEqual(ballots, ['user:anna', 'user:bert'], "Cara's reply to the proposal is not a ballot");
+});
