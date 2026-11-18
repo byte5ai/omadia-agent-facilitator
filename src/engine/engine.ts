@@ -9,6 +9,7 @@ import type { ConversationMembershipEvent } from '../kernel.js';
 import type { Facilitation } from '../model.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
+import { installDecisionMethods } from './decide.js';
 import { processRecord } from './inbound.js';
 import { releaseConversation } from './lifecycle.js';
 import { processMembership } from './membership.js';
@@ -26,6 +27,7 @@ export class FacilitationEngine {
 
   constructor(deps: EngineDeps) {
     this.core = new EngineCore(deps);
+    installDecisionMethods(this.core);
   }
 
   /** Whether the engine can keep state at all. */

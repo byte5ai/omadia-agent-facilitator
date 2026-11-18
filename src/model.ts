@@ -254,6 +254,7 @@ export interface OutboxPayload {
 
 export interface OutboxRow {
   id: string;
+  seq: string;
   facilitationId: string;
   idempotencyKey: string;
   purpose: string;

@@ -81,7 +81,7 @@ export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike,
     client,
     `SELECT * FROM facilitation_outbox
       WHERE facilitation_id = $1 AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= $2)
-      ORDER BY created_at, id`,
+      ORDER BY seq`,
     [facilitationId, engine.now()],
   );
   for (const row of pending) {

@@ -12,7 +12,8 @@ import { isValidTimezone } from '../config.js';
 import * as store from '../db/store.js';
 import { poolTransaction } from '../db/tx.js';
 import type { RosterParticipant } from '../kernel.js';
-import type { CloseRule, DodCriteria, Facilitation, FormatId, Participant } from '../model.js';
+import { toOptions } from '../methods/ballot.js';
+import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
@@ -47,6 +48,56 @@ export interface ConfigureInput extends ConversationRef {
   closeRule?: CloseRule;
   reminderOffsetsHours?: number[];
   facilitatorName?: string;
+  /** The decision the facilitation is about, when it is one vote. */
+  decision?: DecisionSetup;
+}
+
+export interface DecisionSetup {
+  method: MethodId;
+  /** Option labels (or the items to assign); keys A, B, ... are assigned. */
+  options: string[];
+  points?: number[];
+  /** Consent: the proposal put to the group. */
+  statement?: string;
+}
+
+type NewStep = Parameters<typeof store.replaceSteps>[2][number];
+
+/** The agenda a setup asks for. */
+export function agendaFor(input: Pick<ConfigureInput, 'goal' | 'decision'>, config: { rankedPoints: readonly number[] }): NewStep[] {
+  const d = input.decision;
+  if (!d) return [{ kind: 'collect', title: input.goal }];
+  if (d.method !== 'consent' && d.options.length < (d.method === 'assignment' ? 1 : 2)) {
+    throw new Refusal('bad_options', d.method === 'assignment' ? 'Name at least one item to assign.' : 'A vote needs at least two options.');
+  }
+  return [
+    {
+      kind: d.method === 'assignment' ? 'assign' : 'decide',
+      title: input.goal,
+      method: d.method,
+      options: toOptions(d.options),
+      methodConfig: {
+        ...(d.method === 'ranked' ? { points: d.points ?? [...config.rankedPoints] } : {}),
+        ...(d.method === 'consent' ? { statement: d.statement ?? input.goal } : {}),
+      },
+    },
+  ];
+}
+
+/** How to contribute to a step, as the handshake announces it. */
+export function rulesOf(f: Facilitation, step: Step | undefined): string[] {
+  if (!step?.method) return [];
+  const t = texts(f.language);
+  const options = t.options(step.roundOptions ?? step.options);
+  const points = Array.isArray(step.methodConfig['points']) ? (step.methodConfig['points'] as number[]) : [];
+  const line = {
+    ranked: () => t.rules.ranked(options, points),
+    single: () => t.rules.single(options),
+    approval: () => t.rules.approval(options),
+    consent: () => t.rules.consent(String(step.methodConfig['statement'] ?? step.title)),
+    assignment: () => t.rules.assignment(options),
+  }[step.method]();
+  return step.method === 'assignment' ? [line] : [line, t.rules.common(f.closeRule)];
 }
 
 export interface ConfigureResult {
@@ -99,6 +150,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       if (dod && (dod.text !== input.definitionOfDone || JSON.stringify(dod.criteria) !== JSON.stringify(input.dodCriteria ?? null))) {
         await store.patchDodVersion(w.tx, dod.id, { text: input.definitionOfDone, criteria: input.dodCriteria ?? null });
       }
+      await store.replaceSteps(w.tx, existing.id, agendaFor(input, config));
       await w.event('reconfigured', 'facilitator', { goal: input.goal });
       return w.patch({
         goal: input.goal,
@@ -147,6 +199,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   if (openRoster) notes.push('The channel could not list every member of this conversation; whoever writes here counts as a participant.');
   const initiator = members.find((m) => matchesCaller(m, input.callerPrincipalId));
 
+  const agenda = agendaFor(input, config);
   try {
     return await poolTransaction(pool, async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
@@ -175,13 +228,13 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       await store.addDodVersion(tx, {
         facilitationId: facilitation.id,
         text: input.definitionOfDone,
-        criteria: input.dodCriteria ?? null,
+        criteria: input.dodCriteria ?? (input.decision ? { type: 'decisions_reached' } : null),
         proposedBy: input.callerPrincipalId,
         consentState: 'initial',
         effectiveAt: now,
         createdAt: now,
       });
-      await store.addStep(tx, { facilitationId: facilitation.id, position: 1, kind: 'collect', title: input.goal });
+      await store.replaceSteps(tx, facilitation.id, agenda);
       const participants: Participant[] = [];
       for (const member of members) {
         const added = await store.addParticipant(tx, {
@@ -227,7 +280,7 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
     const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
     const dod = await store.currentDod(w.tx, w.f.id);
     const first = (await store.listSteps(w.tx, w.f.id))[0];
-    if (first) await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now });
+    const opened = first ? await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now }) : undefined;
     const f = await w.patch({ phase: 'active', activatedAt: w.now });
     const t = texts(f.language);
     w.post({
@@ -242,6 +295,7 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
         definitionOfDone: dod?.text ?? '',
         participants: participants.map((p) => p.displayName),
         ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
+        rules: rulesOf(f, opened),
       }),
     });
     await w.event('opened', 'facilitator', { participants: participants.length });

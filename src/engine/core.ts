@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Clock } from '../clock.js';
 import type { EngineConfig } from '../config.js';
-import type { PoolLike, Queryable } from '../db/pool.js';
+import type { PoolClientLike, PoolLike, Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { inTransaction, withFacilitationLock } from '../db/tx.js';
@@ -86,8 +86,25 @@ export interface Work {
   event(kind: string, actor: string, payload?: Record<string, unknown>): Promise<void>;
 }
 
+/** Runs after delivery, still under the facilitation's lock. */
+export type AfterDispatch = (engine: EngineCore, client: PoolClientLike, facilitationId: string) => Promise<void>;
+
 export class EngineCore {
   readonly instanceId: string;
+  private readonly afterDispatch: AfterDispatch[] = [];
+
+  /** Register follow-up work for after every delivery (closing once the
+   *  result is out). */
+  onAfterDispatch(hook: AfterDispatch): void {
+    this.afterDispatch.push(hook);
+  }
+
+  private async delivered(client: PoolClientLike, facilitationId: string): Promise<void> {
+    await dispatchOutbox(this, client, facilitationId);
+    for (const hook of this.afterDispatch) await hook(this, client, facilitationId);
+    // A hook may have queued more (the report that follows the result).
+    await dispatchOutbox(this, client, facilitationId);
+  }
 
   constructor(readonly deps: EngineDeps) {
     this.instanceId = deps.instanceId ?? randomUUID();
@@ -118,50 +135,56 @@ export class EngineCore {
   /** One locked unit of work on a facilitation, followed by delivery. */
   async work<T>(facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
     return withFacilitationLock(this.pool(), facilitationId, async (client) => {
-      const result = await inTransaction(client, async (tx) => {
-        const loaded = await store.getFacilitation(tx, facilitationId);
-        if (!loaded) throw new Refusal('unknown_facilitation', `Facilitation ${facilitationId} does not exist (any more).`);
-        const now = this.now();
-        let current = loaded;
-        let bumped = false;
-        const queued: Outgoing[] = [];
-        const w: Work = {
-          tx,
-          now,
-          config: this.deps.config,
-          get f() {
-            return current;
-          },
-          async patch(patch) {
-            const next = await store.patchFacilitation(tx, facilitationId, patch);
-            if (!next) throw new Error(`facilitation ${facilitationId} vanished mid-transaction`);
-            current = next;
-            bumped = true;
-            return next;
-          },
-          bump() {
-            bumped = true;
-          },
-          post(message) {
-            queued.push(message);
-          },
-          async event(kind, actor, payload = {}) {
-            await store.appendEvent(tx, { facilitationId, kind, actor, payload, occurredAt: now });
-          },
-        };
-        const value = await fn(w);
-        const version = bumped ? await store.bumpStateVersion(tx, facilitationId) : current.stateVersion;
-        for (const message of queued) await this.enqueue(tx, facilitationId, version, now, message);
-        return value;
-      });
-      await dispatchOutbox(this, client, facilitationId);
+      const result = await this.workOn(client, facilitationId, fn);
+      await this.delivered(client, facilitationId);
       return result;
+    });
+  }
+
+  /** The transaction of a unit of work, on a connection that already holds
+   *  the facilitation's lock. Queues messages; the caller delivers. */
+  async workOn<T>(client: PoolClientLike, facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
+    return inTransaction(client, async (tx) => {
+      const loaded = await store.getFacilitation(tx, facilitationId);
+      if (!loaded) throw new Refusal('unknown_facilitation', `Facilitation ${facilitationId} does not exist (any more).`);
+      const now = this.now();
+      let current = loaded;
+      let bumped = false;
+      const queued: Outgoing[] = [];
+      const w: Work = {
+        tx,
+        now,
+        config: this.deps.config,
+        get f() {
+          return current;
+        },
+        async patch(patch) {
+          const next = await store.patchFacilitation(tx, facilitationId, patch);
+          if (!next) throw new Error(`facilitation ${facilitationId} vanished mid-transaction`);
+          current = next;
+          bumped = true;
+          return next;
+        },
+        bump() {
+          bumped = true;
+        },
+        post(message) {
+          queued.push(message);
+        },
+        async event(kind, actor, payload = {}) {
+          await store.appendEvent(tx, { facilitationId, kind, actor, payload, occurredAt: now });
+        },
+      };
+      const value = await fn(w);
+      const version = bumped ? await store.bumpStateVersion(tx, facilitationId) : current.stateVersion;
+      for (const message of queued) await this.enqueue(tx, facilitationId, version, now, message);
+      return value;
     });
   }
 
   /** Deliver whatever is pending for a facilitation, under its lock. */
   async flush(facilitationId: string): Promise<void> {
-    await withFacilitationLock(this.pool(), facilitationId, (client) => dispatchOutbox(this, client, facilitationId));
+    await withFacilitationLock(this.pool(), facilitationId, (client) => this.delivered(client, facilitationId));
   }
 
   private async enqueue(tx: Queryable, facilitationId: string, version: number, now: Date, m: Outgoing): Promise<void> {

@@ -52,6 +52,10 @@ export interface RecordInput {
   /** Read from free text by the model: waits for its author. */
   interpreted: boolean;
   source?: 'message' | 'card';
+  /** It replaces an earlier contribution of the same person. */
+  replaces?: boolean;
+  /** No echo: the caller says something better. */
+  quiet?: boolean;
 }
 
 /** Retire whatever this message carried before (an older revision). */
@@ -98,6 +102,7 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
     revision: record.revision,
   });
 
+  if (input.quiet) return contribution;
   if (input.interpreted) {
     const ack = await insert<Ack>(w.tx, 'facilitation_acks', {
       facilitationId: w.f.id,
@@ -128,7 +133,7 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
     deliveryClass: 'droppable',
     versionBound: false,
     requiredPhases: ['active', 'concluding'],
-    text: previous ? t.echoChanged(author.displayName, input.summary) : t.echoRecorded(author.displayName, input.summary),
+    text: previous || input.replaces ? t.echoChanged(author.displayName, input.summary) : t.echoRecorded(author.displayName, input.summary),
     mentions: [mention(author)],
   });
   return contribution;

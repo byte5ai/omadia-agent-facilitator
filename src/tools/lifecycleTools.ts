@@ -1,13 +1,15 @@
 // Tools for the lifecycle and for authenticated contributions.
 
 import * as store from '../db/store.js';
-import type { ContributionKind } from '../model.js';
+import type { ContributionKind, MethodId } from '../model.js';
+import { parseBallot } from '../methods/ballot.js';
+import { advance, putAgain, recordBallot, roundOptions, withoutTakenItems } from '../engine/decide.js';
 import { askClarification, authorOf, recordContribution } from '../engine/contributions.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
 import { statusText } from '../engine/status.js';
-import { defineTool, liveFacilitation, oneOf, optionalString, requiredString } from './toolkit.js';
+import { defineTool, liveFacilitation, numberList, oneOf, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ResolvedContext, ToolDefinition } from './toolkit.js';
 
 const CONTRIBUTION_KINDS: readonly ContributionKind[] = [
@@ -37,6 +39,8 @@ export async function storedMessage(engine: FacilitationEngine, ctx: ResolvedCon
   return record;
 }
 
+const METHODS: readonly MethodId[] = ['ranked', 'single', 'approval', 'consent', 'assignment'];
+
 export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
     defineTool(
@@ -52,6 +56,11 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           timezone: { type: 'string', description: 'IANA timezone of the group.' },
           language: { type: 'string', enum: ['de', 'en'] },
           facilitatorName: { type: 'string', description: 'Your own display name, for the handshake.' },
+          method: { type: 'string', enum: [...METHODS], description: 'When the facilitation is one decision: ranked (points per rank), single (one option), approval (any set), consent (no standing objection), assignment (one confirmed name per item).' },
+          options: { type: 'array', items: { type: 'string' }, description: 'The options to decide between, or the items to assign. The engine labels them A, B, C.' },
+          points: { type: 'array', items: { type: 'number' }, description: 'Ranked vote: points per rank, first rank first. Default 3, 2, 1.' },
+          statement: { type: 'string', description: 'Consent: the proposal put to the group.' },
+          closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
         },
         required: ['goal', 'definitionOfDone'],
       },
@@ -61,6 +70,11 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const timezone = optionalString(args, 'timezone');
         const language = oneOf(args, 'language', ['de', 'en'] as const);
         const name = optionalString(args, 'facilitatorName');
+        const method = oneOf(args, 'method', METHODS);
+        const closeRule = oneOf(args, 'closeRule', ['all_contributed', 'at_deadline'] as const);
+        const statement = optionalString(args, 'statement');
+        const points = numberList(args, 'points');
+        if (closeRule === 'at_deadline' && !deadline) throw new Refusal('bad_input', "closeRule 'at_deadline' needs a deadline.");
         const result = await configureFacilitation(engine.core, {
           ...ctx,
           callerPrincipalId: ctx.callerPrincipalId,
@@ -70,6 +84,8 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(timezone ? { timezone } : {}),
           ...(language ? { language } : {}),
           ...(name ? { facilitatorName: name } : {}),
+          ...(closeRule ? { closeRule } : {}),
+          ...(method ? { decision: { method, options: stringList(args, 'options') ?? [], ...(points ? { points } : {}), ...(statement ? { statement } : {}) } } : {}),
         });
         engine.ensureAttached(ctx.agentSlug);
         const people = result.participants.map((p) => p.displayName).join(', ') || 'not known yet';
@@ -118,6 +134,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           messageId: { type: 'string', description: 'The message id from the turn input.' },
           kind: { type: 'string', enum: [...CONTRIBUTION_KINDS] },
           summary: { type: 'string', description: 'What the person said, in one sentence, in the language of the group. Shown to them for confirmation.' },
+          ballot: { type: 'string', description: 'Only while a vote is open: what you read as their ballot, written in the announced format (e.g. "A > C > B", "B", "abstain", "objection: too expensive", "A: Anna"). The engine parses it; it counts after the author confirmed.' },
         },
         required: ['messageId', 'kind', 'summary'],
       },
@@ -135,7 +152,19 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           if (existing && existing.sourceRevision === record.revision && existing.status !== 'ambiguous') {
             return `Already recorded for ${author.displayName} (${existing.status}).`;
           }
-          await recordContribution(w, { record, author, step, kind, payload: { text: summary }, summary, interpreted: true });
+          const ballotText = optionalString(args, 'ballot');
+          if (ballotText !== undefined && step.method) {
+            const people = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active').map((p) => ({ id: p.principalId, name: p.displayName }));
+            const parsed = parseBallot({ method: step.method, options: roundOptions(step), text: ballotText, author: { id: author.principalId, name: author.displayName }, people });
+            if (parsed.kind !== 'ballot') {
+              throw new Refusal('bad_ballot', `'${ballotText}' is not a valid ballot for this step${parsed.kind === 'invalid' ? ` (${parsed.problem}: ${parsed.detail})` : ''}. If the message is unclear, use facilitation_clarify instead.`);
+            }
+            const ballot = await withoutTakenItems(w, step, author, parsed.ballot, record.eventId);
+            if (!ballot) return 'That item is already taken; the engine said so in the group. Nothing was recorded.';
+            await recordBallot(w, { record, author, step, ballot, interpreted: true });
+          } else {
+            await recordContribution(w, { record, author, step, kind, payload: { text: summary }, summary, interpreted: true });
+          }
           return `Recorded for ${author.displayName} as unconfirmed. The engine asked ${author.displayName} to confirm; it counts once they did. Do not repeat the question.`;
         });
       },
@@ -164,6 +193,27 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           return outcome === 'asked'
             ? `Asked ${author.displayName}. Do not ask again; answer [silent].`
             : `${author.displayName} was already asked about this message. Nothing was posted.`;
+        });
+      },
+    ),
+
+    defineTool(
+      engine,
+      {
+        name: 'facilitation_put_again',
+        description: 'Consent only: after an objection was talked through, put an amended proposal to the group. Everybody answers again; the engine posts the new wording.',
+        properties: { statement: { type: 'string', description: 'The amended proposal, in the language of the group.' } },
+        required: ['statement'],
+      },
+      async (args, ctx) => {
+        const f = await liveFacilitation(engine, ctx);
+        const statement = requiredString(args, 'statement');
+        return engine.core.work(f.id, async (w) => {
+          const step = await store.openStepOf(w.tx, w.f.id);
+          if (w.f.phase !== 'active' || !step || step.method !== 'consent') throw new Refusal('no_consent_step', 'No consent decision is open.');
+          await putAgain(w, statement);
+          await advance(w, 'contribution');
+          return 'The amended proposal was posted. Everybody answers again.';
         });
       },
     ),

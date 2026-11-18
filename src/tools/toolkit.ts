@@ -73,6 +73,20 @@ export function optionalNumber(args: Record<string, unknown>, key: string): numb
   return number;
 }
 
+export function stringList(args: Record<string, unknown>, key: string): string[] | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || v.trim() === '')) throw new Refusal('bad_input', `'${key}' must be a list of non-empty strings.`);
+  return (value as string[]).map((v) => v.trim());
+}
+
+export function numberList(args: Record<string, unknown>, key: string): number[] | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Refusal('bad_input', `'${key}' must be a list of numbers.`);
+  return value as number[];
+}
+
 export function oneOf<T extends string>(args: Record<string, unknown>, key: string, allowed: readonly T[]): T | undefined {
   const value = optionalString(args, key);
   if (value === undefined) return undefined;

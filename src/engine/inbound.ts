@@ -11,7 +11,7 @@
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import * as store from '../db/store.js';
-import type { Ack, Participant } from '../model.js';
+import type { Ack, Contribution, Participant } from '../model.js';
 import { texts } from '../texts/index.js';
 import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
@@ -34,6 +34,8 @@ export interface InboundContext {
   author: Participant | undefined;
   /** Lower-cased text without a leading mention or "/facilitator". */
   command: string;
+  /** What this message carried in an older revision, retired by the edit. */
+  retired?: Contribution;
 }
 
 /** A deterministic reading of one message. Undefined: not mine, try the next. */
@@ -84,13 +86,13 @@ function pickAck(pending: Ack[], replyTo: string | undefined): Ack | 'ambiguous'
   return pending.length === 1 ? pending[0] : 'ambiguous';
 }
 
-export type AckResolver = (w: Work, ack: Ack, author: Participant, messageId: string, confirmed: boolean) => Promise<void>;
+export type AckResolver = (w: Work, ack: Ack, author: Participant, record: ConversationMessageRecord, confirmed: boolean) => Promise<void>;
 
 /** How each kind of acknowledgement is resolved. Later modules add theirs. */
 export const ackResolvers: Record<string, AckResolver> = {
-  contribution: async (w, ack, author, messageId, confirmed) => {
-    if (confirmed) await confirmContribution(w, ack, author, messageId);
-    else await declineContribution(w, ack, author, messageId);
+  contribution: async (w, ack, author, record, confirmed) => {
+    if (confirmed) await confirmContribution(w, ack, author, record.messageId);
+    else await declineContribution(w, ack, author, record.messageId);
   },
 };
 
@@ -127,12 +129,13 @@ const acknowledgements: InboundHandler = async ({ w, record, author, command }) 
   }
   const resolve = ackResolvers[ack.kind];
   if (!resolve) return undefined;
-  await resolve(w, ack, author, record.messageId, confirmed);
+  await resolve(w, ack, author, record, confirmed);
   return { outcome: confirmed ? `confirmed_${ack.kind}` : `declined_${ack.kind}` };
 };
 
 /** Edits and deletions of a message that carried a contribution. */
-const revisions: InboundHandler = async ({ w, record, author }) => {
+const revisions: InboundHandler = async (ctx) => {
+  const { w, record, author } = ctx;
   if (record.kind === 'deleted') {
     const withdrawn = await withdrawByMessage(w, record.messageId, author);
     return { outcome: withdrawn ? 'withdrawn' : 'deleted_without_contribution' };
@@ -142,6 +145,7 @@ const revisions: InboundHandler = async ({ w, record, author }) => {
   // first, then the new text is read like any other message.
   const previous = await supersedeByMessage(w, record.messageId);
   if (previous) {
+    ctx.retired = previous;
     w.bump();
     await w.event('contribution_superseded', previous.participantPrincipal, { contributionId: previous.id, messageId: record.messageId, revision: record.revision });
   }
@@ -154,6 +158,15 @@ const handlers: InboundHandler[] = [revisions, commands, acknowledgements];
 
 export function registerInboundHandler(handler: InboundHandler): void {
   if (!handlers.includes(handler)) handlers.push(handler);
+}
+
+export type AfterInbound = (w: Work) => Promise<void>;
+const afterInbound: AfterInbound[] = [];
+
+/** Runs after every message that was read, in the same unit of work: the
+ *  place where the engine checks whether something is now decided. */
+export function registerAfterInbound(hook: AfterInbound): void {
+  if (!afterInbound.includes(hook)) afterInbound.push(hook);
 }
 
 async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promise<Participant | undefined> {
@@ -213,6 +226,8 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
     else if (live && readable) result = { outcome: 'free_text', modelTurn: true };
     else result = { outcome: 'ignored' };
   }
+  for (const hook of afterInbound) await hook(w);
+  if (w.f.phase === 'aborted' || w.f.phase === 'closed') result = { ...result, ended: true };
   await store.setInboundOutcome(w.tx, w.f.id, record.eventId, result.outcome);
   // Not a state change: the cursor moves without bumping the version.
   await w.tx.query('UPDATE facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);

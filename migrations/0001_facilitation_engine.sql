@@ -253,6 +253,8 @@ CREATE TRIGGER facilitation_events_no_update
 -- Every channel send is recorded here before the call.
 CREATE TABLE facilitation_outbox (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Delivery order: messages of one facilitation go out as they were queued.
+  seq                    bigserial NOT NULL,
   facilitation_id        uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
   idempotency_key        text NOT NULL UNIQUE,
   purpose                text NOT NULL,
@@ -277,7 +279,7 @@ CREATE TABLE facilitation_outbox (
   sent_at                timestamptz,
   CHECK (target_kind = 'group' OR target_principal IS NOT NULL)
 );
-CREATE INDEX facilitation_outbox_pending ON facilitation_outbox (facilitation_id, created_at)
+CREATE INDEX facilitation_outbox_pending ON facilitation_outbox (facilitation_id, seq)
   WHERE status IN ('pending', 'sending');
 
 -- Inbound ledger: an event is processed once, whatever the kernel redelivers.
