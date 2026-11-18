@@ -27,7 +27,7 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 | What | Version |
 |---|---|
-| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0. With 1.56.0 the engine asks the kernel whether a subscription still stands (`isSubscribed`); on 1.55 it infers it |
+| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0. The manifest says so (`compat.core: >=1.55.0 <2.0`), so the Hub does not offer the package to an older kernel. With 1.56.0 the engine asks the kernel whether a subscription still stands (`isSubscribed`); on 1.55 it infers it |
 | Model of the facilitator | Sonnet-class or stronger (see "Which model") |
 | Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
 | Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |

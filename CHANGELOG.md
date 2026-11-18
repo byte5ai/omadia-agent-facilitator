@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.1
+
+1.0.0 was withdrawn from the Hub; install 1.0.1 instead. Nothing changed in
+the engine.
+
+### Fixed
+
+- `compat.core` is `>=1.55.0 <2.0`. 1.0.0 declared `>=1.0`, which offered the
+  package to kernels without native facilitators, where it would have replaced
+  a working 0.7.x. The range is compared against the host's
+  `@omadia/plugin-api` version: 1.55.0 is the first that can run the engine,
+  and what 1.56.0 adds (`isSubscribed`) is feature-detected.
+
+### Added
+
+- A packaging test builds the real zip and runs every entry through a mirror
+  of the kernel's zip ingest rules (extension allowlist, declaration files,
+  the `ui/` and `appPackage/` exceptions, names without an extension,
+  symlinks, escaping paths), and compares the mirror with the kernel source
+  when a checkout is next to this repo. The 1.0.0 zip already passed; the
+  test keeps it that way.
+
 ## 1.0.0
 
 The plugin becomes the facilitation engine for native facilitators
