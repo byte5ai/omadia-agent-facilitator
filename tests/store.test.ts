@@ -172,7 +172,7 @@ test('the protocol is append-only and goes away with its facilitation', { skip: 
 
 test('an inbound event is claimed once', { skip: PG_SKIP }, async () => {
   const f = await store.createFacilitation(db.pool, newFacilitation('conv-inbound'));
-  const row = { facilitationId: f.id, eventId: 'e1', messageId: 'm1', revision: 0, kind: 'created', authorPrincipal: 'anna', outcome: 'processing', processedAt: T0 };
+  const row = { facilitationId: f.id, eventId: 'e1', messageId: 'm1', revision: 0, kind: 'created', authorPrincipal: 'anna', occurredAt: T0, outcome: 'processing', processedAt: T0 };
   assert.ok(await store.claimInbound(db.pool, row));
   assert.equal(await store.claimInbound(db.pool, row), undefined);
 });

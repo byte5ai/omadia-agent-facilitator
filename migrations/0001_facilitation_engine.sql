@@ -293,11 +293,19 @@ CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_outbox_pending ON plg_om
 CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_inbound (
   facilitation_id  uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   event_id         text NOT NULL,
+  -- The order in which events were first seen; the cursor never moves back.
+  seq              bigserial NOT NULL,
   message_id       text NOT NULL,
   revision         integer NOT NULL,
   kind             text NOT NULL,
   author_principal text NOT NULL,
+  -- When the platform says it happened (for a 'created' event: when the
+  -- message was written, which an edit does not change).
+  occurred_at      timestamptz NOT NULL,
+  -- 'failed' is retried up to a bound, then 'gave_up'.
   outcome          text NOT NULL,
+  attempts         integer NOT NULL DEFAULT 0,
+  last_error       text,
   processed_at     timestamptz NOT NULL,
   PRIMARY KEY (facilitation_id, event_id)
 );

@@ -24,6 +24,8 @@ export interface EngineHooks {
   beforeChannelCall?(row: OutboxRow): void | Promise<void>;
   /** After the channel call returned, before the outcome is recorded. */
   afterChannelCall?(row: OutboxRow): void | Promise<void>;
+  /** Inside the unit of work of an inbound message, before it is read. */
+  beforeInbound?(record: { eventId: string; text?: string }): void | Promise<void>;
   /** After the result was delivered, before the close is committed. */
   beforeClose?(): void | Promise<void>;
   /** After a due job was leased, before it runs under the facilitation's lock. */

@@ -89,3 +89,54 @@ test('review 3: catch-up after downtime processes what arrived meanwhile, once',
   assert.equal((await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid').length, 2);
   assert.equal(h.kernel.groupPosts(conv).filter((p) => p.text.startsWith('Result for')).length, 1);
 });
+
+test('review 8: a message that fails to process is retried and not skipped; the cursor waits for it', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('re-retry', [ANNA, BERT]);
+  const f = await startActive(h, conv, VOTE);
+  let failures = 0;
+  h.hooks.beforeInbound = (record) => {
+    if (record.text === 'A' && failures < 2) {
+      failures += 1;
+      throw new Error('database hiccup');
+    }
+  };
+  try {
+    const lost = await say(conv, 'anna', 'A'); // fails
+    const fine = await say(conv, 'bert', 'B'); // succeeds
+    assert.equal((await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid').length, 1);
+    assert.notEqual((await h.facilitation(conv)).inboundCursor, fine.eventId, 'the cursor does not jump over the failed message');
+    await h.tick(); // second failure
+    await h.tick(); // third attempt succeeds
+    const votes = (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid');
+    assert.deepEqual(votes.map((c) => c.participantPrincipal).sort(), ['user:anna', 'user:bert'], "Anna's vote was not lost");
+    assert.equal(votes.find((c) => c.participantPrincipal === 'user:anna')?.sourceEventId, lost.eventId);
+    await h.tick();
+    assert.equal((await h.facilitation(conv)).inboundCursor, fine.eventId, 'once it is through, the cursor is at the head');
+    assert.equal(h.kernel.groupPosts(conv).filter((p) => p.text.includes('could not be processed')).length, 0);
+  } finally {
+    delete h.hooks.beforeInbound;
+  }
+});
+
+test('review 8: a message that keeps failing is given up after a bound, and the group is told once', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('re-giveup', [ANNA, BERT]);
+  const f = await startActive(h, conv, VOTE);
+  h.hooks.beforeInbound = (record) => {
+    if (record.text === 'poison') throw new Error('cannot be processed');
+  };
+  try {
+    await say(conv, 'anna', 'poison');
+    for (let i = 0; i < 5; i += 1) await h.tick();
+    const notices = h.kernel.groupPosts(conv).filter((p) => p.text.startsWith('One message here could not be processed'));
+    assert.equal(notices.length, 1);
+    const ledger = await h.db.pool.query<{ outcome: string; attempts: number }>('SELECT outcome, attempts FROM plg_omadia_agent_facilitator_inbound WHERE facilitation_id = $1 AND message_id IN (SELECT message_id FROM plg_omadia_agent_facilitator_inbound WHERE outcome = $2)', [f.id, 'gave_up']);
+    assert.deepEqual(ledger.rows.map((r) => [r.outcome, r.attempts]), [['gave_up', 3]]);
+    // Life goes on after it.
+    await say(conv, 'anna', 'A');
+    const done = await say(conv, 'bert', 'A');
+    assert.equal((await h.facilitation(conv)).phase, 'closed');
+    assert.equal((await h.facilitation(conv)).inboundCursor, done.eventId);
+  } finally {
+    delete h.hooks.beforeInbound;
+  }
+});

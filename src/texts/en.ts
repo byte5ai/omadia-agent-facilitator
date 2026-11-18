@@ -323,6 +323,7 @@ export const en = {
   },
   abortResultUndelivered: (error: string): string => `the result could not be posted to the group (${error})`,
   resultUndeliveredReport: (result: string): string => `I could not post the result in the group. This is what was reached:\n\n${result}`,
+  messageUnprocessed: (): string => 'One message here could not be processed because of a technical problem. If you were waiting for me to record something, please send it again.',
   abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
   abortOperator: (reason: string): string => `an operator ended it (${reason})`,
   notVisible: (): string => 'You are not a participant of this facilitation, so its protocol is not available to you.',

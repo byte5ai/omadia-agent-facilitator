@@ -12,7 +12,7 @@ import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import * as store from '../db/store.js';
 import { principalKey } from '../kernel.js';
-import type { Ack, Contribution, Participant } from '../model.js';
+import type { Ack, Contribution, InboundRow, Participant } from '../model.js';
 import { texts } from '../texts/index.js';
 import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
@@ -233,24 +233,21 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
 
 /** One stored event, inside the facilitation's unit of work. */
 export async function handleInbound(w: Work, record: ConversationMessageRecord): Promise<InboundResult> {
-  const claimed = await store.claimInbound(w.tx, {
-    facilitationId: w.f.id,
-    eventId: record.eventId,
-    messageId: record.messageId,
-    revision: record.revision,
-    kind: record.kind,
-    authorPrincipal: principalKey(record.author),
-    outcome: 'processing',
-    processedAt: w.now,
-  });
-  if (!claimed) return { outcome: 'duplicate' };
+  const claimed = await store.claimInbound(w.tx, ledgerRow(w.f.id, record, w.now));
+  if (!claimed) {
+    // Dealt with before. The cursor may still have to catch up to it (it
+    // waited for an earlier message that has been retried since).
+    await store.advanceCursor(w.tx, w.f.id, record.eventId);
+    return { outcome: 'duplicate' };
+  }
+  await w.engine.deps.hooks?.beforeInbound?.(record);
 
   // A message from before this facilitation existed is not its to read:
   // not as a ballot, not as a command, not as an answer to anything. (The
   // conversation may have been read for an earlier facilitation.)
   if (Date.parse(record.occurredAt) < w.f.createdAt.getTime()) {
     await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'before_facilitation');
-    await w.tx.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);
+    await store.advanceCursor(w.tx, w.f.id, record.eventId);
     return { outcome: 'before_facilitation' };
   }
 
@@ -272,14 +269,55 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   if (w.f.phase === 'aborted' || w.f.phase === 'closed') result = { ...result, ended: true };
   await store.setInboundOutcome(w.tx, w.f.id, record.eventId, result.outcome);
   // Not a state change: the cursor moves without bumping the version.
-  await w.tx.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);
+  await store.advanceCursor(w.tx, w.f.id, record.eventId);
   return result;
 }
 
-/** Route one kernel record to its facilitation. */
+const ledgerRow = (facilitationId: string, record: ConversationMessageRecord, now: Date): InboundRow => ({
+  facilitationId,
+  eventId: record.eventId,
+  messageId: record.messageId,
+  revision: record.revision,
+  kind: record.kind,
+  authorPrincipal: principalKey(record.author),
+  occurredAt: new Date(record.occurredAt),
+  outcome: 'processing',
+  processedAt: now,
+});
+
+/**
+ * Route one kernel record to its facilitation.
+ *
+ * A record that cannot be processed is not skipped: the failure is written
+ * down, the cursor stays before it, and the next replay tries it again. After
+ * a bound it is given up, and the group is told once that a message could not
+ * be processed, so nobody waits for an echo that will not come.
+ */
 export async function processRecord(engine: EngineCore, agentSlug: string, record: ConversationMessageRecord): Promise<{ facilitationId: string; result: InboundResult } | undefined> {
   const f = await store.findRoutableByConversation(engine.pool(), record.channelType, record.conversationId);
   if (!f || f.facilitatorAgent !== agentSlug) return undefined;
-  const result = await engine.work(f.id, (w) => handleInbound(w, record));
-  return { facilitationId: f.id, result };
+  try {
+    const result = await engine.work(f.id, (w) => handleInbound(w, record));
+    return { facilitationId: f.id, result };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const failure = await store.recordInboundFailure(engine.pool(), ledgerRow(f.id, record, engine.now()), message);
+    engine.log(`facilitation ${f.id}: message ${record.messageId} could not be processed (attempt ${String(failure.attempts)}): ${message}`);
+    if (failure.gaveUp) await tellUnprocessed(engine, f.id, record);
+    return { facilitationId: f.id, result: { outcome: failure.gaveUp ? 'gave_up' : 'failed' } };
+  }
+}
+
+async function tellUnprocessed(engine: EngineCore, facilitationId: string, record: ConversationMessageRecord): Promise<void> {
+  try {
+    await engine.work(facilitationId, async (w) => {
+      await w.event('message_unprocessed', 'engine', { messageId: record.messageId, eventId: record.eventId });
+      await store.advanceCursor(w.tx, w.f.id, record.eventId);
+      if (w.f.settings.unprocessedNoticeSent === true || (w.f.phase !== 'active' && w.f.phase !== 'configuring')) return;
+      await w.tx.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"unprocessedNoticeSent": true}'::jsonb WHERE id = $1`, [w.f.id]);
+      w.post({ purpose: 'unprocessed_notice', key: 'once', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).messageUnprocessed() });
+    });
+  } catch (err) {
+    engine.log(`facilitation ${facilitationId}: could not tell the group about an unprocessed message: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }

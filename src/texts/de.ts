@@ -277,6 +277,7 @@ export const de: Texts = {
   },
   abortResultUndelivered: (error) => `das Ergebnis konnte nicht in die Gruppe gepostet werden (${error})`,
   resultUndeliveredReport: (result) => `Ich konnte das Ergebnis nicht in die Gruppe posten. Das wurde erreicht:\n\n${result}`,
+  messageUnprocessed: () => 'Eine Nachricht hier konnte wegen eines technischen Problems nicht verarbeitet werden. Falls du darauf wartest, dass ich etwas erfasse, schick es bitte noch einmal.',
   abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
   abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
   notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',

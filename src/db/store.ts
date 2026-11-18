@@ -289,12 +289,60 @@ export const listEvents = (q: Queryable, facilitationId: string, kinds?: readonl
 
 // ── inbound ledger ──────────────────────────────────────────────────────────
 
-/** Claim an event for processing. Undefined when it was processed before. */
-export const claimInbound = (q: Queryable, values: InboundRow): Promise<InboundRow | undefined> =>
-  insertIfAbsent<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { ...values }, '(facilitation_id, event_id)');
+/** How often a message that fails to process is tried before it is given up. */
+export const MAX_INBOUND_ATTEMPTS = 3;
+
+/** Claim an event for processing. Undefined when it was processed before, or
+ *  given up. An event that failed earlier is claimed again for its retry. */
+export async function claimInbound(q: Queryable, values: InboundRow): Promise<InboundRow | undefined> {
+  const fresh = await insertIfAbsent<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { ...values }, '(facilitation_id, event_id)');
+  if (fresh) return fresh;
+  return one<InboundRow>(
+    q,
+    `UPDATE plg_omadia_agent_facilitator_inbound SET outcome = 'processing', processed_at = $3
+      WHERE facilitation_id = $1 AND event_id = $2 AND outcome = 'failed'
+      RETURNING *`,
+    [values.facilitationId, values.eventId, values.processedAt],
+  );
+}
 
 export const setInboundOutcome = (q: Queryable, facilitationId: string, eventId: string, outcome: string): Promise<unknown> =>
   update<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { facilitationId, eventId }, { outcome });
+
+/** Write down that an event could not be processed. Returns the attempts so
+ *  far and whether it is given up now. */
+export async function recordInboundFailure(q: Queryable, values: InboundRow, error: string): Promise<{ attempts: number; gaveUp: boolean }> {
+  const row = await one<{ attempts: number; outcome: string }>(
+    q,
+    `INSERT INTO plg_omadia_agent_facilitator_inbound
+       (facilitation_id, event_id, message_id, revision, kind, author_principal, occurred_at, outcome, attempts, last_error, processed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN 1 >= $10 THEN 'gave_up' ELSE 'failed' END, 1, $8, $9)
+     ON CONFLICT (facilitation_id, event_id) DO UPDATE
+       SET attempts = plg_omadia_agent_facilitator_inbound.attempts + 1,
+           last_error = EXCLUDED.last_error,
+           processed_at = EXCLUDED.processed_at,
+           outcome = CASE WHEN plg_omadia_agent_facilitator_inbound.attempts + 1 >= $10 THEN 'gave_up' ELSE 'failed' END
+       WHERE plg_omadia_agent_facilitator_inbound.outcome IN ('failed', 'processing')
+     RETURNING attempts, outcome`,
+    [values.facilitationId, values.eventId, values.messageId, values.revision, values.kind, values.authorPrincipal, values.occurredAt, error.slice(0, 500), values.processedAt, MAX_INBOUND_ATTEMPTS],
+  );
+  return { attempts: row?.attempts ?? 0, gaveUp: row?.outcome === 'gave_up' };
+}
+
+/**
+ * Move the replay cursor to an event that was dealt with. It moves only over
+ * contiguous successes: never while an earlier event still waits for its
+ * retry, and never backwards (a redelivered old event leaves it alone).
+ */
+export const advanceCursor = (q: Queryable, facilitationId: string, eventId: string): Promise<unknown> =>
+  q.query(
+    `UPDATE plg_omadia_agent_facilitator_facilitations f SET inbound_cursor = $2
+      WHERE f.id = $1
+        AND NOT EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_inbound i WHERE i.facilitation_id = $1 AND i.outcome = 'failed')
+        AND coalesce((SELECT seq FROM plg_omadia_agent_facilitator_inbound i WHERE i.facilitation_id = $1 AND i.event_id = f.inbound_cursor), 0)
+            <= coalesce((SELECT seq FROM plg_omadia_agent_facilitator_inbound i WHERE i.facilitation_id = $1 AND i.event_id = $2), 0)`,
+    [facilitationId, eventId],
+  );
 
 // ── the rest: plain rows ────────────────────────────────────────────────────
 

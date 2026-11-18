@@ -81,6 +81,8 @@ export interface FacilitationSettings {
   followupGrant?: 'active' | 'revoked';
   /** This facilitation no longer needs the conversation to be read. */
   released?: boolean;
+  /** The group was told that a message could not be processed. */
+  unprocessedNoticeSent?: boolean;
 }
 
 export interface Facilitation {
@@ -302,7 +304,10 @@ export interface InboundRow {
   revision: number;
   kind: string;
   authorPrincipal: string;
+  occurredAt: Date;
   outcome: string;
+  attempts?: number;
+  lastError?: string | null;
   processedAt: Date;
 }
 
