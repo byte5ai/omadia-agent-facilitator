@@ -41,6 +41,26 @@ export async function storedMessage(engine: FacilitationEngine, ctx: ResolvedCon
   return record;
 }
 
+/** Open a facilitation and say what the group can see now. Opened means the
+ *  opening message is out; what this call queued is looked at, not assumed. */
+async function openAndReport(engine: FacilitationEngine, facilitationId: string): Promise<{ posted: boolean; text: string }> {
+  await openFacilitation(engine.core, facilitationId);
+  const handshake = (
+    await engine.core.pool().query<{ status: string; last_error: string | null }>(
+      `SELECT status, last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'handshake' ORDER BY seq DESC LIMIT 1`,
+      [facilitationId],
+    )
+  ).rows[0];
+  if (!handshake) throw new Error('the opening message was not queued; nothing was posted');
+  if (handshake.status !== 'sent') {
+    return {
+      posted: false,
+      text: `The opening message was NOT posted in the group yet (${handshake.last_error ?? handshake.status}). It is tried again automatically. Do not tell the group that the facilitation is open or running; say that posting does not work right now.`,
+    };
+  }
+  return { posted: true, text: `The opening message with goal, rules and participants was posted in the group. Do not repeat it. Answer ${'[silent]'} now unless something else needs saying.` };
+}
+
 const METHODS: readonly MethodId[] = ['ranked', 'single', 'approval', 'consent', 'assignment'];
 
 export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
@@ -50,7 +70,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_start',
         description:
-          'Set up a facilitation in THIS group conversation when a person here asks for it. That person becomes the initiator (say so in the group). Creates it in the phase "configuring"; calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open. Refuses when the facilitator has no identity of its own here or cannot read every message.',
+          'Set up a facilitation in THIS group conversation when a person here asks for it. That person becomes the initiator (say so in the group). Creates it in the phase "configuring": nothing is posted and nothing is recorded until it is opened. Calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open; or pass open: true when the request already fixed everything. Refuses when the facilitator has no identity of its own here or cannot read every message.',
         properties: {
           goal: { type: 'string', description: 'What the group wants to reach.' },
           definitionOfDone: { type: 'string', description: 'When the facilitation is done, in the words agreed with the group.' },
@@ -80,6 +100,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           followUp: { type: 'boolean', description: 'The group agreed that owners are reminded of their action items before the due date.' },
           followUpStatusAt: { type: 'string', description: 'ISO 8601 with offset: when the status of the action items is posted to the group.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
+          open: { type: 'boolean', description: 'Open in the same call. Only when the request already fixed goal, definition of done and (for a vote) method and options, so the group has nothing left to agree on. Otherwise leave it out, agree the setup with the group and call facilitation_open.' },
         },
         required: ['goal', 'definitionOfDone'],
       },
@@ -130,11 +151,17 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         });
         engine.ensureAttached(ctx.agentSlug);
         const people = result.participants.map((p) => p.displayName).join(', ') || 'not known yet';
+        const notes = result.notes.map((n) => `Tell the group: ${n}`);
+        const what = result.created ? 'Facilitation created' : 'Setup updated';
+        if (args['open'] === true) {
+          const opened = await openAndReport(engine, result.facilitation.id);
+          return [opened.posted ? `${what} and opened.` : `${what}.`, `Participants: ${people}.`, ...notes, opened.text].join('\n');
+        }
         return [
-          result.created ? 'Facilitation created, phase: configuring.' : 'Setup updated, phase: configuring.',
+          `${what}, phase: configuring. It is NOT open: nothing was posted in the group and nothing is recorded yet.`,
           `Participants: ${people}.`,
-          ...result.notes.map((n) => `Tell the group: ${n}`),
-          'Agree the setup with the group. Then call facilitation_open: the engine posts the handshake itself.',
+          ...notes,
+          'Do not tell the group that it started or is running. Either ask the group to confirm the setup and call facilitation_open once they did, or, if the request already fixed everything, call facilitation_open now.',
         ].join('\n');
       },
     ),
@@ -148,20 +175,8 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
-        await openFacilitation(engine.core, f.id);
-        // Opened means: the group can see it. What this call queued is looked
-        // at, not assumed.
-        const handshake = (
-          await engine.core.pool().query<{ status: string; last_error: string | null }>(
-            `SELECT status, last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'handshake' ORDER BY seq DESC LIMIT 1`,
-            [f.id],
-          )
-        ).rows[0];
-        if (!handshake) throw new Error('the opening message was not queued; nothing was posted');
-        if (handshake.status !== 'sent') {
-          return `The opening message was NOT posted in the group yet (${handshake.last_error ?? handshake.status}). It is tried again automatically. Do not tell the group that the facilitation is open or running; say that posting does not work right now.`;
-        }
-        return `Opened. The handshake was posted in the group. Answer ${'[silent]'} now unless something else needs saying.`;
+        const opened = await openAndReport(engine, f.id);
+        return opened.posted ? `Opened. ${opened.text}` : opened.text;
       },
     ),
 
