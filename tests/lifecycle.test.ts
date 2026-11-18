@@ -210,3 +210,17 @@ test('a second engine in the same process shares the hooks without doubling them
     await other.close();
   }
 });
+
+test('review: a bot that is added to the conversation never becomes a participant', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('lc-bot-joins', [ANNA, BERT]);
+  const f = await startActive(h, conv, { method: 'single', options: ['Thai', 'Pizza'] });
+  const before = h.kernel.groupPosts(conv).length;
+  h.kernel.joinBot(conv, '28:other-bot', 'Jonas');
+  await h.settle();
+  assert.deepEqual((await store.listParticipants(h.db.pool, f.id)).map((p) => p.principalId).sort(), ['user:anna', 'user:bert']);
+  assert.equal(h.kernel.groupPosts(conv).length, before, 'and it is not welcomed');
+  await h.kernel.say(conv, 'anna', 'A');
+  await h.kernel.say(conv, 'bert', 'A');
+  await h.settle();
+  assert.equal((await h.facilitation(conv)).phase, 'closed', 'nobody waits for a bot to vote');
+});

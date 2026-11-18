@@ -17,11 +17,18 @@ export function onMembershipChange(hook: MembershipHook): void {
   if (!hooks.includes(hook)) hooks.push(hook);
 }
 
+/** Channels mark bots by a flag or by their user namespace ('teams-bot',
+ *  Teams ids starting with '28:'). */
+export const isBot = (member: { kind: string; id: string; isBot?: boolean }): boolean =>
+  member.isBot === true || /bot/i.test(member.kind) || member.id.startsWith('28:');
+
 async function applyMembership(w: Work, event: ConversationMembershipEvent): Promise<void> {
   const t = texts(w.f.language);
   const key = `${event.kind}:${event.occurredAt}`;
   let changed = false;
   for (const raw of event.members) {
+    // A bot is never a participant: nobody waits for it to contribute.
+    if (isBot(raw)) continue;
     const member = { ...raw, id: principalKey(raw) };
     const existing = await store.getParticipant(w.tx, w.f.id, member.id);
     if (event.kind === 'members_added') {

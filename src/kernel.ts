@@ -36,6 +36,8 @@ export interface ChannelUserRef {
   displayName?: string;
   email?: string;
   principalId?: string;
+  /** Set by channels that can tell: this member is a bot, not a person. */
+  isBot?: boolean;
 }
 
 /**

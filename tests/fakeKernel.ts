@@ -292,6 +292,11 @@ export class FakeKernel {
     this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-aad', ...user }] });
   }
 
+  /** Another bot is added to the conversation (a second facilitator, an assistant). */
+  joinBot(conversationId: string, id: string, displayName: string): void {
+    this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-bot', id, displayName, isBot: true }] });
+  }
+
   leave(conversationId: string, userId: string): void {
     const user = this.user(conversationId, userId);
     this.members.set(conversationId, (this.members.get(conversationId) ?? []).filter((m) => m.id !== userId));
