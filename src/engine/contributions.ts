@@ -9,6 +9,7 @@ import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
+import { principalKey } from '../kernel.js';
 import type { Ack, Contribution, ContributionKind, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { Work } from './core.js';
@@ -34,7 +35,7 @@ export async function authorOf(w: Work, record: ConversationMessageRecord): Prom
   if (record.quoted === true || record.forwarded === true) {
     throw new Refusal('not_own_words', 'That message quotes or forwards somebody else. A person contributes only in their own message.');
   }
-  const participant = await store.getParticipant(w.tx, w.f.id, record.author.id);
+  const participant = await store.getParticipant(w.tx, w.f.id, principalKey(record.author));
   if (!participant || participant.status !== 'active') {
     throw new Refusal('not_participant', 'The author of that message is not a participant of this facilitation.');
   }

@@ -31,7 +31,7 @@ test('authorship is copied from the kernel record: author, revision, time, event
   const answer = await h.tool('facilitation_record_contribution', { messageId: said.messageId, kind: 'position', summary: 'prefers the old town', participant: 'anna', author: 'Anna' }, { conversation: conv, caller: 'anna' });
   assert.match(answer, /^Recorded for Bert as unconfirmed/);
   const [c] = await contributionsOf(conv);
-  assert.equal(c?.participantPrincipal, 'bert');
+  assert.equal(c?.participantPrincipal, 'user:bert');
   assert.equal(c?.sourceMessageId, said.messageId);
   assert.equal(c?.sourceRevision, 0);
   assert.equal(c?.sourceEventId, said.eventId);
@@ -47,7 +47,7 @@ test('a contribution read from free text counts only after its author confirmed 
   await record(conv, said.messageId);
   const echo = h.kernel.groupPosts(conv).at(-1);
   assert.match(echo?.text ?? '', /^Bert, I read your message as: prefers the old town\. Reply "yes"/);
-  assert.deepEqual(echo?.mentions, [{ user: 'bert', text: 'Bert' }]);
+  assert.deepEqual(echo?.mentions, [{ user: 'user:bert', text: 'Bert' }]);
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: nobody yet/);
 
   // Somebody else's "yes" confirms nothing.
@@ -82,7 +82,7 @@ test('a reaction on the echo confirms; "no" withdraws the reading', { skip: PG_S
   await h.kernel.say(conv, 'bert', 'no');
   await h.settle();
   const all = await contributionsOf(conv);
-  assert.equal(all.find((c) => c.participantPrincipal === 'bert')?.status, 'withdrawn');
+  assert.equal(all.find((c) => c.participantPrincipal === 'user:bert')?.status, 'withdrawn');
   assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /I did not record that/);
 });
 
@@ -125,7 +125,7 @@ test('"Anna agrees too" from Bert records nothing for Anna', { skip: PG_SKIP }, 
   await h.settle();
   await record(conv, said.messageId, 'Anna agrees');
   const all = await contributionsOf(conv);
-  assert.deepEqual(all.map((c) => c.participantPrincipal), ['bert']);
+  assert.deepEqual(all.map((c) => c.participantPrincipal), ['user:bert']);
   // Anna cannot confirm what was recorded from Bert's message.
   await h.kernel.say(conv, 'anna', 'yes');
   await h.settle();

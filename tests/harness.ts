@@ -30,6 +30,10 @@ export interface Harness {
   tool(name: string, args: Record<string, unknown>, at: { agent?: string; conversation: string; caller?: string }): Promise<string>;
   /** Wait until everything in flight has settled. */
   settle(): Promise<void>;
+  /** One scheduler pass at the current time of the clock. */
+  tick(): Promise<void>;
+  /** A second replica on the same kernel and database. */
+  replica(): FacilitationEngine;
   /** A middleware restart: a new engine on the same kernel and database. */
   restart(): Promise<void>;
   facilitation(conversationId: string): Promise<Facilitation>;
@@ -65,6 +69,13 @@ export async function createHarness(opts: { config?: Partial<EngineConfig>; star
     },
     async settle() {
       await h.engine.idle();
+    },
+    async tick() {
+      await h.engine.tick();
+      await h.settle();
+    },
+    replica() {
+      return build();
     },
     async restart() {
       await h.engine.stop();

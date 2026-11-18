@@ -35,6 +35,21 @@ export interface ChannelUserRef {
   id: string;
   displayName?: string;
   email?: string;
+  principalId?: string;
+}
+
+/**
+ * The key a person has in the engine: the canonical principal.
+ *
+ * The kernel fills `record.author.principalId` as `user:<channel user id,
+ * lower-cased>` and states the caller of a tool call in the same form. Roster
+ * and membership events carry the channel-native id; the same rule turns it
+ * into the same key, so one person is one participant whichever way the
+ * kernel named them.
+ */
+export function principalKey(ref: { id: string; principalId?: string | undefined }): string {
+  if (ref.principalId) return ref.principalId;
+  return ref.id.includes(':') ? ref.id : `user:${ref.id.toLowerCase()}`;
 }
 
 /** Kernel `conversationEvents` (#330 B1): membership changes. Subscribe-only;

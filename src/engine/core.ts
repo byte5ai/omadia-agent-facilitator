@@ -15,7 +15,7 @@ import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { inTransaction, withFacilitationLock } from '../db/tx.js';
 import type { Kernel } from '../kernel.js';
-import type { DeliveryClass, Facilitation, OutboxPayload, OutboxRow, Phase } from '../model.js';
+import type { DeliveryClass, Facilitation, Job, OutboxPayload, OutboxRow, Phase } from '../model.js';
 import { dispatchOutbox } from './outbox.js';
 
 /** Test seams: a fault at a named point of a send. Never set in production. */
@@ -24,6 +24,8 @@ export interface EngineHooks {
   beforeChannelCall?(row: OutboxRow): void | Promise<void>;
   /** After the channel call returned, before the outcome is recorded. */
   afterChannelCall?(row: OutboxRow): void | Promise<void>;
+  /** After a due job was leased, before it runs under the facilitation's lock. */
+  beforeJob?(job: Job): void | Promise<void>;
 }
 
 export interface EngineDeps {

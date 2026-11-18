@@ -11,7 +11,8 @@ import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installDecisionMethods } from './decide.js';
 import { processRecord } from './inbound.js';
-import { releaseConversation } from './lifecycle.js';
+import { onOpened, releaseConversation } from './lifecycle.js';
+import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
 import { processMembership } from './membership.js';
 import { runFacilitatorTurn } from './turn.js';
 
@@ -28,6 +29,8 @@ export class FacilitationEngine {
   constructor(deps: EngineDeps) {
     this.core = new EngineCore(deps);
     installDecisionMethods(this.core);
+    installScheduler();
+    onOpened(scheduleDeadlineJobs);
   }
 
   /** Whether the engine can keep state at all. */
@@ -40,6 +43,11 @@ export class FacilitationEngine {
     this.stopped = false;
     if (!this.available()) return;
     this.attachMembership();
+    // What a previous process left undelivered is settled first.
+    const waiting = await this.core.pool().query<{ facilitation_id: string }>(
+      `SELECT DISTINCT facilitation_id FROM facilitation_outbox WHERE status IN ('pending', 'sending')`,
+    );
+    for (const row of waiting.rows) await this.core.flush(row.facilitation_id);
     for (const f of await store.listSubscribed(this.core.pool())) {
       this.attach(f.facilitatorAgent);
       await this.replay(f);
@@ -136,6 +144,22 @@ export class FacilitationEngine {
     void this.track(next).finally(() => {
       if (this.turnQueues.get(facilitationId) === next) this.turnQueues.delete(facilitationId);
     });
+  }
+
+  /** One scheduler pass: due jobs, delivery retries, and a catch-up read of
+   *  every moderated conversation in case a live delivery was lost. */
+  async tick(): Promise<void> {
+    if (this.stopped || !this.available()) return;
+    await this.track(
+      (async () => {
+        await tick(this.core);
+        for (const f of await store.listSubscribed(this.core.pool())) {
+          this.attach(f.facilitatorAgent);
+          await this.replay(f);
+        }
+      })(),
+    );
+    await this.idle();
   }
 
   /** Read everything the kernel stored after the facilitation's cursor. */

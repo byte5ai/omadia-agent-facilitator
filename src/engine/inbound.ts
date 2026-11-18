@@ -11,6 +11,7 @@
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import * as store from '../db/store.js';
+import { principalKey } from '../kernel.js';
 import type { Ack, Contribution, Participant } from '../model.js';
 import { texts } from '../texts/index.js';
 import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
@@ -170,13 +171,14 @@ export function registerAfterInbound(hook: AfterInbound): void {
 }
 
 async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promise<Participant | undefined> {
-  let author = await store.getParticipant(w.tx, w.f.id, record.author.id);
+  const key = principalKey(record.author);
+  let author = await store.getParticipant(w.tx, w.f.id, key);
   if (!author && w.f.settings.openRoster === true && (w.f.phase === 'configuring' || w.f.phase === 'active')) {
     author = await store.addParticipant(w.tx, {
       facilitationId: w.f.id,
-      principalId: record.author.id,
+      principalId: key,
       displayName: record.author.displayName ?? record.author.id,
-      canonicalPrincipal: record.author.principalId ?? null,
+      canonicalPrincipal: key,
       source: 'joined',
       joinedAt: w.now,
       changedAt: w.now,
@@ -184,17 +186,11 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
     });
     if (author) {
       w.bump();
-      await w.event('participant_joined', record.author.id, { by: 'first_message' });
+      await w.event('participant_joined', key, { by: 'first_message' });
     }
   }
   if (!author) return undefined;
-  // Learn the canonical principal, and with it who the initiator is.
-  if (record.author.principalId && author.canonicalPrincipal !== record.author.principalId) {
-    author = (await store.patchParticipant(w.tx, w.f.id, author.principalId, { canonicalPrincipal: record.author.principalId })) ?? author;
-  }
-  if (!w.f.initiatorParticipant && record.author.principalId === w.f.initiatorPrincipal) {
-    await w.patch({ initiatorParticipant: author.principalId });
-  }
+  if (!w.f.initiatorParticipant && key === w.f.initiatorPrincipal) await w.patch({ initiatorParticipant: key });
   return author.status === 'active' ? author : undefined;
 }
 
@@ -206,7 +202,7 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
     messageId: record.messageId,
     revision: record.revision,
     kind: record.kind,
-    authorPrincipal: record.author.id,
+    authorPrincipal: principalKey(record.author),
     outcome: 'processing',
     processedAt: w.now,
   });

@@ -62,6 +62,8 @@ export interface FacilitationSettings {
   facilitatorName?: string;
   /** The channel could not list every member: whoever writes joins. */
   openRoster?: boolean;
+  /** The group was told that not everybody can be reached privately. */
+  directNoticeSent?: boolean;
 }
 
 export interface Facilitation {

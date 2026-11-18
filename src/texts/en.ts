@@ -129,6 +129,14 @@ export const en = {
   abortOpenItems: (items: string): string => `the deadline passed with these still open: ${items}`,
   abortNothing: (): string => 'the deadline passed and the definition of done was not met',
 
+  reminderGroup: (open: number, deadline: string | undefined): string =>
+    `Reminder: ${open === 1 ? 'one contribution is' : `${String(open)} contributions are`} still open.${deadline ? ` Deadline: ${deadline}.` : ''} Ask "status" for the details.`,
+  reminderDirect: (name: string, goal: string, deadline: string | undefined): string =>
+    `Hello ${name}, your contribution to "${goal}" is still open.${deadline ? ` Deadline: ${deadline}.` : ''} Please answer in the group; I cannot take contributions here.`,
+  directUnreachable: (): string =>
+    'I cannot reach everybody privately here (my app is not installed for everyone). Reminders therefore stay in this group, without names.',
+  abortJobFailed: (): string => 'an internal step failed repeatedly and could not be completed',
+
   phase: {
     configuring: 'being set up',
     active: 'running',

@@ -11,6 +11,7 @@ import { DAY_MS } from '../clock.js';
 import { isValidTimezone } from '../config.js';
 import * as store from '../db/store.js';
 import { poolTransaction } from '../db/tx.js';
+import { principalKey } from '../kernel.js';
 import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
@@ -111,10 +112,7 @@ export interface ConfigureResult {
 const OWN_IDENTITY_REQUIRED =
   'This facilitator has no identity of its own on this channel. A facilitator never speaks through another bot, so it cannot start a facilitation here. An operator has to give it its own channel identity first.';
 
-function matchesCaller(member: RosterParticipant, caller: string): boolean {
-  const { id, email } = member.userRef;
-  return caller === id || caller === `user:${id}` || (email !== undefined && caller.toLowerCase() === email.toLowerCase());
-}
+const matchesCaller = (member: RosterParticipant, caller: string): boolean => principalKey(member.userRef) === caller;
 
 /** Create a facilitation in `configuring`, or adjust the one being set up. */
 export async function configureFacilitation(engine: EngineCore, input: ConfigureInput): Promise<ConfigureResult> {
@@ -207,7 +205,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         channelType: input.channelType,
         conversationId: input.conversationId,
         initiatorPrincipal: input.callerPrincipalId,
-        initiatorParticipant: initiator?.userRef.id ?? null,
+        initiatorParticipant: initiator ? principalKey(initiator.userRef) : null,
         goal: input.goal,
         format: input.format ?? 'custom',
         language: input.language ?? config.language,
@@ -239,7 +237,8 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       for (const member of members) {
         const added = await store.addParticipant(tx, {
           facilitationId: facilitation.id,
-          principalId: member.userRef.id,
+          principalId: principalKey(member.userRef),
+          canonicalPrincipal: principalKey(member.userRef),
           displayName: member.userRef.displayName ?? member.userRef.id,
           email: member.userRef.email ?? member.userPrincipalName ?? null,
           source: 'roster',
@@ -273,6 +272,12 @@ export function displayNameOf(participants: readonly Participant[], principalId:
 
 export const facilitatorName = (f: Facilitation): string => f.settings.facilitatorName ?? f.facilitatorAgent;
 
+const onOpen: Array<(w: Work) => Promise<void>> = [];
+/** Work that starts with the facilitation (its reminders and its deadline). */
+export function onOpened(hook: (w: Work) => Promise<void>): void {
+  if (!onOpen.includes(hook)) onOpen.push(hook);
+}
+
 /** configuring -> active: open the first step and post the handshake. */
 export async function openFacilitation(engine: EngineCore, facilitationId: string): Promise<Facilitation> {
   return engine.work(facilitationId, async (w) => {
@@ -299,6 +304,7 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
       }),
     });
     await w.event('opened', 'facilitator', { participants: participants.length });
+    for (const hook of onOpen) await hook(w);
     return f;
   });
 }

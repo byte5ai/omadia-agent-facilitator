@@ -154,7 +154,8 @@ export class FakeKernel {
     const base = {
       channelType: this.channelType,
       conversationId,
-      author: { kind: 'teams-aad', id: user.id, displayName: user.displayName, principalId: `user:${user.id}` },
+      // As the kernel does: channel-native id in original case, principal lower-cased.
+      author: { kind: 'teams-aad', id: user.id, displayName: user.displayName, principalId: `user:${user.id.toLowerCase()}` },
       tenantId: 'tenant-1',
       occurredAt: when,
       receivedAt: when,
@@ -238,7 +239,7 @@ export class FakeKernel {
 
   /** The tool call context the kernel states for a turn in a conversation. */
   context(agentSlug: string, conversationId: string, callerId: string, inboundEventId?: string) {
-    return { agentSlug, channelType: this.channelType, conversationId, callerPrincipalId: `user:${callerId}`, ...(inboundEventId ? { inboundEventId } : {}) };
+    return { agentSlug, channelType: this.channelType, conversationId, callerPrincipalId: `user:${callerId.toLowerCase()}`, ...(inboundEventId ? { inboundEventId } : {}) };
   }
 
   groupPosts(conversationId: string, as?: string): Post[] {

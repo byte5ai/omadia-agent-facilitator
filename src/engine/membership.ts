@@ -3,6 +3,7 @@
 // "missing". Both are announced. An initiator who leaves loses the role.
 
 import * as store from '../db/store.js';
+import { principalKey } from '../kernel.js';
 import type { ConversationMembershipEvent } from '../kernel.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
@@ -20,7 +21,8 @@ async function applyMembership(w: Work, event: ConversationMembershipEvent): Pro
   const t = texts(w.f.language);
   const key = `${event.kind}:${event.occurredAt}`;
   let changed = false;
-  for (const member of event.members) {
+  for (const raw of event.members) {
+    const member = { ...raw, id: principalKey(raw) };
     const existing = await store.getParticipant(w.tx, w.f.id, member.id);
     if (event.kind === 'members_added') {
       if (existing?.status === 'active') continue;
@@ -31,6 +33,7 @@ async function applyMembership(w: Work, event: ConversationMembershipEvent): Pro
         await store.addParticipant(w.tx, {
           facilitationId: w.f.id,
           principalId: member.id,
+          canonicalPrincipal: member.id,
           displayName: name,
           email: member.email ?? null,
           source: 'joined',

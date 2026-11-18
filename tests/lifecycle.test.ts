@@ -22,7 +22,7 @@ test('start creates a configuring facilitation with the roster; open posts the h
   let f = await h.facilitation(conv);
   assert.equal(f.phase, 'configuring');
   assert.equal(f.initiatorPrincipal, 'user:bert', 'the initiator is the kernel-stated caller');
-  assert.equal(f.initiatorParticipant, 'bert');
+  assert.equal(f.initiatorParticipant, 'user:bert');
   assert.equal(h.kernel.groupPosts(conv).length, 0, 'nothing is posted before the group agreed');
 
   assert.match(await h.tool('facilitation_open', {}, { conversation: conv }), /^Opened/);
@@ -158,13 +158,13 @@ test('membership: joining is welcomed and counted, leaving keeps contributions, 
   await h.settle();
   assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /Welcome, Dave/);
   let people = await store.listParticipants(h.db.pool, f.id);
-  assert.deepEqual(people.find((p) => p.principalId === 'dave')?.source, 'joined');
+  assert.deepEqual(people.find((p) => p.principalId === 'user:dave')?.source, 'joined');
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Anna, Bert, Cara, Dave/);
 
   h.kernel.leave(conv, 'cara');
   await h.settle();
   people = await store.listParticipants(h.db.pool, f.id);
-  assert.equal(people.find((p) => p.principalId === 'cara')?.status, 'left');
+  assert.equal(people.find((p) => p.principalId === 'user:cara')?.status, 'left');
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Anna, Bert, Dave$/m);
 
   h.kernel.leave(conv, 'anna');
@@ -183,5 +183,5 @@ test('an unlisted roster is said out loud and whoever writes joins', { skip: PG_
   await h.kernel.say(conv, 'bert', 'hi, I am here too');
   await h.settle();
   const f = await h.facilitation(conv);
-  assert.deepEqual((await store.listParticipants(h.db.pool, f.id)).map((p) => p.principalId).sort(), ['anna', 'bert']);
+  assert.deepEqual((await store.listParticipants(h.db.pool, f.id)).map((p) => p.principalId).sort(), ['user:anna', 'user:bert']);
 });

@@ -43,6 +43,9 @@ export interface FacilitatorHandle {
   close(): Promise<void>;
 }
 
+const TICK_INTERVAL_MS = 30_000;
+const TICK_TIMEOUT_MS = 120_000;
+
 export const NO_DATABASE_REASON =
   'The facilitation engine has no database: grant this plugin its SQL permission and run the middleware with Postgres.';
 
@@ -90,6 +93,13 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   const engine = new FacilitationEngine({ kernel, config, clock: systemClock, log });
   for (const tool of buildTools(engine)) disposers.push(ctx.tools.register(tool.spec, tool.handler));
   if (info.available) {
+    // The scheduler: reminders, deadlines, windows, delivery retries. The
+    // interval bounds how late a reminder can be; leases keep replicas apart.
+    disposers.push(
+      ctx.jobs.register({ name: 'facilitation-tick', schedule: { intervalMs: TICK_INTERVAL_MS }, timeoutMs: TICK_TIMEOUT_MS, overlap: 'skip' }, async () => {
+        await engine.tick();
+      }),
+    );
     try {
       await engine.start();
     } catch (err) {

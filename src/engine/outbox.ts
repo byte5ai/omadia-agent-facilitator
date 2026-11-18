@@ -12,21 +12,15 @@
 import type { PoolClientLike, Queryable } from '../db/pool.js';
 import { rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
-import type { Facilitation, OutboxPayload, OutboxRow, Participant } from '../model.js';
+import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
+import { texts } from '../texts/index.js';
 import type { EngineCore } from './core.js';
 
 type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; message: string };
 
 type StoredPayload = OutboxPayload & { link?: { kind: 'ack' | 'proposal'; id: string } };
 
-/** Where a private message goes: the canonical principal when the kernel
- *  told us one, otherwise the channel user id in wire form. */
-export function directPrincipal(participant: Pick<Participant, 'principalId' | 'canonicalPrincipal'> | undefined, principalId: string): string {
-  if (participant?.canonicalPrincipal) return participant.canonicalPrincipal;
-  return principalId.includes(':') ? principalId : `user:${principalId}`;
-}
-
-async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: OutboxRow): Promise<SendResult> {
+async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promise<SendResult> {
   const payload = row.payload as StoredPayload;
   if (row.targetKind === 'group') {
     const service = engine.deps.kernel.conversationSend();
@@ -51,11 +45,10 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
 
   const service = engine.deps.kernel.targetedSend();
   if (!service) return { ok: false, code: 'no_service', message: "kernel service 'targetedSend' is not available" };
-  const principalId = row.targetPrincipal ?? '';
-  const participant = await store.getParticipant(q, f.id, principalId);
   const result = await service.sendToPrincipal({
     channelType: f.channelType,
-    principal: directPrincipal(participant, principalId),
+    // Participants are keyed by canonical principal, which is the wire form.
+    principal: row.targetPrincipal ?? '',
     message: { text: payload.text },
     asAgentSlug: f.facilitatorAgent,
   });
@@ -75,8 +68,48 @@ async function stampLink(q: Queryable, payload: StoredPayload, messageId: string
   else await update(q, 'facilitation_proposals', { id: payload.link.id }, { announceMessageId: messageId });
 }
 
+/** An essential message is retried with a growing pause, at most this often. */
+export const MAX_ESSENTIAL_ATTEMPTS = 20;
+const RETRY_BASE_MS = 30_000;
+const RETRY_MAX_MS = 60 * 60_000;
+/** A private message that can never arrive: retrying changes nothing. */
+const PERMANENT_DIRECT_FAILURES = new Set(['app_not_installed', 'blocked', 'no_identity', 'not_found']);
+
+export const retryDelayMs = (attempts: number): number => Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS);
+
+/**
+ * Settle what an earlier attempt left behind. Sends only happen under the
+ * facilitation's lock, and we hold it: a row still marked `sending` belongs to
+ * an attempt that died (crash, lost connection) with its outcome unknown.
+ *
+ *   droppable: never retried. An unknown outcome may have been a delivery.
+ *   essential: retried, accepting a rare duplicate.
+ *
+ * A droppable message that another engine process queued and never attempted
+ * is dropped as well: that process is gone, and what it wanted to say was
+ * computed before the restart.
+ */
+async function recover(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
+  await client.query(
+    `UPDATE facilitation_outbox SET status = 'dropped', drop_reason = 'outcome of an earlier attempt is unknown; droppable messages are not retried'
+      WHERE facilitation_id = $1 AND status = 'sending' AND delivery_class = 'droppable'`,
+    [facilitationId],
+  );
+  await client.query(
+    `UPDATE facilitation_outbox SET status = 'pending', last_error = 'outcome of an earlier attempt is unknown; retrying'
+      WHERE facilitation_id = $1 AND status = 'sending' AND delivery_class = 'essential'`,
+    [facilitationId],
+  );
+  await client.query(
+    `UPDATE facilitation_outbox SET status = 'dropped', drop_reason = 'queued by an engine process that ended before sending it'
+      WHERE facilitation_id = $1 AND status = 'pending' AND delivery_class = 'droppable' AND owner <> $2`,
+    [facilitationId, engine.instanceId],
+  );
+}
+
 /** Deliver every pending row of one facilitation, oldest first. */
 export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
+  await recover(engine, client, facilitationId);
   const pending = await rows<OutboxRow>(
     client,
     `SELECT * FROM facilitation_outbox
@@ -112,7 +145,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 
   let result: SendResult;
   try {
-    result = await send(engine, client, f, row);
+    result = await send(engine, f, row);
   } catch (err) {
     result = { ok: false, code: 'exception', message: err instanceof Error ? err.message : String(err) };
   }
@@ -133,11 +166,45 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   }
 
   const error = `${result.code}: ${result.message}`;
+  const attempts = row.attempts + 1;
   if (row.deliveryClass === 'droppable') {
     await update(client, 'facilitation_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });
     engine.log(`facilitation ${f.id}: ${row.purpose} not delivered (${error}); not retried`);
+    if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
     return;
   }
-  await update(client, 'facilitation_outbox', { id: row.id }, { status: 'pending', lastError: error });
+  const permanent = row.targetKind === 'direct' && PERMANENT_DIRECT_FAILURES.has(result.code);
+  if (permanent || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
+    await update(client, 'facilitation_outbox', { id: row.id }, { status: 'failed', lastError: error });
+    await store.appendEvent(client, {
+      facilitationId: f.id,
+      kind: 'delivery_failed',
+      actor: 'engine',
+      occurredAt: engine.now(),
+      payload: { purpose: row.purpose, to: row.targetKind === 'group' ? 'group' : row.targetPrincipal, error, attempts },
+    });
+    engine.log(`facilitation ${f.id}: essential ${row.purpose} could not be delivered (${error}); giving up after ${String(attempts)} attempt(s)`);
+    if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
+    return;
+  }
+  await update(client, 'facilitation_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
   engine.log(`facilitation ${f.id}: essential ${row.purpose} not delivered (${error}); will retry`);
+}
+
+/** A private message did not arrive. The group is told once, neutrally and
+ *  without a name; from then on reminders simply stay in the group. */
+async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow, code: string): Promise<void> {
+  await store.appendEvent(client, {
+    facilitationId: f.id,
+    kind: 'direct_unreachable',
+    actor: 'engine',
+    occurredAt: engine.now(),
+    payload: { principal: row.targetPrincipal, purpose: row.purpose, code },
+  });
+  if (f.settings.directNoticeSent === true || (f.phase !== 'active' && f.phase !== 'configuring')) return;
+  await engine.workOn(client, f.id, async (w) => {
+    // Not a state change: nothing that was computed becomes stale by it.
+    await w.tx.query(`UPDATE facilitations SET settings = settings || '{"directNoticeSent": true}'::jsonb WHERE id = $1`, [f.id]);
+    w.post({ purpose: 'direct_notice', key: 'once', to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(f.language).directUnreachable() });
+  });
 }

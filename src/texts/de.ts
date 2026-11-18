@@ -108,6 +108,14 @@ export const de: Texts = {
   abortOpenItems: (items) => `die Deadline ist erreicht und Folgendes ist noch offen: ${items}`,
   abortNothing: () => 'die Deadline ist erreicht und die Definition of Done ist nicht erfüllt',
 
+  reminderGroup: (open, deadline) =>
+    `Erinnerung: ${open === 1 ? 'Ein Beitrag ist' : `${String(open)} Beiträge sind`} noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Fragt nach dem "Status" für die Details.`,
+  reminderDirect: (name, goal, deadline) =>
+    `Hallo ${name}, dein Beitrag zu "${goal}" ist noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Bitte antworte in der Gruppe; hier kann ich keine Beiträge annehmen.`,
+  directUnreachable: () =>
+    'Ich kann hier nicht alle privat erreichen (meine App ist nicht bei allen installiert). Erinnerungen bleiben deshalb in dieser Gruppe, ohne Namen.',
+  abortJobFailed: () => 'ein interner Schritt ist wiederholt fehlgeschlagen und konnte nicht abgeschlossen werden',
+
   phase: {
     configuring: 'wird eingerichtet',
     active: 'läuft',
