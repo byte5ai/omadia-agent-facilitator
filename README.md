@@ -27,7 +27,8 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 | What | Version |
 |---|---|
-| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0 |
+| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0. With 1.56.0 the engine asks the kernel whether a subscription still stands (`isSubscribed`); on 1.55 it infers it |
+| Model of the facilitator | Sonnet-class or stronger (see "Which model") |
 | Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
 | Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |
 | Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0 |
@@ -43,7 +44,24 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 2. Create a facilitator under "Facilitators" and give it its **own channel
    identity**. A facilitator never speaks through another agent's bot; without
    an identity of its own it does not start and says so.
-3. Add the facilitator to a group conversation and ask it there to start.
+3. Give the facilitator a **Sonnet-class model or stronger**.
+4. Add the facilitator to a group conversation and ask it there to start.
+
+### Which model
+
+A facilitator needs a Sonnet-class model. The engine does what must not
+depend on a model: it records ballots, counts, keeps time, never names in the
+group who has not contributed, does not let a turn call something closed that
+is open, and posts the reason when a tool refused. What is left to the model
+is understanding free text, choosing the right tool and wording.
+
+In the integration runs a small model (Haiku class) did that unreliably: it
+described a setup without storing it, picked a close rule that contradicted
+its own definition of done, and ignored a participant's proposal. The engine
+now refuses or repairs what it can see, but it cannot see a turn that the
+channel started (the kernel posts that answer). Use a small model only for
+trying things out. The engine cannot read which model a facilitator runs on,
+so the facilitations view shows no warning: the choice is the operator's.
 
 The kernel attaches this engine to every facilitator. It is the one provider
 of `facilitationEngine@1` on the instance; its tools cannot be granted to a

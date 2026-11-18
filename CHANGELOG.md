@@ -106,6 +106,26 @@ The plugin becomes the facilitation engine for native facilitators
   says "no private messages" only when there is no way to send them.
 - A send outcome without code or message is recorded readably.
 
+### Fixed after the second integration run
+
+- With `@omadia/plugin-api` 1.56.0 the engine asks the kernel whether a
+  subscription still stands (`conversationMessages.isSubscribed`); on 1.55 it
+  infers it as before. A gap is announced once whichever path repairs it.
+- Guards that do not depend on the model: a turn text that names somebody as
+  not having contributed is replaced by a neutral line; a text that calls the
+  vote or the facilitation closed while it is open is replaced by what is
+  true; a turn whose tool refused and that said nothing posts the reason.
+- `facilitation_start` needs only the goal and is described as the first call
+  of a request, so a setup is stored before anything is asked.
+- "next" / "weiter" also proposes to close a discussing step; after the
+  invitation of silent voices the group is told how the step ends.
+- A close rule that contradicts the definition of done is refused.
+- A bare yes is not a collected point; a deadline close counts who voted; an
+  action reminder goes privately and to the group only as a fallback; "done"
+  without a number works; offsets below one hour are printed in minutes.
+- Recommendation: a facilitator needs a Sonnet-class model (README, set-up
+  guide).
+
 ### Fixed (defects of the field test, spec 4)
 
 - Votes without a mention are recorded (F1); the engine counts, not a model

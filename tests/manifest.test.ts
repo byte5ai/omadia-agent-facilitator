@@ -42,3 +42,9 @@ test('nothing of the Conductor path is left in the manifest', () => {
     assert.ok(!manifest.includes(gone), `${gone} is still declared`);
   }
 });
+
+test('the set-up guide and the README say which model a facilitator needs', () => {
+  assert.match(manifest, /Sonnet-class model/);
+  assert.match(manifest, /Modell der Sonnet-Klasse/);
+  assert.match(readFileSync(join(root, 'README.md'), 'utf8'), /needs a Sonnet-class model/);
+});

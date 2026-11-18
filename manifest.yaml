@@ -97,7 +97,11 @@ setup:
          not available and starts nothing.
       2. Create a facilitator under "Facilitators" and give it its own channel
          identity. A facilitator never speaks through another agent's bot.
-      3. Add the facilitator to a group chat and ask it there to start.
+      3. Give the facilitator a Sonnet-class model (or stronger). The engine
+         counts, keeps time and guards what is posted whatever the model is,
+         but a small model sets facilitations up unreliably and words them
+         poorly; it is not recommended.
+      4. Add the facilitator to a group chat and ask it there to start.
     de: |
       1. Gib diesem Plugin die Datenbank-Berechtigung (es besitzt die
          Facilitation-Tabellen). Ohne sie sagt jeder Facilitator, dass die
@@ -105,7 +109,11 @@ setup:
       2. Lege unter "Facilitatoren" einen Facilitator an und gib ihm eine
          eigene Channel-Identität. Ein Facilitator spricht nie über den Bot
          eines anderen Agenten.
-      3. Füge den Facilitator einem Gruppen-Chat hinzu und bitte ihn dort zu
+      3. Gib dem Facilitator ein Modell der Sonnet-Klasse (oder stärker). Die
+         Engine zählt, hält die Zeit und prüft, was gepostet wird, unabhängig
+         vom Modell; ein kleines Modell richtet Facilitations aber
+         unzuverlässig ein und formuliert schwach. Es wird nicht empfohlen.
+      4. Füge den Facilitator einem Gruppen-Chat hinzu und bitte ihn dort zu
          starten.
   fields:
     - key: "language"
