@@ -339,11 +339,16 @@ export function installCapabilities(): void {
   onClosed(async (w) => {
     await setGrant(w, 'active');
     const { participants, stakeholders } = await peopleOf(w);
-    const grant = await grantOf(w);
-    await w.event('grant_issued', 'engine', { summary: `grant issued for ${String(grant.allowed.length)} addresses (participants and confirmed stakeholders)` });
-
+    // The protocol the participants get is the one the initiator got with the
+    // report: built before anything is written about sending it.
     const t = texts(w.f.language);
     const protocol = await buildProtocol(w.tx, w.f);
+    const grant = await grantOf(w);
+    // A grant that reaches nobody is not a use of anything.
+    if (grant.allowed.length > 0) {
+      await w.event('grant_issued', 'engine', { summary: `grant issued for ${String(grant.allowed.length)} addresses (participants and confirmed stakeholders)` });
+    }
+
     // The initiator already received the protocol with the report.
     const viaChannel = participants.filter((p) => p.principalId !== w.f.initiatorParticipant);
     for (const person of viaChannel) {

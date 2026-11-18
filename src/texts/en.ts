@@ -218,6 +218,8 @@ export const en = {
     actions: 'Action items',
     parked: 'Open points (parking lot)',
     changes: 'Changes to the rules',
+    changeKinds: { proposal_accepted: 'proposal accepted', proposal_rejected: 'proposal rejected', proposal_amended: 'proposal amended' } as Record<string, string>,
+    runoff: (between: string): string => `runoff between ${between}`,
     capabilities: 'Use of scoped capabilities',
     outcome: 'Outcome',
     none: 'none',

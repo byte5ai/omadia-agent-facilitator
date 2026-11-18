@@ -16,6 +16,18 @@ export function baselineSnapshot(channelType: string, conversationId: string, ca
   return { channelType, conversationId, modality: 'chat', inputs: ['text'], outputs: ['text'], capturedAt: capturedAt.toISOString() };
 }
 
+/**
+ * Whether the facilitator can write to somebody privately is not the
+ * channel's to declare: it is whether the way to do it exists. A snapshot
+ * that says nothing about private messages (the baseline) does not make them
+ * impossible, and one that promises them without a way to send them is not
+ * believed. Whoever cannot be reached individually is handled per person.
+ */
+export function withRealOutputs<S extends Pick<SessionCapabilitySnapshot, 'outputs'>>(snapshot: S, canWritePrivately: boolean): S {
+  const others = snapshot.outputs.filter((o) => o !== 'private_messages');
+  return { ...snapshot, outputs: canWritePrivately ? [...others, 'private_messages'] : others };
+}
+
 export interface Means {
   /** A live vote: a poll card when the channel has polls and returns their
    *  answers, otherwise ballots written in the chat. */

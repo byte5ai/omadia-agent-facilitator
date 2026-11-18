@@ -49,6 +49,18 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
   const of = (kinds: readonly string[]): ProtocolEvent[] => events.filter((e) => kinds.includes(e.kind));
   const section = (title: string, lines: readonly string[]): string[] => ['', `${title}:`, ...(lines.length > 0 ? lines.map((l) => `- ${l}`) : [`- ${p.none}`])];
 
+  /** One change of the rules: what happened and, where there is one, to what. */
+  const changeLine = (e: ProtocolEvent): string => {
+    if (e.kind === 'runoff') {
+      const options = steps.find((s) => s.id === e.payload['stepId'])?.options ?? [];
+      const tied = (Array.isArray(e.payload['tied']) ? (e.payload['tied'] as unknown[]) : []).map((key) => options.find((o) => o.key === key)?.label ?? String(key));
+      return p.runoff(t.list(tied));
+    }
+    const what = p.changeKinds[e.kind] ?? e.kind.replace(/_/g, ' ');
+    const detail = String(e.payload['summary'] ?? e.payload['statement'] ?? '').trim();
+    return detail === '' ? what : `${what}: ${detail}`;
+  };
+
   return [
     p.title(f.goal),
     `${p.facilitator}: ${facilitatorName(f)}`,
@@ -68,7 +80,7 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     ...section(p.decisions, decisions.map((d) => (d.rationale ? `${d.statement} (${p.rationale}: ${d.rationale})` : d.statement))),
     ...section(p.actions, actions.map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), when(a.dueDate), t.actionStatusWords[a.status]))),
     ...section(p.parked, of(['parked']).map((e) => String(e.payload['topic']))),
-    ...section(p.changes, of(CHANGE_EVENTS).map((e) => `${when(e.occurredAt)}: ${e.kind.replace(/_/g, ' ')}: ${String(e.payload['summary'] ?? e.payload['statement'] ?? '')}`)),
+    ...section(p.changes, of(CHANGE_EVENTS).map((e) => `${when(e.occurredAt)}: ${changeLine(e)}`)),
     ...section(p.capabilities, of(CAPABILITY_EVENTS).map((e) => `${when(e.occurredAt)}: ${String(e.payload['summary'] ?? e.kind)}`)),
     '',
     `${p.outcome}: ${t.phase[f.phase]}${f.closeReason && f.phase === 'aborted' ? ` (${f.closeReason})` : ''}`,

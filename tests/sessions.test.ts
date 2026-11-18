@@ -72,7 +72,8 @@ test('the handshake says what the facilitator perceives; readiness that could no
   h.kernel.absent.delete('readiness');
   assert.match(started, /Tell the group: The channel could not confirm that I can read every message here/);
   await tool(conv, 'facilitation_open');
-  assert.match(posts(conv)[0] ?? '', /What I perceive here: I read the chat, edited messages\. I cannot run polls here, so votes are written in the chat\. I cannot write to anyone privately here/);
+  // Private messages work here (the way to send them exists), so nothing is said against them.
+  assert.match(posts(conv)[0] ?? '', /What I perceive here: I read the chat, edited messages\. I cannot run polls here, so votes are written in the chat\. Nobody should assume more\./);
   const f = await h.facilitation(conv);
   const [session] = await store.listSessions(h.db.pool, f.id);
   assert.deepEqual([session?.kind, session?.modality, session?.status], ['async', 'chat', 'running']);

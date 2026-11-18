@@ -23,7 +23,7 @@ import { PRIORITY, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { scheduleJob } from './jobs.js';
 import { onConfigured, onStepOpened, onVoteOpened } from './lifecycle.js';
-import { baselineSnapshot, describeMeans, diffSnapshots, perceptionStatement, planMeans } from './media.js';
+import { baselineSnapshot, describeMeans, diffSnapshots, perceptionStatement, planMeans, withRealOutputs } from './media.js';
 import { withTimeout } from './outbox.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { registerJobHandler } from './scheduler.js';
@@ -48,18 +48,25 @@ export async function currentSession(q: Queryable, facilitationId: string): Prom
  *  Never called inside a transaction. */
 export async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f: Facilitation, sessionRef?: string): Promise<SessionCapabilitySnapshot> {
   const service = engine.deps.kernel.sessionCapabilities();
-  if (!service) return baselineSnapshot(f.channelType, f.conversationId, engine.now());
+  if (!service) return real(engine, baselineSnapshot(f.channelType, f.conversationId, engine.now()));
   try {
-    return await withTimeout(
-      service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, ...(sessionRef ? { sessionRef } : {}) }),
-      SNAPSHOT_TIMEOUT_MS,
-      'the capability snapshot',
+    return real(
+      engine,
+      await withTimeout(
+        service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, ...(sessionRef ? { sessionRef } : {}) }),
+        SNAPSHOT_TIMEOUT_MS,
+        'the capability snapshot',
+      ),
     );
   } catch {
     // A missing capability is information, never an error: assume the baseline.
-    return baselineSnapshot(f.channelType, f.conversationId, engine.now());
+    return real(engine, baselineSnapshot(f.channelType, f.conversationId, engine.now()));
   }
 }
+
+/** A snapshot with what the facilitator can really do privately. */
+const real = <S extends Pick<SessionCapabilitySnapshot, 'outputs'>>(engine: Pick<EngineCore, 'deps'>, snapshot: S): S =>
+  withRealOutputs(snapshot, engine.deps.kernel.targetedSend() !== undefined);
 
 /** The chat phase of a facilitation is created with it, with what the channel
  *  offers there. */
@@ -79,7 +86,7 @@ async function ensureChatSession(w: Work): Promise<Session> {
     facilitationId: w.f.id,
     kind: 'async',
     modality: 'chat',
-    capabilitySnapshot: baselineSnapshot(w.f.channelType, w.f.conversationId, w.now),
+    capabilitySnapshot: real(w.engine, baselineSnapshot(w.f.channelType, w.f.conversationId, w.now)),
     status: 'running',
     startedAt: w.now,
     createdAt: w.now,
@@ -154,7 +161,7 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
   const t = texts(w.f.language);
   // Without a snapshot for the meeting the chat's capabilities are assumed.
   const chat = snapshotOf(await ensureChatSession(w));
-  const snapshot: SessionCapabilitySnapshot = prefetched ?? { ...baselineSnapshot(w.f.channelType, w.f.conversationId, w.now), ...(chat ? { inputs: chat.inputs, outputs: chat.outputs } : {}) };
+  const snapshot: SessionCapabilitySnapshot = real(w.engine, prefetched ?? { ...baselineSnapshot(w.f.channelType, w.f.conversationId, w.now), ...(chat ? { inputs: chat.inputs, outputs: chat.outputs } : {}) });
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
   const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
   await sendAgenda(w, session);
@@ -258,8 +265,9 @@ export async function recordSpoken(w: Work, input: { speaker: string; kind: Cont
 }
 
 /** The channel reported a changed snapshot mid-session: adapt, and say so. */
-export async function applySnapshot(w: Work, snapshot: SessionCapabilitySnapshot): Promise<void> {
+export async function applySnapshot(w: Work, reported: SessionCapabilitySnapshot): Promise<void> {
   if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
+  const snapshot = real(w.engine, reported);
   const t = texts(w.f.language);
   const sessions = await store.listSessions(w.tx, w.f.id);
   const session =

@@ -199,6 +199,8 @@ export const de: Texts = {
     actions: 'Aufgaben',
     parked: 'Offene Punkte (Themenspeicher)',
     changes: 'Regeländerungen',
+    changeKinds: { proposal_accepted: 'Vorschlag angenommen', proposal_rejected: 'Vorschlag abgelehnt', proposal_amended: 'Vorschlag geändert' },
+    runoff: (between) => `Stichwahl zwischen ${between}`,
     capabilities: 'Nutzung der zweckgebundenen Fähigkeiten',
     outcome: 'Ergebnis',
     none: 'keine',
