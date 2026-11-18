@@ -111,6 +111,7 @@ export function defineTool(
     handler: async (input, context) => {
       try {
         const ctx = resolveContext(context);
+        await engine.ensureReady();
         engine.ensureAttached(ctx.agentSlug);
         return await run(asObject(input), ctx);
       } catch (err) {

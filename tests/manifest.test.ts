@@ -23,11 +23,11 @@ test('the manifest declares the engine capability and an extension kind', () => 
   assert.match(manifest, /^\s{2}kind: "extension"$/m);
 });
 
-test('every kernel service the engine resolves is declared as optional', () => {
+test('every kernel service the engine resolves is declared: the pool as required, the others as optional', () => {
   const block = /optional_requires:\n((?:\s+- "[^"]+"\n)+)/.exec(manifest)?.[1] ?? '';
   const declared = [...block.matchAll(/- "([^"@]+)@/g)].map((m) => m[1]);
-  assert.deepEqual([...declared].sort(), [...KERNEL_SERVICE_NAMES].sort());
-  assert.match(manifest, /^requires: \[\]$/m);
+  assert.deepEqual([...declared, 'graphPool'].sort(), [...KERNEL_SERVICE_NAMES].sort());
+  assert.match(manifest, /^requires:\n\s+- "graphPool@\^1"$/m);
 });
 
 test('permissions.sql names a ledger inside the plugin namespace and the shipped migrations directory', () => {

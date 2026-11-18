@@ -1,6 +1,6 @@
 // The kernel services the engine consumes, behind one accessor.
 //
-// Every service is optional (`optional_requires`) and resolved PER CALL, never
+// Every service (the required pool included) is resolved PER CALL, never
 // cached: an optional dependency contributes no activation edge, so a service
 // may be published after this plugin activated. A missing service is a
 // supported state; each caller carries its own degradation message.

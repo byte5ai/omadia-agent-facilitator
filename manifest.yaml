@@ -12,9 +12,10 @@ schema_version: "1"
 #
 # `kind: extension`, not `agent`: the engine owns tables, and only the
 # tool/extension runtime hands a plugin `ctx.sql` and the granted pool.
-# Every kernel service is `optional_requires` — the kernel publishes them, no
-# plugin does, so a hard `requires` would be unresolvable. Each one is resolved
-# lazily and its absence degrades with a clear message.
+# The database pool is a hard `requires`: a plugin publishes it, and the kernel
+# orders activation by `requires` only, so the engine activates after it. The
+# other kernel services are `optional_requires`: each one is resolved lazily
+# and its absence degrades with a clear message.
 # ===========================================================================
 
 identity:
@@ -48,7 +49,8 @@ depends_on: []
 provides:
   - "facilitationEngine@1"
 
-requires: []
+requires:
+  - "graphPool@^1"
 
 # Least privilege: exactly what the engine consumes.
 #   graphPool             the granted Postgres pool (gated by permissions.sql)
@@ -64,7 +66,6 @@ requires: []
 #   facilitation.followup free/busy, invitations and mail for a closed
 #                         facilitation (an integration plugin provides it)
 optional_requires:
-  - "graphPool@1"
   - "conversationMessages@1"
   - "agentTurn@1"
   - "conversationSend@1"

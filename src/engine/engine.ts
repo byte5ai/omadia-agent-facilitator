@@ -65,6 +65,18 @@ export class FacilitationEngine {
     this.core.onAfterRelease(releaseWhenEnded);
   }
 
+  private readiness: (() => Promise<unknown>) | undefined;
+
+  /** How the engine is brought up when a call finds it down (the plugin
+   *  looks for the database again). */
+  setReadiness(readiness: () => Promise<unknown>): void {
+    this.readiness = readiness;
+  }
+
+  async ensureReady(): Promise<void> {
+    await this.readiness?.();
+  }
+
   /** Whether the engine can keep state at all. */
   available(): boolean {
     return this.core.deps.kernel.pool() !== undefined;
