@@ -346,3 +346,46 @@ describe('times and wording check in the handshake (0.7.1)', () => {
     assert.ok(status.includes('= Fr., 20.11.2026, 14:00 Uhr (Europe/Berlin)'), status);
   });
 });
+
+describe('unknown conversationId (0.7.2)', () => {
+  it('resolves to the only active facilitation — a masked id must not lose a vote', async () => {
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: '19:9cdb@thread.skype' });
+
+    // What the model actually sent on 2026-11-18.
+    const masked = '19:felix.hoffmann@example.net';
+    const status = await t.call('facilitation_status', { conversationId: masked });
+    assert.ok(status.includes('Facilitation-Status: active'), status);
+    assert.ok(status.includes('19:9cdb@thread.skype'), status);
+
+    const progress = await t.call('facilitation_progress', { dodMet: false, summary: '1 von 4 Stimmen', conversationId: masked });
+    assert.ok(progress.includes('Fortschritt protokolliert'), progress);
+    assert.equal(t.store.get('19:9cdb@thread.skype')?.progress?.summary, '1 von 4 Stimmen');
+    assert.equal(t.store.get(masked), undefined, 'no record is created under the masked id');
+    assert.ok(t.logs.some((l) => l.includes('resolved to the only active facilitation')), t.logs.join('\n'));
+  });
+
+  it('still misses with no active facilitation, and with more than one', async () => {
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
+    assert.ok((await t.call('facilitation_status', { conversationId: '19:unknown@example.net' })).includes('Keine Facilitation bekannt'));
+
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-1' });
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-2' });
+    const out = await t.call('facilitation_progress', { dodMet: false, summary: 's', conversationId: '19:unknown@example.net' });
+    assert.ok(out.includes('Keine aktive Facilitation'), out);
+    assert.equal(t.store.get('grp-1')?.progress, undefined);
+    assert.equal(t.store.get('grp-2')?.progress, undefined);
+  });
+
+  it('never applies to report or stop — their target is not guessed', async () => {
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-1' });
+    const masked = '19:felix.hoffmann@example.net';
+    assert.ok((await t.call('facilitation_report', { kind: 'final', text: 'x', conversationId: masked })).includes('abgelehnt'));
+    assert.ok((await t.call('facilitation_stop', { conversationId: masked })).includes('Keine Facilitation zum Beenden'));
+    assert.equal(t.store.get('grp-1')?.phase, 'active');
+  });
+});

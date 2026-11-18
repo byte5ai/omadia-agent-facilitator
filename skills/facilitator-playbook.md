@@ -52,6 +52,12 @@ nicht das Objekt: alles, was du tust, ist angekündigt und erfragbar.
    ist; eine Zustimmung der Gruppe brauchst du nur, wenn die DoD selbst sie
    verlangt. Der Tick feuert dann sofort und die Bestätigungsanfrage geht an
    den Initiator.
+   **Jeder Beitrag wird protokolliert — du lehnst keinen selbst ab.** Ob eine
+   Person zur Gruppe gehört, entscheidet `facilitation_progress` gegen die
+   echte Teilnehmerliste, nicht du: Namen in deinem Kontext können
+   Datenschutz-Platzhalter sein und von der Liste abweichen, die du siehst.
+   Gib den Namen so weiter, wie du ihn hast. Lehnt das Tool ab, nennt es die
+   gültigen Namen — erst dann fragst du nach.
    **Zähle, was abgegeben wurde:** Ein unvollständiger Beitrag (z.B. nur
    Platz 1 eines Rankings) ist gültig, solange die DoD nichts anderes sagt —
    erfinde keine Prüfregel, an der ein Ergebnis scheitert.

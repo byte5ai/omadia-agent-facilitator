@@ -40,7 +40,7 @@ export function buildNudgeTool(tc: ToolContext): LocalSubAgentTool {
       if (!config.nudgesEnabled) {
         return de ? 'Nudges sind deaktiviert (nudges_enabled=false).' : 'Nudges are disabled (nudges_enabled=false).';
       }
-      const resolved = await tc.resolveRecordStrict(args.conversationId);
+      const resolved = await tc.resolveRecordStrict(args.conversationId, true);
       if (resolved === 'ambiguous') {
         return de
           ? 'Mehrere aktive Facilitations — bitte conversationId angeben; ein Nudge darf sein Publikum nicht raten.'

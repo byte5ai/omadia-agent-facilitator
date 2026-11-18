@@ -71,7 +71,7 @@ export function buildUpdateTool(tc: ToolContext): LocalSubAgentTool {
       }
 
       // Strict: an update rewrites what a group is measured against — never guess which one.
-      const resolved = await tc.resolveRecordStrict(args.conversationId);
+      const resolved = await tc.resolveRecordStrict(args.conversationId, true);
       if (resolved === 'ambiguous') {
         return de
           ? 'Mehrere aktive Facilitations — bitte conversationId angeben; ein Update darf nicht raten, welche Facilitation es ändert.'

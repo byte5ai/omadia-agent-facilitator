@@ -66,8 +66,8 @@ export interface ToolContext {
   hydrator: Hydrator;
   persister: RunStatePersister;
   now: () => Date;
-  resolveRecord(conversationId?: string): Promise<FacilitationRecord | undefined>;
-  resolveRecordStrict(conversationId?: string): Promise<FacilitationRecord | 'ambiguous' | undefined>;
+  resolveRecord(conversationId?: string, orOnlyActive?: boolean): Promise<FacilitationRecord | undefined>;
+  resolveRecordStrict(conversationId?: string, orOnlyActive?: boolean): Promise<FacilitationRecord | 'ambiguous' | undefined>;
 }
 
 export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[] {
@@ -89,16 +89,34 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
 
   /** Explicit id → that record, with ONE throttled kernel re-read on a miss
    *  (a facilitation this process has not seen yet). */
-  async function lookup(conversationId: string): Promise<FacilitationRecord | undefined> {
+  /** `orOnlyActive` (0.7.2): an id this plugin has never seen falls back to
+   *  the ONE active facilitation. Opt-in per tool — never for start (a new
+   *  conversation is legitimately unknown), report or stop (their target is
+   *  never guessed). */
+  async function lookup(conversationId: string, orOnlyActive = false): Promise<FacilitationRecord | undefined> {
     const hit = store.get(conversationId);
     if (hit) return hit;
-    if (await hydrator.refreshOnMiss()) return store.get(conversationId);
+    if (await hydrator.refreshOnMiss()) {
+      const refreshed = store.get(conversationId);
+      if (refreshed) return refreshed;
+    }
+    // 0.7.2 — field report 2026-11-18: the model's context carried the
+    // conversation id as a privacy surrogate ("19:felix.hoffmann@example.net"),
+    // the lookup missed and a participant's vote was never recorded. An id
+    // this plugin has never seen cannot mean another facilitation of ours;
+    // with exactly ONE active facilitation it can only mean that one. With
+    // none or several the miss stands — nothing is guessed.
+    const active = orOnlyActive ? store.listActive() : [];
+    if (active.length === 1) {
+      deps.log(`conversationId '${conversationId.slice(0, 80)}' unknown — resolved to the only active facilitation ${active[0]!.conversationId}`);
+      return active[0];
+    }
     return undefined;
   }
 
-  async function resolveRecord(conversationId?: string): Promise<FacilitationRecord | undefined> {
+  async function resolveRecord(conversationId?: string, orOnlyActive = false): Promise<FacilitationRecord | undefined> {
     if (conversationId && conversationId.trim().length > 0) {
-      return lookup(conversationId.trim());
+      return lookup(conversationId.trim(), orOnlyActive);
     }
     return store.latest();
   }
@@ -106,9 +124,12 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
   /** Like resolveRecord, but for the ACTING tools (progress/nudge): with more
    *  than one active facilitation the no-id `latest()` fallback is ambiguous,
    *  and a proactive message must never guess its audience. */
-  async function resolveRecordStrict(conversationId?: string): Promise<FacilitationRecord | 'ambiguous' | undefined> {
+  async function resolveRecordStrict(
+    conversationId?: string,
+    orOnlyActive = false,
+  ): Promise<FacilitationRecord | 'ambiguous' | undefined> {
     if (conversationId && conversationId.trim().length > 0) {
-      return lookup(conversationId.trim());
+      return lookup(conversationId.trim(), orOnlyActive);
     }
     const active = store.listActive();
     if (active.length > 1) return 'ambiguous';
@@ -212,7 +233,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     async handle(input: unknown): Promise<string> {
       await hydrator.ensure();
       const args = (input ?? {}) as { conversationId?: string };
-      const record = await resolveRecord(args.conversationId);
+      const record = await resolveRecord(args.conversationId, true);
       if (!record) {
         const base = de
           ? 'Keine Facilitation bekannt (auch keine ausstehende Einladung).'
@@ -281,7 +302,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
     spec: {
       name: 'facilitation_progress',
       description:
-        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary, contributors}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
+        "Record the CURRENT facilitation progress from the group conversation ({dodMet, summary, contributors}) so the hourly assess tick can read it (the tick shares no session with this chat). Call after every meaningful step toward the goal — every contribution a participant posts (a vote, an answer) is one: record it, never turn it away yourself. dodMet=true additionally fires the pending assess tick immediately (poke) so the initiator's confirmation goes out without waiting for the interval.",
       input_schema: {
         type: 'object',
         properties: {
@@ -295,7 +316,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
             type: 'array',
             items: { type: 'string' },
             description:
-              'COMPLETE list of the participants whose contribution (vote, answer, confirmation) is recorded so far — full names as shown in the participant list of facilitation_status. Replaces the previous list; omit to keep it. Lets the status say who is still pending. A name that matches no participant, or more than one, makes the whole call fail with the valid names.',
+              'COMPLETE list of the participants whose contribution (vote, answer, confirmation) is recorded so far — full names as shown in the participant list of facilitation_status. Replaces the previous list; omit to keep it. Lets the status say who is still pending. NEVER decide yourself whether someone is a participant: names in your context can be privacy placeholders that differ from the list you see. Pass the name exactly as you have it — this tool checks it against the real roster and fails with the valid names when it matches nobody, or more than one.',
           },
           conversationId: { type: 'string', description: 'Channel-native conversation id, when known.' },
         },
@@ -317,7 +338,7 @@ export function buildFacilitationToolkit(deps: ToolkitDeps): LocalSubAgentTool[]
           ].slice(0, SNAPSHOT_MAX_CONTRIBUTORS)
         : undefined;
       if (!summary) return de ? 'Progress abgelehnt: summary ist leer.' : 'Progress refused: summary is empty.';
-      const resolved = await resolveRecordStrict(args.conversationId);
+      const resolved = await resolveRecordStrict(args.conversationId, true);
       if (resolved === 'ambiguous') {
         return de
           ? 'Mehrere aktive Facilitations — bitte conversationId angeben, damit der Progress dem richtigen Ziel zugeordnet wird.'
