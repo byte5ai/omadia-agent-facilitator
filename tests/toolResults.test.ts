@@ -97,3 +97,63 @@ test('the tool descriptions tell a rule change from moving on', async () => {
   assert.match(describe('facilitation_propose_change'), /facilitation_step/);
   assert.match(describe('facilitation_step'), /move on|skip/);
 });
+
+// ── what a turn says after a tool already made the facilitator post ─────────
+
+test('when a tool of the turn posted in the group, the text of the turn is dropped, whatever the model wrote', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-turn-drop', FOUR);
+  await h.tool('facilitation_start', SETUP, { conversation: conv });
+  const { buildTools } = await import('../src/tools/index.js');
+  h.kernel.onTurn = async (request) => {
+    const open = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_open');
+    await open?.handler({}, h.kernel.context('mira', conv, 'anna', request.inboundEventId));
+    // The model does not answer [silent], and it talks about the machinery.
+    return 'The facilitation is open. The engine posted the opening handshake. We start now.';
+  };
+  try {
+    await h.kernel.say(conv, 'anna', 'Fits, please open it');
+    await h.settle();
+  } finally {
+    h.kernel.onTurn = () => '[silent]';
+  }
+  const posts = h.kernel.groupPosts(conv).map((p) => p.text);
+  assert.equal(posts.length, 1, 'only the handshake');
+  assert.ok(posts[0]?.includes('I am Mira'));
+  assert.ok(!posts.some((p) => /engine/i.test(p)));
+});
+
+test('a turn whose tools posted nothing still says what the model wrote', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-turn-keep', FOUR);
+  await h.tool('facilitation_start', SETUP, { conversation: conv });
+  const { buildTools } = await import('../src/tools/index.js');
+  h.kernel.onTurn = async (request) => {
+    const status = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_status');
+    await status?.handler({}, h.kernel.context('mira', conv, 'anna', request.inboundEventId));
+    return 'Shall I open it with these two options?';
+  };
+  try {
+    await h.kernel.say(conv, 'anna', 'What is still missing?');
+    await h.settle();
+  } finally {
+    h.kernel.onTurn = () => '[silent]';
+  }
+  assert.deepEqual(h.kernel.groupPosts(conv).map((p) => p.text), ['Shall I open it with these two options?']);
+});
+
+test('a tool that cannot work says so without naming the machinery', async () => {
+  const { buildTools } = await import('../src/tools/index.js');
+  const { FacilitationEngine } = await import('../src/engine/engine.js');
+  const { FakeKernel, fakeClock } = await import('./fakeKernel.js');
+  const { CONFIG_DEFAULTS } = await import('../src/config.js');
+  const { INTERNALS } = await import('./harness.js');
+  const clock = fakeClock();
+  const kernel = new FakeKernel(undefined, clock);
+  const engine = new FacilitationEngine({ kernel: kernel.kernel(), config: CONFIG_DEFAULTS, clock, log: () => undefined });
+  const start = buildTools(engine).find((t) => t.spec.name === 'facilitation_start');
+  const noDatabase = (await start?.handler({ goal: 'g', definitionOfDone: 'd' }, kernel.context('mira', 'c1', 'anna'))) ?? '';
+  assert.match(noDatabase, /^Not available/);
+  assert.doesNotMatch(noDatabase, INTERNALS);
+  const noContext = (await start?.handler({ goal: 'g', definitionOfDone: 'd' })) ?? '';
+  assert.match(noContext, /^Refused/);
+  assert.doesNotMatch(noContext, INTERNALS);
+});

@@ -58,7 +58,7 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
     '- To record what a person said, call facilitation_record_contribution with the message id from the input. It records it for the AUTHOR of that message only and asks them to confirm; it does not count before they did. You cannot record anything for somebody else.',
     '- If a message is unclear, call facilitation_clarify once for that message.',
     '- Never name in the group who has not contributed.',
-    `- If nothing needs to be said, answer exactly ${SILENT}. Your answer is posted to the group as it is.`,
+    `- If nothing needs to be said, answer exactly ${SILENT}. Your answer is posted to the group as it is, unless a tool you called in this turn already posted there: then your answer is not posted.`,
   );
   return lines.join('\n');
 }
@@ -82,6 +82,10 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     input: `From: ${record.author.displayName ?? record.author.id} (message id: ${record.messageId})\n${record.text ?? ''}`,
     engineContext: await buildEngineContext(pool, f),
   });
+  // A tool of this turn already made the facilitator post (the handshake, a
+  // step, a question to somebody). That was the answer; whatever the model
+  // wrote on top is not posted.
+  const posted = engine.takePostedInTurn(record.eventId);
   if (outcome.outcome !== 'completed') {
     const detail = outcome.outcome === 'refused' ? `${outcome.code}: ${outcome.message}` : outcome.message;
     engine.log(`facilitation ${f.id}: facilitator turn ${outcome.outcome} (${detail})`);
@@ -90,6 +94,10 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
   }
   // The marker anywhere in the answer means: say nothing.
   if (isSilent(outcome.text)) return;
+  if (posted) {
+    await engine.work(f.id, (w) => w.event('turn_text_dropped', 'engine', { eventId: record.eventId }));
+    return;
+  }
   await engine.work(f.id, async (w) => {
     w.post({
       purpose: 'moderation',

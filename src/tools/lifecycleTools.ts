@@ -30,12 +30,12 @@ const CONTRIBUTION_KINDS: readonly ContributionKind[] = [
 /** The kernel's stored event for a message of this conversation, or a refusal. */
 export async function storedMessage(engine: FacilitationEngine, ctx: ResolvedContext, messageId: string) {
   const messages = engine.core.deps.kernel.messages();
-  if (!messages) throw new Refusal('no_message_service', 'The kernel does not provide stored messages; nothing can be recorded.');
+  if (!messages) throw new Refusal('no_message_service', 'The messages of this conversation cannot be read right now; nothing can be recorded.');
   const record = await messages.getEvent({ agentSlug: ctx.agentSlug, channelType: ctx.channelType, conversationId: ctx.conversationId }, messageId);
   if (!record) {
     throw new Refusal(
       'unknown_message',
-      'The kernel has no such message for this conversation. It may belong to another conversation, be older than this facilitation, or not exist. Use the message id from the turn input.',
+      'There is no such message in this conversation. It may belong to another conversation, be older than this facilitation, or not exist. Use the message id from the turn input.',
     );
   }
   return record;
@@ -105,7 +105,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         required: ['goal', 'definitionOfDone'],
       },
       async (args, ctx) => {
-        if (!ctx.callerPrincipalId) throw new Refusal('no_caller', 'The kernel did not state who asked. A facilitation needs an initiator.');
+        if (!ctx.callerPrincipalId) throw new Refusal('no_caller', 'It is not known who asked. A facilitation needs an initiator.');
         const deadline = optionalString(args, 'deadline');
         const timezone = optionalString(args, 'timezone');
         const language = oneOf(args, 'language', ['de', 'en'] as const);
@@ -228,12 +228,12 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
               throw new Refusal('bad_ballot', `'${ballotText}' is not a valid ballot for this step${parsed.kind === 'invalid' ? ` (${parsed.problem}: ${parsed.detail})` : ''}. If the message is unclear, use facilitation_clarify instead.`);
             }
             const ballot = await withoutTakenItems(w, step, author, parsed.ballot, record.eventId);
-            if (!ballot) return 'That item is already taken; the engine said so in the group. Nothing was recorded.';
+            if (!ballot) return 'That item is already taken; that was said in the group. Nothing was recorded.';
             await recordBallot(w, { record, author, step, ballot, interpreted: true });
           } else {
             await recordContribution(w, { record, author, step, kind, payload: { text: summary }, summary, interpreted: true });
           }
-          return `Recorded for ${author.displayName} as unconfirmed. The engine asked ${author.displayName} to confirm; it counts once they did. Do not repeat the question.`;
+          return `Recorded for ${author.displayName} as unconfirmed. ${author.displayName} was asked in the group to confirm; it counts once they did. Do not repeat the question.`;
         });
       },
     ),

@@ -66,17 +66,17 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
           if (action === 'extend') {
             if (!minutes || minutes <= 0) throw new Refusal('bad_input', "'minutes' is required for extend.");
             await extendStep(w, step, minutes, 'facilitator');
-            return `Extended by ${String(minutes)} minutes. The engine said so in the group.`;
+            return `Extended by ${String(minutes)} minutes. That was said in the group.`;
           }
           if (step.method !== null && step.options.length > 0) throw new Refusal('deciding_step', 'This step is decided by its method and closes when the result is in.');
           if (step.kind === 'close') throw new Refusal('closing_step', 'The closing step ends when the group confirmed the summary.');
           if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
           const invited = await inviteSilentVoices(w, step);
           if (invited > 0) {
-            return `Not closed yet: ${String(invited)} ${invited === 1 ? 'person has' : 'people have'} not contributed to this step. The engine invited them privately and posted a neutral line in the group. Give them a moment, then call close again. Do not name them.`;
+            return `Not closed yet: ${String(invited)} ${invited === 1 ? 'person has' : 'people have'} not contributed to this step. They were invited privately and a neutral line was posted in the group. Give them a moment, then call close again. Do not name them.`;
           }
           await closeStep(w, step, 'facilitator');
-          return 'Closed. The engine announced it and opened what comes next.';
+          return 'Closed. That was announced in the group and what comes next was opened there.';
         });
       },
     ),
@@ -135,7 +135,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             },
             ...(title ? { title } : {}),
           });
-          return target.status === 'open' ? 'Set. The engine announced the options and how to vote.' : `Set for step ${String(target.position)}; it is announced when that step opens.`;
+          return target.status === 'open' ? 'Set. The options and how to vote were announced in the group.' : `Set for step ${String(target.position)}; it is announced when that step opens.`;
         });
       },
     ),
@@ -191,7 +191,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
           const open = await openStepOrRefuse(w);
           const from = await sourceStep(w, position);
           await proposeClusters(w, from, clusters, open.id);
-          return 'The clusters were put to the group. They count once nobody objected; the engine announces it.';
+          return 'The clusters were put to the group. They count once nobody objected; that is announced in the group by itself.';
         });
       },
     ),
@@ -265,7 +265,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
           const owner = active.find((p) => p.principalId === person.id);
           if (!owner) throw new Refusal('unknown_person', `'${ownerName}' is not an active participant.`);
           const item = await proposeActionItem(w, { description, owner, dueDate });
-          return `Action item #${String(item.number)} was proposed to ${owner.displayName}. It binds once they said yes; the engine asked them.`;
+          return `Action item #${String(item.number)} was proposed to ${owner.displayName}. It binds once they said yes; they were asked in the group.`;
         });
       },
     ),

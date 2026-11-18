@@ -26,7 +26,7 @@ export interface ResolvedContext {
 }
 
 export const NO_CONTEXT =
-  'Refused: the kernel did not state which conversation this tool call belongs to. The engine never guesses a facilitation. This needs a kernel with tool call context (plugin-api >= 1.55).';
+  'Refused: this tool call does not say which conversation it belongs to, and a facilitation is never guessed. Nothing was done.';
 
 export function resolveContext(context: NativeToolCallContext | undefined): ResolvedContext {
   if (!context?.agentSlug || !context.channelType || !context.conversationId) throw new Refusal('no_context', NO_CONTEXT);
@@ -56,7 +56,7 @@ export async function requireReadable(engine: FacilitationEngine, f: Facilitatio
   if (subscription.state !== 'refused') return;
   throw new Refusal(
     'no_subscription',
-    `I cannot read or post in this conversation right now (${subscription.code}: ${subscription.message}). Nothing was created, opened or changed. Tell the group that facilitation is not available here right now; do not say that anything was started.`,
+    'I cannot read or post in this conversation right now. Nothing was created, opened or changed. Tell the group that facilitation is not available here right now; do not say that anything was started.',
   );
 }
 
@@ -125,10 +125,14 @@ export function defineTool(
         const ctx = resolveContext(context);
         await engine.ensureReady();
         engine.ensureAttached(ctx.agentSlug);
-        return await run(asObject(input), ctx);
+        return await engine.core.inToolCall(ctx.inboundEventId, () => run(asObject(input), ctx));
       } catch (err) {
         if (err instanceof Refusal) return err.code === 'no_context' ? err.message : `Refused (${err.code}): ${err.message}`;
-        if (err instanceof EngineUnavailableError) return `Not available: ${err.message} Tell the group that facilitation is not available here right now.`;
+        if (err instanceof EngineUnavailableError) {
+          // The reason is for the operator (log, status endpoint), not for the chat.
+          engine.core.log(`tool ${spec.name} refused: ${err.message}`);
+          return 'Not available: facilitation is not set up completely on this instance. Tell the group that facilitation is not available here right now and that an operator has to finish the setup.';
+        }
         engine.core.log(`tool ${spec.name} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }

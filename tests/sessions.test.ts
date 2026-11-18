@@ -143,7 +143,7 @@ test('a meeting: agenda before it, start on time with what is perceived, time ch
   await tool(conv, 'facilitation_start', { goal: 'Quarterly planning', definitionOfDone: 'Priorities are agreed', agenda: [{ kind: 'collect', title: 'Topics' }, { kind: 'discuss', title: 'Discuss priorities', timeboxMinutes: 20 }, { kind: 'close', title: 'Close' }] });
   await tool(conv, 'facilitation_open');
   const scheduled = await tool(conv, 'facilitation_session', { action: 'schedule', title: 'Planning call', start: inMinutes(180), end: inMinutes(240), modality: 'online', meetingRef: 'meeting-1' });
-  assert.match(scheduled, /^Scheduled "Planning call"\. The engine posts the agenda 60 minutes before/);
+  assert.match(scheduled, /^Scheduled "Planning call"\. The agenda is posted 60 minutes before/);
   await say(conv, 'anna', 'Hiring plan');
   await say(conv, 'bert', 'Budget for tooling');
 

@@ -60,13 +60,13 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
               ...(meetingRef ? { meetingRef } : {}),
               room,
             });
-            return `Scheduled "${session.title ?? ''}". The engine posts the agenda ${String(w.config.sessionAgendaLeadMinutes)} minutes before it starts and opens the session on time.`;
+            return `Scheduled "${session.title ?? ''}". The agenda is posted ${String(w.config.sessionAgendaLeadMinutes)} minutes before it starts and the session opens on time, without another call.`;
           }
           if (action === 'start') {
             const next = sessions.find((s) => s.status === 'scheduled');
             if (!next) throw new Refusal('no_session', 'No session is scheduled.');
             await startSession(w, next, prefetched);
-            return 'The session is running. The engine said what it perceives here.';
+            return 'The session is running. What can be perceived in it was said in the group.';
           }
           const running = sessions.find((s) => s.status === 'running');
           if (!running) throw new Refusal('no_session', 'No session is running.');
@@ -120,7 +120,7 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
             ballot = parsed.ballot;
           }
           const recorded = await recordSpoken(w, { speaker: requiredString(args, 'speaker'), kind, summary: requiredString(args, 'summary'), ...(ballot ? { ballot } : {}) });
-          return `Recorded for ${recorded.speaker.displayName} as unconfirmed. It counts once they confirmed in the chat; the engine asked them.`;
+          return `Recorded for ${recorded.speaker.displayName} as unconfirmed. It counts once they confirmed in the chat; they were asked there.`;
         });
       },
     ),

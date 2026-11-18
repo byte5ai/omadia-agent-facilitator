@@ -62,7 +62,7 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
         if (!duration || duration < 15 || duration > 480) throw new Refusal('bad_input', 'durationMinutes must be between 15 and 480.');
         return engine.core.work(f.id, async (w) => {
           await proposeFollowupMeeting(w, { subject: requiredString(args, 'subject'), durationMinutes: duration, from: from.toISOString(), to: to.toISOString(), online: args['online'] !== false });
-          return 'Put to the group. If nobody objects, the engine schedules it after the close and tells the group the time.';
+          return 'Put to the group. If nobody objects, it is scheduled after the close and the group is told the time. Do not schedule or announce anything yourself.';
         });
       },
     ),

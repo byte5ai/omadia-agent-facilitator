@@ -276,7 +276,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   if (!messages) {
     throw new Refusal(
       'no_message_service',
-      'This kernel does not deliver the messages of a conversation to the facilitation engine (conversationMessages). Without them contributions cannot be recorded, so nothing is started.',
+      'The messages of a conversation cannot be read on this instance. Without them contributions cannot be recorded, so nothing is started. An operator has to finish the setup.',
     );
   }
 

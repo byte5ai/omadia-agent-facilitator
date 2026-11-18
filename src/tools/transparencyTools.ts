@@ -91,7 +91,7 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
             change = { type, stepId: step.id, method, options, ...(points ? { points } : {}), ...(statement ? { statement } : {}) };
           }
           const proposal = await proposeChange(w, change, proposer);
-          return `Put to the group. It holds if nobody objects until ${proposal.windowEndsAt.toISOString()}; the engine decides and announces it. Moderate objections like any other; do not announce an outcome yourself.`;
+          return `Put to the group. It holds if nobody objects until ${proposal.windowEndsAt.toISOString()}; the outcome is announced in the group by itself. Moderate objections like any other; do not announce an outcome yourself.`;
         });
       },
     ),

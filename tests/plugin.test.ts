@@ -100,9 +100,9 @@ test('without a database the tools still exist and say that the engine is not av
     { goal: 'g', definitionOfDone: 'd' },
     { agentSlug: 'mira', channelType: 'teams', conversationId: 'c1', callerPrincipalId: 'user:anna' },
   );
-  assert.match(answer ?? '', /^Not available: The facilitation engine has no database/);
+  assert.match(answer ?? '', /^Not available: facilitation is not set up completely/);
   const noContext = await start?.handler({ goal: 'g', definitionOfDone: 'd' });
-  assert.match(noContext ?? '', /never guesses a facilitation/);
+  assert.match(noContext ?? '', /a facilitation is never guessed/);
 });
 
 test('the operator API is mounted and the facilitations view is in the navigation with English and German labels', async () => {

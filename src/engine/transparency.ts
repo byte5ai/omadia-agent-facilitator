@@ -188,7 +188,7 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
 export async function proposeDodMet(w: Work): Promise<Proposal> {
   if (w.f.phase !== 'active') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
   const dod = await store.currentDod(w.tx, w.f.id);
-  if (dod?.criteria) throw new Refusal('machine_checkable', 'This definition of done is checked by the engine. It concludes by itself when it is met; there is nothing to confirm.');
+  if (dod?.criteria) throw new Refusal('machine_checkable', 'This definition of done is checked automatically. The facilitation concludes by itself when it is met; there is nothing to confirm.');
   const t = texts(w.f.language);
   const summary = t.closeSummary(await closingSummary(w));
   return openProposal(w, { kind: 'dod_met', summary, proposedBy: 'facilitator', windowMinutes: Math.min(w.f.settings.confirmWindowMinutes, w.f.settings.changeWindowHours * 60) });

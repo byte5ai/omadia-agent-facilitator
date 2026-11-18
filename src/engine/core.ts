@@ -6,6 +6,7 @@
 // same transaction as the change that caused them, so there is no state change
 // without its message and no message without its state change.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import type { Clock } from '../clock.js';
@@ -104,8 +105,45 @@ export type AfterRelease = (engine: EngineCore, facilitationId: string) => Promi
  *  locked connection and must not take another one. */
 export type AfterDispatch = (engine: EngineCore, client: PoolClientLike, facilitationId: string) => Promise<void>;
 
+/** What a tool call did, seen from the units of work that ran inside it. */
+interface ToolCallScope {
+  /** Messages queued for the group. */
+  groupPosts: number;
+}
+const toolCall = new AsyncLocalStorage<ToolCallScope>();
+/** How long the engine remembers that a turn's tools posted. */
+const TURN_MEMORY_MS = 60 * 60_000;
+
 export class EngineCore {
   readonly instanceId: string;
+  /** Inbound events whose turn had a tool post in the group, with the time. */
+  private readonly postedInTurn = new Map<string, number>();
+
+  /**
+   * Run a tool call and note whether it made the facilitator post in the
+   * group. The turn that called the tool has then said what there is to say:
+   * its own text is not posted on top (the model is not relied on to stay
+   * silent).
+   */
+  async inToolCall<T>(inboundEventId: string | undefined, run: () => Promise<T>): Promise<T> {
+    const scope: ToolCallScope = { groupPosts: 0 };
+    try {
+      return await toolCall.run(scope, run);
+    } finally {
+      if (inboundEventId !== undefined && scope.groupPosts > 0) {
+        const now = Date.now();
+        for (const [eventId, at] of this.postedInTurn) if (now - at > TURN_MEMORY_MS) this.postedInTurn.delete(eventId);
+        this.postedInTurn.set(inboundEventId, now);
+      }
+    }
+  }
+
+  /** Did a tool of the turn for this inbound event post in the group? Asked
+   *  once, when the turn is over. */
+  takePostedInTurn(inboundEventId: string): boolean {
+    return this.postedInTurn.delete(inboundEventId);
+  }
+
   private readonly afterDispatch: AfterDispatch[] = [];
   private readonly afterRelease: AfterRelease[] = [];
 
@@ -213,6 +251,8 @@ export class EngineCore {
       const value = await fn(w);
       const version = bumped ? await store.bumpStateVersion(tx, facilitationId) : current.stateVersion;
       for (const message of queued) await this.enqueue(tx, current, version, now, message);
+      const scope = toolCall.getStore();
+      if (scope) scope.groupPosts += queued.filter((m) => m.to === 'group').length;
       return value;
     });
   }

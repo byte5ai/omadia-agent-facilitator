@@ -19,6 +19,9 @@ export const CARA: FakeUser = { id: 'cara', displayName: 'Cara', email: 'cara@ex
 export const DAVE: FakeUser = { id: 'dave', displayName: 'Dave', email: 'dave@example.com' };
 export const FOUR = [ANNA, BERT, CARA, DAVE];
 
+/** Words of the machinery that no tool result may contain. */
+export const INTERNALS = /\b(engine|kernel|outbox|plugin)\b/i;
+
 export interface Harness {
   db: TestDb;
   kernel: FakeKernel;
@@ -65,6 +68,10 @@ export async function createHarness(opts: { config?: Partial<EngineConfig>; star
       clock.advance(kernel.tickMs);
       const answer = await def.handler(args, kernel.context(at.agent ?? 'mira', at.conversation, at.caller ?? 'anna'));
       await h.settle();
+      // A model may repeat a tool result to the group word for word: no
+      // result speaks of the machinery.
+      const internal = INTERNALS.exec(answer);
+      if (internal) throw new Error(`the result of ${name} speaks of internals ("${internal[0]}"): ${answer}`);
       return answer;
     },
     async settle() {
