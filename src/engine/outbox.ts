@@ -42,6 +42,13 @@ export function withTimeout<T>(call: Promise<T>, ms: number, what: string): Prom
   return Promise.race([call, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** A failed send as the outbox records it. A provider may answer without a
+ *  code or a message; what is written down is readable either way. */
+function failed(code: unknown, message: unknown): SendResult {
+  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
+  return { ok: false, code: text(code) ?? 'malformed_outcome', message: text(message) ?? 'the channel reported a failure without saying why' };
+}
+
 async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promise<SendResult> {
   const payload = row.payload as StoredPayload;
   if (row.targetKind === 'group') {
@@ -60,7 +67,7 @@ async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promis
       },
       asOwnIdentity: true,
     });
-    if (outcome.outcome !== 'delivered') return { ok: false, code: outcome.code, message: outcome.message };
+    if (outcome.outcome !== 'delivered') return failed(outcome.code, outcome.message);
     return { ok: true, ...(outcome.messageId !== undefined ? { messageId: outcome.messageId } : {}) };
   }
 
@@ -76,11 +83,11 @@ async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promis
   const delivery = result.deliveries[0];
   if (!delivery) {
     const diagnostic = result.diagnostics[0];
-    return { ok: false, code: diagnostic?.code ?? 'no_delivery', message: diagnostic?.message ?? 'the kernel reported no delivery' };
+    return failed(diagnostic?.code ?? 'no_delivery', diagnostic?.message ?? 'no delivery was reported');
   }
   return delivery.outcome.outcome === 'delivered'
     ? { ok: true, ...(delivery.outcome.messageId !== undefined ? { messageId: delivery.outcome.messageId } : {}) }
-    : { ok: false, code: delivery.outcome.code, message: delivery.outcome.message };
+    : failed(delivery.outcome.code, delivery.outcome.message);
 }
 
 async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined): Promise<void> {

@@ -152,3 +152,15 @@ test('an ended facilitation without a subscription gives its messages up after a
   assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false, 'an ended facilitation does not subscribe again');
   assert.equal((await h.facilitation(conv)).settings.orphaned, true);
 });
+
+test('a provider that answers without a code or a message leaves a readable error, never "undefined"', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-malformed', FOUR);
+  await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', ...VOTE }, { conversation: conv });
+  h.kernel.sendFaults.push({} as never);
+  const opened = await h.tool('facilitation_open', {}, { conversation: conv });
+  const row = (await h.db.pool.query<{ last_error: string }>(`SELECT last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'handshake'`, [(await h.facilitation(conv)).id])).rows[0];
+  assert.doesNotMatch(row?.last_error ?? '', /undefined/);
+  assert.match(row?.last_error ?? '', /^malformed_outcome: /);
+  assert.doesNotMatch(opened, /undefined/);
+  assert.ok(!h.logs.some((l) => l.includes('undefined: undefined')));
+});
