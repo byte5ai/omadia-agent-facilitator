@@ -55,9 +55,10 @@ export async function namePrincipals(q: Queryable, f: Facilitation, text: string
   if (!known.has(f.initiatorPrincipal)) known.set(f.initiatorPrincipal, initiatorName(f, participants));
   let out = text;
   // Longest first: one id may be the beginning of another.
+  // A function as replacement: a name is inserted as it is ("$" has no meaning).
   for (const id of [...known.keys()].sort((a, b) => b.length - a.length)) {
     if (!id.toLowerCase().startsWith('user:')) continue;
-    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escape(id)}(?![\\p{L}\\p{N}_-])`, 'giu'), known.get(id) ?? t.someone);
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escape(id)}(?![\\p{L}\\p{N}_-])`, 'giu'), () => known.get(id) ?? t.someone);
   }
   return out.replace(GUID_PRINCIPALS, t.someone);
 }
