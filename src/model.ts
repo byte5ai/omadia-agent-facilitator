@@ -64,6 +64,8 @@ export interface FacilitationSettings {
   openRoster?: boolean;
   /** The group was told that not everybody can be reached privately. */
   directNoticeSent?: boolean;
+  /** People a private message could not reach; not tried again. */
+  unreachable?: string[];
 }
 
 export interface Facilitation {
@@ -250,8 +252,9 @@ export interface ProtocolEvent {
 export interface OutboxPayload {
   text: string;
   mentions?: { user: string; text: string }[];
-  /** A card the channel renders (a live poll); answers come back as card_answer events. */
-  card?: { cardId: string; kind: 'poll'; title: string; options: StepOption[]; multiple?: boolean };
+  /** A poll the channel renders as a card; answers come back as card_answer
+   *  events with `cardId` = `pollId`. A channel without polls posts the text. */
+  poll?: { pollId: string; question: string; options: { id: string; label: string }[]; hint?: string };
 }
 
 export interface OutboxRow {

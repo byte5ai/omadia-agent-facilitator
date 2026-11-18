@@ -237,7 +237,7 @@ test('a private reminder that cannot be delivered: the group is told once, witho
   assert.equal(count(conv, 'Reminder:'), 2);
   assert.equal(count(conv, 'I cannot reach everybody privately here'), 1);
   assert.ok(!posts(conv).some((t) => t.includes('I cannot reach') && t.includes('Dave')));
-  assert.equal((await store.listEvents(h.db.pool, f.id, ['direct_unreachable'])).length, 2);
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['direct_unreachable'])).length, 1, 'a private message is tried once per person and not again');
 });
 
 test('runoff timeout: the facilitation ends with a report that names the tie', { skip: PG_SKIP }, async () => {

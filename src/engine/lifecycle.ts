@@ -173,6 +173,9 @@ export function registerStartCheck(check: StartCheck): void {
   if (!startChecks.includes(check)) startChecks.push(check);
 }
 
+const REPAIRABLE = new Set(['consent_missing', 'package_outdated']);
+const READINESS_UNVERIFIED = 'The channel could not confirm that I can read every message here (no readiness check available).';
+
 const OWN_IDENTITY_REQUIRED =
   'This facilitator has no identity of its own on this channel. A facilitator never speaks through another bot, so it cannot start a facilitation here. An operator has to give it its own channel identity first.';
 
@@ -253,7 +256,13 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
 
   const readiness = kernel.readiness();
   if (readiness) {
-    const report = await readiness.check(input);
+    let report = await readiness.check(input);
+    // Consent that only needs renewing is repaired once; anything else is
+    // said exactly and nothing starts.
+    if (!report.ready && readiness.repairConsent && report.missing.some((m) => REPAIRABLE.has(m.code))) {
+      const repair = await readiness.repairConsent(input);
+      if (repair.outcome !== 'failed') report = await readiness.check(input);
+    }
     if (!report.ready) {
       const missing = report.missing.map((m) => `${m.code}: ${m.message}`);
       throw new Refusal(
@@ -261,8 +270,9 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         `I cannot facilitate here yet. Missing: ${missing.length > 0 ? missing.join('; ') : 'the channel reports it is not ready'}. Nothing was started.`,
       );
     }
+    if (report.verified === false) notes.push(READINESS_UNVERIFIED);
   } else {
-    notes.push('The channel could not confirm that I can read every message here (no readiness check available).');
+    notes.push(READINESS_UNVERIFIED);
   }
 
   const subscription = await messages.subscribe(input);
@@ -380,6 +390,25 @@ export function setHandshake(builder: (w: Work, onlyStep: Step | undefined) => P
   handshake = builder;
 }
 
+export type StepHook = (w: Work, step: Step) => Promise<void>;
+const voteOpened: StepHook[] = [];
+const stepOpened: StepHook[] = [];
+/** A vote was put to the group (a poll card can go with it). */
+export function onVoteOpened(hook: StepHook): void {
+  if (!voteOpened.includes(hook)) voteOpened.push(hook);
+}
+/** A step opened (a time check can be scheduled for it). */
+export function onStepOpened(hook: StepHook): void {
+  if (!stepOpened.includes(hook)) stepOpened.push(hook);
+}
+export async function announceVote(w: Work, step: Step): Promise<void> {
+  if (step.method === null || (step.method !== 'consent' && step.options.length === 0)) return;
+  for (const hook of voteOpened) await hook(w, step);
+}
+export async function announceStepOpened(w: Work, step: Step): Promise<void> {
+  for (const hook of stepOpened) await hook(w, step);
+}
+
 const onOpen: Array<(w: Work) => Promise<void>> = [];
 /** Work that starts with the facilitation (its reminders and its deadline). */
 export function onOpened(hook: (w: Work) => Promise<void>): void {
@@ -402,6 +431,7 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
     w.post({ purpose: 'handshake', key: 'opening', to: 'group', deliveryClass: 'essential', text: await handshake(w, single ? opened : undefined) });
     await w.event('opened', 'facilitator', { participants: participants.length });
     for (const hook of onOpen) await hook(w);
+    if (opened) await announceVote(w, opened);
     if (!single) {
       const next = (await store.listSteps(w.tx, w.f.id)).find((s) => s.status === 'pending');
       if (next) await openFirstStep(w, next);

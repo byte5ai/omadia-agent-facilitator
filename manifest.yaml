@@ -247,6 +247,26 @@ setup:
         de: "Wie viele Nachrichten der Facilitator in einer Facilitation posten darf. Handshake, Ergebnis und Abbruchbericht werden immer gesendet."
       required: false
       default: 500
+    - key: "session_agenda_lead_minutes"
+      type: "number"
+      label:
+        en: "Agenda before a meeting (minutes)"
+        de: "Agenda vor einem Meeting (Minuten)"
+      help:
+        en: "How long before a scheduled meeting the facilitator posts its agenda."
+        de: "Wie lange vor einem geplanten Meeting der Facilitator dessen Agenda postet."
+      required: false
+      default: 60
+    - key: "media_consent_explicit"
+      type: "boolean"
+      label:
+        en: "Explicit consent for audio per participant"
+        de: "Ausdrückliche Zustimmung zu Audio pro Person"
+      help:
+        en: "Default false: processing the speech of a call starts after it was announced and nobody objected. When true, every participant has to agree (for example for works-council agreements)."
+        de: "Standard false: Die Verarbeitung des Gesprochenen eines Calls beginnt nach Ankündigung, wenn niemand widerspricht. Bei true muss jede teilnehmende Person zustimmen (z. B. für Betriebsvereinbarungen)."
+      required: false
+      default: false
     - key: "protocol_mail_enabled"
       type: "boolean"
       label:

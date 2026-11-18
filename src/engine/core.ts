@@ -64,7 +64,7 @@ export interface Outgoing {
   to: 'group' | { principalId: string };
   text: string;
   mentions?: { user: string; text: string }[];
-  card?: OutboxPayload['card'];
+  poll?: OutboxPayload['poll'];
   deliveryClass: DeliveryClass;
   /** Delivered only while the facilitation is in one of these phases. */
   requiredPhases?: Phase[];
@@ -193,7 +193,7 @@ export class EngineCore {
     const payload: OutboxPayload & { link?: Outgoing['link'] } = {
       text: m.text,
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
-      ...(m.card ? { card: m.card } : {}),
+      ...(m.poll ? { poll: m.poll } : {}),
       ...(m.link ? { link: m.link } : {}),
     };
     const versionBound = m.versionBound ?? m.deliveryClass === 'droppable';

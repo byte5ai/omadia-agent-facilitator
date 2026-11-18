@@ -21,6 +21,7 @@ import type {
   FacilitationFollowupService,
   SessionCapabilitiesService,
   SessionCapabilitySnapshot,
+  SessionEventRecord,
   TargetedSendDeliveryOutcome,
   TargetedSendRequest,
   TargetedSendService,
@@ -96,6 +97,9 @@ export class FakeKernel {
   readonly noIdentity = new Set<string>();
   /** Per `agent|conversation`: what the readiness check reports missing. */
   readonly notReady = new Map<string, { code: string; message: string }[]>();
+  /** `agent|conversation` keys whose missing consent a repair fixes; and the repairs asked for. */
+  readonly repairable = new Set<string>();
+  readonly repairs: string[] = [];
   /** Principals a private message cannot reach, with the channel's code. */
   readonly dmBlocked = new Map<string, string>();
   /** Group sends to fail next, in order: an outcome, or 'throw' / 'lost'
@@ -119,6 +123,7 @@ export class FakeKernel {
   private readonly listeners = new Map<string, Set<(record: ConversationMessageRecord) => void | Promise<void>>>();
   private readonly membershipListeners = new Set<(event: ConversationMembershipEvent) => void>();
   private readonly capabilityListeners = new Map<string, Set<(s: SessionCapabilitySnapshot) => void | Promise<void>>>();
+  private readonly sessionListeners = new Map<string, Set<(e: SessionEventRecord) => void | Promise<void>>>();
   private readonly revisions = new Map<string, number>();
   private readonly originals = new Map<string, ConversationMessageRecord>();
 
@@ -235,9 +240,29 @@ export class FakeKernel {
     for (const listener of [...this.membershipListeners]) listener(event);
   }
 
-  changeCapabilities(agentSlug: string, snapshot: SessionCapabilitySnapshot): void {
+  async changeCapabilities(agentSlug: string, snapshot: SessionCapabilitySnapshot): Promise<void> {
     this.snapshots.set(`${snapshot.conversationId}|${snapshot.sessionRef ?? ''}`, snapshot);
-    for (const listener of [...(this.capabilityListeners.get(agentSlug) ?? [])]) void listener(snapshot);
+    for (const listener of [...(this.capabilityListeners.get(agentSlug) ?? [])]) await listener(snapshot);
+  }
+
+  /** What a conversation (or a meeting in it) offers. */
+  capabilities(conversationId: string, inputs: SessionCapabilitySnapshot['inputs'], outputs: SessionCapabilitySnapshot['outputs'], opts: { sessionRef?: string; modality?: SessionCapabilitySnapshot['modality'] } = {}): SessionCapabilitySnapshot {
+    const snapshot: SessionCapabilitySnapshot = {
+      channelType: this.channelType,
+      conversationId,
+      ...(opts.sessionRef ? { sessionRef: opts.sessionRef } : {}),
+      modality: opts.modality ?? 'chat',
+      inputs,
+      outputs,
+      capturedAt: this.clock.now().toISOString(),
+    };
+    this.snapshots.set(`${conversationId}|${opts.sessionRef ?? ''}`, snapshot);
+    return snapshot;
+  }
+
+  async sessionEvent(agentSlug: string, conversationId: string, sessionRef: string, kind: SessionEventRecord['kind']): Promise<void> {
+    const event: SessionEventRecord = { channelType: this.channelType, conversationId, sessionRef, kind, occurredAt: this.clock.now().toISOString() };
+    for (const listener of [...(this.sessionListeners.get(agentSlug) ?? [])]) await listener(event);
   }
 
   /** The tool call context the kernel states for a turn in a conversation. */
@@ -295,7 +320,7 @@ export class FakeKernel {
       if (fault === 'throw') throw new Error('channel connection reset');
       if (fault && fault !== 'lost') return { outcome: 'unreachable', ...fault };
       const messageId = this.nextId('bot');
-      const message = request.message as ConversationSendRequest['message'] & { poll?: unknown };
+      const message = request.message;
       this.posts.push({
         as: request.agentSlug,
         conversationId: request.conversationId,
@@ -305,7 +330,7 @@ export class FakeKernel {
         messageId,
       });
       if (fault === 'lost') return { outcome: 'unreachable', code: 'timeout', message: 'no confirmation from the channel' };
-      return { outcome: 'delivered', messageId };
+      return { outcome: 'delivered', messageId, ...(message.poll !== undefined ? { cardMessageId: `${messageId}-card` } : {}) };
     },
   };
 
@@ -353,6 +378,13 @@ export class FakeKernel {
         missing,
       };
     },
+    repairConsent: async (request) => {
+      const key = `${request.agentSlug}|${request.conversationId}`;
+      this.repairs.push(key);
+      if (!this.repairable.has(key)) return { outcome: 'failed', code: 'graph_forbidden', message: 'an admin has to consent' };
+      this.notReady.delete(key);
+      return { outcome: 'upgraded' };
+    },
   };
 
   private readonly capabilitiesService: SessionCapabilitiesService = {
@@ -370,6 +402,12 @@ export class FakeKernel {
       const set = this.capabilityListeners.get(agentSlug) ?? new Set();
       set.add(handler);
       this.capabilityListeners.set(agentSlug, set);
+      return () => set.delete(handler);
+    },
+    onSessionEvent: (agentSlug, handler) => {
+      const set = this.sessionListeners.get(agentSlug) ?? new Set();
+      set.add(handler);
+      this.sessionListeners.set(agentSlug, set);
       return () => set.delete(handler);
     },
   };

@@ -21,7 +21,7 @@ import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { abortInWork, displayNameOf, releaseConversation, releaseOnEnd } from './lifecycle.js';
+import { abortInWork, announceVote, displayNameOf, releaseConversation, releaseOnEnd } from './lifecycle.js';
 import { onMembershipChange } from './membership.js';
 import { closingSummary } from './protocol.js';
 
@@ -315,6 +315,8 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
       w.bump();
       await w.event('runoff', 'engine', { stepId: step.id, round: next, tied: outcome.tied, until: until.toISOString() });
       w.post({ purpose: 'runoff', key: `${step.id}:${String(next)}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: t.runoff(t.list(tied), formatWhen(until, w.f.timezone, w.f.language)) });
+      const runoffStep = await store.getStep(w.tx, step.id);
+      if (runoffStep) await announceVote(w, runoffStep);
       return outcome;
     }
 

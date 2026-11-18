@@ -30,18 +30,17 @@ async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promis
       agentSlug: f.facilitatorAgent,
       channelType: f.channelType,
       conversationId: f.conversationId,
-      // `card` is not part of plugin-api 1.55.0; a kernel that does not know
-      // it posts the text, which always carries the same question.
+      // The text always carries the whole question, so a channel without
+      // polls loses nothing.
       message: {
         text: payload.text,
         ...(payload.mentions ? { mentions: payload.mentions } : {}),
-        ...(payload.card ? { card: payload.card } : {}),
-      } as { text: string },
+        ...(payload.poll ? { poll: payload.poll } : {}),
+      },
       asOwnIdentity: true,
     });
-    return outcome.outcome === 'delivered'
-      ? { ok: true, ...(outcome.messageId !== undefined ? { messageId: outcome.messageId } : {}) }
-      : { ok: false, code: outcome.code, message: outcome.message };
+    if (outcome.outcome !== 'delivered') return { ok: false, code: outcome.code, message: outcome.message };
+    return { ok: true, ...(outcome.messageId !== undefined ? { messageId: outcome.messageId } : {}) };
   }
 
   const service = engine.deps.kernel.targetedSend();
@@ -140,6 +139,13 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
     return;
   }
 
+  // A private message is tried once per person: who could not be reached is
+  // not tried again in this facilitation.
+  if (row.targetKind === 'direct' && row.deliveryClass === 'droppable' && (f.settings.unreachable ?? []).includes(row.targetPrincipal ?? '')) {
+    await drop(client, row, 'this person could not be reached privately before');
+    return;
+  }
+
   // Quota: beyond the limit only essential messages go out, and the group is
   // told once.
   if (row.deliveryClass === 'droppable' && messageQuotaReached(f, engine.config.maxMessagesPerFacilitation)) {
@@ -216,6 +222,12 @@ async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Fa
     occurredAt: engine.now(),
     payload: { principal: row.targetPrincipal, purpose: row.purpose, code },
   });
+  if (row.targetPrincipal && !(f.settings.unreachable ?? []).includes(row.targetPrincipal)) {
+    await client.query(
+      `UPDATE facilitations SET settings = jsonb_set(settings, '{unreachable}', coalesce(settings->'unreachable', '[]'::jsonb) || to_jsonb($2::text)) WHERE id = $1`,
+      [f.id, row.targetPrincipal],
+    );
+  }
   if (row.purpose === 'initiator_report') {
     // The report could not be sent privately: say so where everything is anyway.
     const initiator = await store.getParticipant(client, f.id, row.targetPrincipal ?? '');

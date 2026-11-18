@@ -13,6 +13,7 @@ import * as store from '../db/store.js';
 import type { Facilitation } from '../model.js';
 import { formatWhen } from '../texts/index.js';
 import type { EngineCore } from './core.js';
+import { playbook } from './playbook.js';
 import { participationOf } from './status.js';
 
 export const SILENT = '[silent]';
@@ -48,6 +49,8 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
     const text = await section(q, f);
     if (text) lines.push(text);
   }
+  const book = playbook();
+  if (book !== '') lines.push(book);
   lines.push(
     '# Rules of this turn',
     '- You never count, never work out who is missing and never decide whether the definition of done is met. The engine does; the state above is its answer.',

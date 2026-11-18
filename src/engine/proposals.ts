@@ -29,6 +29,8 @@ export interface ProposalKind {
   accept(w: Work, proposal: Proposal): Promise<void>;
   /** The proposal was rejected or withdrawn. */
   reject?(w: Work, proposal: Proposal): Promise<void>;
+  /** Silence is not enough: every active participant has to agree. */
+  unanimous?(w: Work, proposal: Proposal): boolean;
   /** "extend N" is an answer to this kind of proposal. */
   extend?(w: Work, proposal: Proposal, minutes: number | undefined): Promise<void>;
 }
@@ -123,11 +125,12 @@ export async function decideProposal(w: Work, proposal: Proposal, accepted: bool
 async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean): Promise<boolean> {
   const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
   const standing = proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
+  const everybody = active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
   if (windowOver) {
-    await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0);
+    const needsAll = kindOf(proposal).unanimous?.(w, proposal) === true;
+    await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
   }
-  const everybody = active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
   if (everybody && standing.length === 0) {
     await decideProposal(w, proposal, true);
     return true;

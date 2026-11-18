@@ -150,6 +150,7 @@ export const en = {
     summary: (text: string): string => `take this summary into the record:\n${text}`,
     decision: (statement: string): string => `record this decision: ${statement}`,
     close: (summary: string): string => `close the facilitation with this summary:\n${summary}`,
+    media_consent: (what: string): string => what,
   },
   proposalAnnounce: (what: string, until: string, extendable: boolean): string =>
     `Proposal: ${what}\nIt holds if nobody objects until ${until}, or at once when everybody agreed. Write "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.`,
@@ -323,6 +324,48 @@ export const en = {
   abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
   abortOperator: (reason: string): string => `an operator ended it (${reason})`,
   notVisible: (): string => 'You are not a participant of this facilitation, so its protocol is not available to you.',
+
+  // ── sessions and media ───────────────────────────────────────────────────
+  perceive: {
+    intro: 'What I perceive here:',
+    text: 'I read the chat',
+    message_edits: 'edited messages',
+    reactions: 'reactions to my own posts',
+    card_answers: 'the polls',
+    presence: 'who joins and leaves',
+    hand_raise: 'raised hands',
+    transcribed_speech: 'what is said in the call, as a transcript with the speaker',
+    shared_documents: 'shared documents',
+    not: {
+      transcribed_speech: 'I do not hear the call',
+      hand_raise: 'I do not see raised hands',
+      presence: 'I do not see who is present',
+      card_answers: 'I cannot run polls here, so votes are written in the chat',
+      private_messages: 'I cannot write to anyone privately here, so reminders stay in the group',
+    },
+    sentence: (can: readonly string[], cannot: readonly string[]): string =>
+      `What I perceive here: ${can.join(', ')}.${cannot.length > 0 ? ` ${cannot.join('. ')}.` : ''} Nobody should assume more.`,
+  },
+  pollHint: (ballotExample: string): string => `Answer in the poll, or write your choice in the chat (e.g. "${ballotExample}").`,
+  pollUnverified: (name: string, summary: string): string =>
+    `${name}, a poll answer came in under your name that the platform could not verify: ${summary}. Reply "yes" in the group to make it count.`,
+  sessionAgenda: (title: string, when: string, agenda: readonly string[]): string =>
+    [`Agenda for "${title}" on ${when}:`, ...agenda, 'Topics and pre-reads you want to bring: write them here beforehand, one point per message.'].join('\n'),
+  sessionStarted: (title: string, until: string | undefined, perception: string): string =>
+    [`"${title}" starts now.${until ? ` We have until ${until}.` : ''}`, perception].join('\n'),
+  sessionEnded: (title: string): string => `"${title}" has ended. What is still open continues here in the chat.`,
+  timeNotice: (title: string, minutes: number): string => `Time check: ${String(minutes)} minutes left for "${title}".`,
+  speakingOrder: (names: readonly string[], remoteFirst: boolean): string =>
+    `Speaking order for this round${remoteFirst ? ' (remote first)' : ''}: ${names.join(', ')}. Say "pass" if you have nothing to add.`,
+  capabilityGained: (what: readonly string[]): string => `Something changed in this session. I can now also perceive: ${what.join(', ')}.`,
+  capabilityLost: (what: readonly string[]): string => `Something changed in this session. I can no longer perceive: ${what.join(', ')}. I continue with what is left.`,
+  mediaConsent: (): string =>
+    'process the transcribed speech of this call, so that I can record what is said. Raw audio and video are not stored, only the protocol. Anybody can stop it at any time with "stop listening"',
+  mediaConsentGranted: (): string => 'I now follow the transcript of the call. What I record from speech stays unconfirmed until the person confirms it in the chat. "stop listening" ends it at once.',
+  mediaConsentRefused: (): string => 'Understood. I do not process the speech of this call and continue with chat and polls only.',
+  mediaStopped: (name: string): string => `${name} asked me to stop. I no longer process the speech of this call.`,
+  spokenEcho: (name: string, summary: string): string =>
+    `${name}, I heard you say: ${summary}. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.`,
 
   phase: {
     configuring: 'being set up',

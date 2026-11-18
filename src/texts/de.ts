@@ -135,6 +135,7 @@ export const de: Texts = {
     summary: (text) => `diese Zusammenfassung ins Protokoll nehmen:\n${text}`,
     decision: (statement) => `diese Entscheidung festhalten: ${statement}`,
     close: (summary) => `die Moderation mit dieser Zusammenfassung abschließen:\n${summary}`,
+    media_consent: (what) => what,
   },
   proposalAnnounce: (what, until, extendable) =>
     `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht, oder sofort, wenn alle zugestimmt haben. Schreibt "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.`,
@@ -277,6 +278,46 @@ export const de: Texts = {
   abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
   abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
   notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',
+
+  // ── Sessions und Medien ──────────────────────────────────────────────────
+  perceive: {
+    intro: 'Was ich hier wahrnehme:',
+    text: 'Ich lese den Chat',
+    message_edits: 'bearbeitete Nachrichten',
+    reactions: 'Reaktionen auf meine eigenen Beiträge',
+    card_answers: 'die Umfragen',
+    presence: 'wer dazukommt und geht',
+    hand_raise: 'gehobene Hände',
+    transcribed_speech: 'das im Call Gesagte als Transkript mit Sprecher:in',
+    shared_documents: 'geteilte Dokumente',
+    not: {
+      transcribed_speech: 'Ich höre den Call nicht',
+      hand_raise: 'Gehobene Hände sehe ich nicht',
+      presence: 'Ich sehe nicht, wer anwesend ist',
+      card_answers: 'Umfragen kann ich hier nicht stellen, abgestimmt wird also im Chat',
+      private_messages: 'Privat kann ich hier niemandem schreiben, Erinnerungen bleiben also in der Gruppe',
+    },
+    sentence: (can, cannot) => `Was ich hier wahrnehme: ${can.join(', ')}.${cannot.length > 0 ? ` ${cannot.join('. ')}.` : ''} Niemand sollte von mehr ausgehen.`,
+  },
+  pollHint: (ballotExample) => `Antwortet in der Umfrage oder schreibt eure Wahl in den Chat (z. B. "${ballotExample}").`,
+  pollUnverified: (name, summary) =>
+    `${name}, unter deinem Namen kam eine Umfrage-Antwort, die die Plattform nicht bestätigen konnte: ${summary}. Antworte in der Gruppe mit "ja", damit sie zählt.`,
+  sessionAgenda: (title, when, agenda) =>
+    [`Agenda für "${title}" am ${when}:`, ...agenda, 'Themen und Unterlagen, die ihr einbringen wollt: schreibt sie vorab hier hinein, ein Punkt pro Nachricht.'].join('\n'),
+  sessionStarted: (title, until, perception) => [`"${title}" beginnt jetzt.${until ? ` Wir haben Zeit bis ${until}.` : ''}`, perception].join('\n'),
+  sessionEnded: (title) => `"${title}" ist beendet. Was noch offen ist, geht hier im Chat weiter.`,
+  timeNotice: (title, minutes) => `Zeit-Check: noch ${String(minutes)} Minuten für "${title}".`,
+  speakingOrder: (names, remoteFirst) =>
+    `Reihenfolge für diese Runde${remoteFirst ? ' (Remote zuerst)' : ''}: ${names.join(', ')}. Sagt "weiter", wenn ihr nichts ergänzen möchtet.`,
+  capabilityGained: (what) => `In dieser Session hat sich etwas geändert. Ich nehme jetzt zusätzlich wahr: ${what.join(', ')}.`,
+  capabilityLost: (what) => `In dieser Session hat sich etwas geändert. Ich nehme nicht mehr wahr: ${what.join(', ')}. Ich mache mit dem weiter, was bleibt.`,
+  mediaConsent: () =>
+    'das transkribierte Gesprochene dieses Calls verarbeiten, damit ich festhalten kann, was gesagt wird. Roh-Audio und -Video werden nicht gespeichert, nur das Protokoll. Jede:r kann es jederzeit mit "nicht mithören" stoppen',
+  mediaConsentGranted: () => 'Ich folge jetzt dem Transkript des Calls. Was ich aus Gesprochenem festhalte, bleibt unbestätigt, bis die Person es im Chat bestätigt. "Nicht mithören" beendet es sofort.',
+  mediaConsentRefused: () => 'Verstanden. Ich verarbeite das Gesprochene dieses Calls nicht und arbeite nur mit Chat und Umfragen weiter.',
+  mediaStopped: (name) => `${name} hat mich gebeten aufzuhören. Ich verarbeite das Gesprochene dieses Calls nicht mehr.`,
+  spokenEcho: (name, summary) =>
+    `${name}, ich habe dich so gehört: ${summary}. Antworte im Chat mit "ja", um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
 
   phase: {
     configuring: 'wird eingerichtet',

@@ -2,7 +2,7 @@
 // message delivery to the units of work, replay after a restart, and the
 // queue of facilitator turns.
 
-import type { ConversationMessageRecord } from '@omadia/plugin-api';
+import type { ConversationMessageRecord, SessionCapabilitySnapshot, SessionEventRecord } from '@omadia/plugin-api';
 
 import * as store from '../db/store.js';
 import type { ConversationMembershipEvent } from '../kernel.js';
@@ -17,6 +17,7 @@ import { installGovernance, purgeExpired } from './governance.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
+import { applySnapshot, endSession, installSessions, startSession } from './sessions.js';
 import { processMembership } from './membership.js';
 import { installTransparency } from './transparency.js';
 import { runFacilitatorTurn } from './turn.js';
@@ -40,6 +41,7 @@ export class FacilitationEngine {
     installActionItems();
     installTransparency();
     installGovernance();
+    installSessions(this.core);
     onOpened(scheduleDeadlineJobs);
   }
 
@@ -90,8 +92,55 @@ export class FacilitationEngine {
     if (this.attached.has(agentSlug)) return;
     const messages = this.core.deps.kernel.messages();
     if (!messages) return;
-    const dispose = messages.onMessage(agentSlug, (record) => this.receive(agentSlug, record));
-    this.attached.set(agentSlug, dispose);
+    const disposers = [messages.onMessage(agentSlug, (record) => this.receive(agentSlug, record))];
+    // What the channel offers can change mid-session; meetings start and end.
+    const capabilities = this.core.deps.kernel.sessionCapabilities();
+    if (capabilities) {
+      disposers.push(capabilities.onChange(agentSlug, (snapshot) => this.receiveSnapshot(agentSlug, snapshot)));
+      if (capabilities.onSessionEvent) disposers.push(capabilities.onSessionEvent(agentSlug, (event) => this.receiveSessionEvent(agentSlug, event)));
+    }
+    this.attached.set(agentSlug, () => {
+      for (const dispose of disposers) dispose();
+    });
+  }
+
+  async receiveSnapshot(agentSlug: string, snapshot: SessionCapabilitySnapshot): Promise<void> {
+    if (this.stopped) return;
+    await this.track(
+      (async () => {
+        try {
+          const f = await store.findLiveByConversation(this.core.pool(), snapshot.channelType, snapshot.conversationId);
+          if (f && f.facilitatorAgent === agentSlug) await this.core.work(f.id, (w) => applySnapshot(w, snapshot));
+        } catch (err) {
+          this.core.log(`capability change failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })(),
+    );
+  }
+
+  async receiveSessionEvent(agentSlug: string, event: SessionEventRecord): Promise<void> {
+    if (this.stopped) return;
+    await this.track(
+      (async () => {
+        try {
+          const live = (await store.listSubscribed(this.core.pool())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
+          if (!live) return;
+          await this.core.work(live.id, async (w) => {
+            const sessions = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
+            const session = sessions.find((s) => s.meetingRef === event.sessionRef) ?? sessions.find((s) => s.status === 'scheduled' || s.status === 'running');
+            if (event.kind === 'participant_joined' || event.kind === 'participant_left') {
+              await w.event('session_presence', 'engine', { kind: event.kind, sessionRef: event.sessionRef, participants: event.participants ?? [] });
+              return;
+            }
+            if (!session) return;
+            if (event.kind === 'session_started') await startSession(w, session);
+            else if (event.kind === 'session_ended') await endSession(w, session);
+          });
+        } catch (err) {
+          this.core.log(`session event failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })(),
+    );
   }
 
   private attachMembership(): void {

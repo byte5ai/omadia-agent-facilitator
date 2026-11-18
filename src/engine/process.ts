@@ -16,7 +16,7 @@ import { castBallots, conclude, setAfterStepDecided } from './decide.js';
 import { PRIORITY, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { rulesOf, setStepOpener } from './lifecycle.js';
+import { announceStepOpened, announceVote, rulesOf, setStepOpener } from './lifecycle.js';
 import { decideProposal, openProposal, registerProposalKind } from './proposals.js';
 import { closingSummary } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
@@ -68,6 +68,8 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
     requiredPhases: ['active'],
     text: t.stepOpened(step.position, steps.length, step.title, instruction, until ? formatWhen(until, w.f.timezone, w.f.language) : undefined),
   });
+  await announceVote(w, opened);
+  await announceStepOpened(w, opened);
   return opened;
 }
 
@@ -235,6 +237,7 @@ export async function setDecision(w: Work, step: Step, patch: Partial<Pick<Step,
   if (updated.status === 'open') {
     const t = texts(w.f.language);
     w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...rulesOf(w.f, updated)].join(' ') });
+    await announceVote(w, updated);
   }
   return updated;
 }
