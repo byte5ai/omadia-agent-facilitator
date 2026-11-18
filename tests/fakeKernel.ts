@@ -83,6 +83,51 @@ export interface SayOptions {
   at?: string;
 }
 
+/** A stand-in for the M365 connector's `facilitation.followup`: it refuses
+ *  anybody outside the grant, answers on a quarter-hour grid in UTC, and
+ *  never returns anything but busy intervals. */
+export class FakeFollowup implements FacilitationFollowupService {
+  readonly calls: { method: string; grant: { facilitationId: string; allowed: readonly string[] }; request: Record<string, unknown> }[] = [];
+  /** Busy intervals per address; an address that is absent is "unknown". */
+  readonly calendars = new Map<string, { start: string; end: string }[]>();
+  readonly mails: { recipients: readonly string[]; subject: string; body: string }[] = [];
+  readonly invitations: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }[] = [];
+  configured = true;
+  joinLinks = true;
+
+  private refuse(grant: { allowed: readonly string[] }, people: readonly string[]) {
+    if (!this.configured) return { outcome: 'refused' as const, code: 'not_configured' as const, message: 'no organiser mailbox is configured' };
+    const rejected = people.filter((p) => !grant.allowed.includes(p));
+    return rejected.length > 0 ? { outcome: 'refused' as const, code: 'recipient_not_allowed' as const, message: 'outside the grant', rejected } : undefined;
+  }
+
+  async freeBusy(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; from: string; to: string }) {
+    this.calls.push({ method: 'freeBusy', grant, request });
+    const refused = this.refuse(grant, request.attendees);
+    if (refused) return refused;
+    return {
+      outcome: 'ok' as const,
+      busy: request.attendees.filter((a) => this.calendars.has(a)).map((attendee) => ({ attendee, intervals: this.calendars.get(attendee) ?? [] })),
+    };
+  }
+
+  async createInvitation(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }) {
+    this.calls.push({ method: 'createInvitation', grant, request });
+    const refused = this.refuse(grant, request.attendees);
+    if (refused) return refused;
+    this.invitations.push(request);
+    return { outcome: 'created' as const, eventId: `event-${String(this.invitations.length)}`, ...(request.online && this.joinLinks ? { joinUrl: 'https://teams.example/join/1' } : {}) };
+  }
+
+  async sendMail(grant: { facilitationId: string; allowed: readonly string[] }, request: { recipients: readonly string[]; subject: string; body: string }) {
+    this.calls.push({ method: 'sendMail', grant, request });
+    const refused = this.refuse(grant, request.recipients);
+    if (refused) return refused;
+    this.mails.push(request);
+    return { outcome: 'sent' as const };
+  }
+}
+
 const scopeKey = (s: { agentSlug: string; channelType: string; conversationId: string }): string =>
   `${s.agentSlug}|${s.channelType}|${s.conversationId}`;
 

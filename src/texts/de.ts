@@ -319,6 +319,30 @@ export const de: Texts = {
   spokenEcho: (name, summary) =>
     `${name}, ich habe dich so gehört: ${summary}. Antworte im Chat mit "ja", um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
 
+  // ── zweckgebundene Fähigkeiten ───────────────────────────────────────────
+  stakeholderRoles: { receives_protocol: 'das Protokoll erhält', invited_to_followups: 'zu Folgeterminen eingeladen wird' },
+  proposeStakeholder: (name, role) => `${name} als Stakeholder aufnehmen, der bzw. die ${role}`,
+  proposeFollowupMeeting: (subject, minutes, from, to) =>
+    `nach dem Abschluss suche ich eine gemeinsame freie Zeit und verschicke die Einladung für "${subject}" (${String(minutes)} Minuten, zwischen ${from} und ${to}). Dafür lese ich nur, wann jemand belegt ist, nie, was die Termine sind`,
+  protocolDirect: (name, protocol) => `Hallo ${name}, hier ist das Protokoll der Moderation, an der du teilgenommen hast.\n\n${protocol}`,
+  protocolMailSubject: (goal) => `Protokoll: ${goal}`,
+  protocolSent: (channel, mail) =>
+    `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}` : ''}.`,
+  protocolMailUnavailable: (reason) => `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe, und die Teilnehmenden haben es privat erhalten, wo ich sie erreiche.`,
+  followupCreated: (subject, when, link, unknown) =>
+    `Der Folgetermin "${subject}" steht für ${when} in den Kalendern.${link ? '' : ' Die Einladung ging ohne Meeting-Link raus.'}${unknown > 0 ? ` Für ${String(unknown)} ${unknown === 1 ? 'Person' : 'Personen'} konnte ich keine Verfügbarkeit sehen, prüft die Zeit bitte.` : ''}`,
+  followupNoSlot: (subject) => `Ich habe zwischen den vereinbarten Daten keine Zeit gefunden, zu der alle für "${subject}" frei sind. Bitte wählt selbst eine Zeit.`,
+  followupUnavailable: (subject, reason) => `Ich konnte "${subject}" nicht terminieren (${reason}). Bitte verschickt die Einladung selbst.`,
+  followupReasons: {
+    not_configured: 'für diese Instanz ist keine Kalender-Integration eingerichtet',
+    no_service: 'es ist keine Kalender-Integration installiert',
+    recipient_not_allowed: 'jemand auf der Liste wurde von der Gruppe nicht bestätigt',
+    provider_error: 'der Kalenderdienst hat einen Fehler gemeldet',
+    grant_revoked: 'die Nachverfolgung dieser Moderation ist beendet',
+    no_addresses: 'ich habe keine Mail-Adressen der Teilnehmenden',
+  },
+  invitationBody: (goal, summary) => `Folgetermin zu "${goal}".\n\n${summary}`,
+
   phase: {
     configuring: 'wird eingerichtet',
     active: 'läuft',

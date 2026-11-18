@@ -7,6 +7,7 @@ import type { ConversationMessageRecord, SessionCapabilitySnapshot, SessionEvent
 import * as store from '../db/store.js';
 import type { ConversationMembershipEvent } from '../kernel.js';
 import type { Facilitation } from '../model.js';
+import { installCapabilities } from './capabilities.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installActionItems } from './actionItems.js';
@@ -42,6 +43,7 @@ export class FacilitationEngine {
     installTransparency();
     installGovernance();
     installSessions(this.core);
+    installCapabilities(this.core);
     onOpened(scheduleDeadlineJobs);
   }
 

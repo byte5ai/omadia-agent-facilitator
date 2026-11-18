@@ -1,0 +1,216 @@
+// Facilitation-scoped capabilities (spec 5.11, issue #2078, acceptance 20).
+
+import assert from 'node:assert/strict';
+import { after, before, test } from 'node:test';
+
+import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
+import * as store from '../src/db/store.js';
+import { scheduleFollowupMeeting, scoped } from '../src/engine/capabilities.js';
+import { alignToGrid, findSlot } from '../src/engine/slots.js';
+import { buildProtocol } from '../src/engine/protocol.js';
+import { ANNA, BERT, CARA, createHarness } from './harness.js';
+import type { Harness } from './harness.js';
+import { FakeFollowup } from './fakeKernel.js';
+import { PG_SKIP } from './pg.js';
+
+let h: Harness;
+let followup: FakeFollowup;
+before(async () => {
+  if (PG_SKIP) return;
+  h = await createHarness({ start: '2026-11-18T09:00:00Z', config: { protocolMailEnabled: true } });
+  followup = new FakeFollowup();
+  h.kernel.followup = followup;
+});
+after(async () => {
+  if (!PG_SKIP) await h.close();
+});
+
+const posts = (conv: string): string[] => h.kernel.groupPosts(conv).map((p) => p.text);
+const tool = (conv: string, name: string, args: Record<string, unknown> = {}): Promise<string> => h.tool(name, args, { conversation: conv });
+async function say(conv: string, who: string, text: string) {
+  const record = await h.kernel.say(conv, who, text);
+  await h.settle();
+  return record;
+}
+const all = async (conv: string, text: string, who = ['anna', 'bert', 'cara']): Promise<void> => {
+  for (const person of who) await say(conv, person, text);
+};
+const iso = (s: string): Date => new Date(s);
+
+test('slots: the first common free time in working hours on a weekday, on the quarter-hour grid', () => {
+  // Wednesday 18 Nov 2026, Berlin is UTC+1.
+  const base = { timezone: 'Europe/Berlin', durationMinutes: 60 };
+  assert.equal(alignToGrid(iso('2026-11-18T09:07:00Z')).toISOString(), '2026-11-18T09:15:00.000Z');
+  assert.deepEqual(findSlot({ ...base, from: iso('2026-11-18T09:07:00Z'), to: iso('2026-11-20T17:00:00Z'), busy: [] })?.start.toISOString(), '2026-11-18T09:15:00.000Z');
+  // Busy until 11:30 local and again 12:00 to 13:00: the hour does not fit in between.
+  const busy = [{ start: '2026-11-18T09:00:00Z', end: '2026-11-18T10:30:00Z' }, { start: '2026-11-18T11:00:00Z', end: '2026-11-18T12:00:00Z' }];
+  assert.equal(findSlot({ ...base, from: iso('2026-11-18T09:00:00Z'), to: iso('2026-11-20T17:00:00Z'), busy })?.start.toISOString(), '2026-11-18T12:00:00.000Z');
+  // After 16:00 local an hour no longer ends inside the working day: next morning 09:00 local.
+  assert.equal(findSlot({ ...base, from: iso('2026-11-18T15:30:00Z'), to: iso('2026-11-20T17:00:00Z'), busy: [] })?.start.toISOString(), '2026-11-19T08:00:00.000Z');
+  // Friday evening: Monday morning.
+  assert.equal(findSlot({ ...base, from: iso('2026-11-20T17:00:00Z'), to: iso('2026-11-25T17:00:00Z'), busy: [] })?.start.toISOString(), '2026-11-23T08:00:00.000Z');
+  assert.equal(findSlot({ ...base, from: iso('2026-11-18T09:00:00Z'), to: iso('2026-11-18T16:00:00Z'), busy: [{ start: '2026-11-18T00:00:00Z', end: '2026-11-19T00:00:00Z' }] }), undefined);
+});
+
+async function closedWithFollowup(conv: string, opts: { stakeholders?: boolean; meeting?: boolean; fixedDates?: boolean } = {}) {
+  await tool(conv, 'facilitation_start', { goal: 'Offsite plan', definitionOfDone: 'Plan agreed', agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  await say(conv, 'anna', 'A boat trip');
+  if (opts.stakeholders) {
+    await tool(conv, 'facilitation_stakeholder', { name: 'Sam Sponsor', address: 'Sam@Example.com', role: 'receives_protocol' });
+    await all(conv, 'agreed');
+    await tool(conv, 'facilitation_stakeholder', { name: 'Vera Venue', address: 'vera@example.com', role: 'invited_to_followups' });
+    await all(conv, 'agreed');
+  }
+  if (opts.meeting) {
+    const window = opts.fixedDates
+      ? { earliest: '2026-11-19T08:00:00Z', latest: '2026-11-27T16:00:00Z' }
+      : { earliest: h.clock.now().toISOString(), latest: new Date(h.clock.now().getTime() + 8 * DAY_MS).toISOString() };
+    await tool(conv, 'facilitation_plan_followup_meeting', { subject: 'Offsite follow-up', durationMinutes: 60, ...window });
+    await all(conv, 'agreed');
+  }
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await all(conv, 'agreed');
+  return h.facilitation(conv);
+}
+
+test('a stakeholder counts only when the group confirmed; one the group refused is gone', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-stakeholder', [ANNA, BERT, CARA]);
+  await tool(conv, 'facilitation_start', { goal: 'g', definitionOfDone: 'd', agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  assert.match(await tool(conv, 'facilitation_stakeholder', { name: 'Olga Outside', role: 'receives_protocol' }), /^Refused \(bad_input\): A stakeholder who is not in this conversation needs a mail address/);
+  await tool(conv, 'facilitation_stakeholder', { name: 'Olga Outside', address: 'olga@example.com', role: 'receives_protocol' });
+  assert.match(posts(conv).at(-1) ?? '', /^Proposal: add Olga Outside as a stakeholder who receives the protocol/);
+  const f = await h.facilitation(conv);
+  await say(conv, 'bert', 'objection: she is not part of this');
+  h.clock.advance(31 * MINUTE_MS);
+  await h.tick();
+  assert.deepEqual(await store.listStakeholders(h.db.pool, f.id), []);
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
+test('at the close the protocol goes to participants and confirmed stakeholders, and the agreed follow-up meeting is created from free/busy', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-close', [ANNA, BERT, CARA]);
+  followup.calendars.set('anna@example.com', [{ start: '2026-11-19T08:00:00Z', end: '2026-11-19T10:00:00Z' }]);
+  followup.calendars.set('bert@example.com', []);
+  followup.calendars.set('cara@example.com', [{ start: '2026-11-19T10:00:00Z', end: '2026-11-19T10:30:00Z' }]);
+  const dms = h.kernel.dms.length;
+  const f = await closedWithFollowup(conv, { stakeholders: true, meeting: true, fixedDates: true });
+  assert.equal(f.phase, 'closed');
+
+  // Protocol dispatch: privately to the participants (the initiator has it with the report), by mail to everybody the grant covers.
+  const direct = h.kernel.dms.slice(dms).filter((d) => d.text.includes('here is the protocol of the facilitation'));
+  assert.deepEqual(direct.map((d) => d.principal).sort(), ['user:bert', 'user:cara']);
+  const mail = followup.mails.at(-1);
+  assert.deepEqual([...(mail?.recipients ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'sam@example.com']);
+  assert.equal(mail?.subject, 'Protocol: Offsite plan');
+  assert.match(mail?.body ?? '', /^Protocol: Offsite plan\nFacilitator: Mira/);
+  assert.ok(!mail?.recipients.includes('vera@example.com'), 'a stakeholder for follow-ups does not get the protocol');
+  assert.ok(posts(conv).includes('The protocol has been sent: privately to 2 participants and by mail to 4 addresses.'));
+
+  // Follow-up scheduling: free/busy only, then the invitation for the first common free time.
+  const freeBusy = followup.calls.find((c) => c.method === 'freeBusy' && c.grant.facilitationId === f.id);
+  assert.deepEqual([...(freeBusy?.request['attendees'] as string[])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'vera@example.com']);
+  assert.equal(freeBusy?.request['from'], '2026-11-19T08:00:00.000Z');
+  const invitation = followup.invitations.at(-1);
+  assert.equal(invitation?.start, '2026-11-19T10:30:00.000Z', 'after Anna is free and after Cara is free');
+  assert.equal(invitation?.end, '2026-11-19T11:30:00.000Z');
+  assert.ok(!invitation?.attendees.includes('sam@example.com'), 'a stakeholder who only receives the protocol is not invited');
+  assert.match(invitation?.body ?? '', /^Follow-up to "Offsite plan"\.\n\nDecisions:/);
+  assert.match(posts(conv).at(-1) ?? '', /^Follow-up meeting "Offsite follow-up" is in the calendars for Thu, 19\/11\/2026, 11:30 \(Europe\/Berlin\)\. For 1 person I could not see availability, so please check the time\.$/);
+
+  // Every use is in the protocol.
+  const protocol = await buildProtocol(h.db.pool, f);
+  assert.match(protocol, /Use of scoped capabilities:\n- .*grant issued for 5 addresses/);
+  assert.match(protocol, /protocol mailed to 4 addresses/);
+  assert.match(protocol, /free\/busy read for 4 people/);
+  assert.match(protocol, /invitation "Offsite follow-up" for 2026-11-19T10:30:00\.000Z sent to 4 people/);
+});
+
+test('the facilitator cannot reach anybody the group did not confirm, and the integration is not even called', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-scope', [ANNA, BERT, CARA]);
+  const f = await closedWithFollowup(conv);
+  const calls = followup.calls.length;
+  await h.engine.core.work(f.id, async (w) => {
+    const api = await scoped(w, h.engine.core);
+    assert.deepEqual([...api.grant.allowed].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com']);
+    const stranger = await api.freeBusy(['anna@example.com', 'ceo@example.com'], iso('2026-11-19T08:00:00Z'), iso('2026-11-20T08:00:00Z'));
+    assert.deepEqual(stranger, { ok: false, code: 'recipient_not_allowed', detail: 'ceo@example.com' });
+    const invite = await api.createInvitation({ attendees: ['ceo@example.com'], subject: 'x', start: iso('2026-11-19T08:00:00Z'), end: iso('2026-11-19T09:00:00Z'), body: '', online: true });
+    assert.equal(invite.ok, false);
+    const mail = await api.sendMail(['press@example.com'], 'x', 'y');
+    assert.equal(mail.ok, false);
+    // The surface has exactly three operations: no reading of mailboxes or calendar contents.
+    assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
+  });
+  assert.equal(followup.calls.length, calls, 'refused by the engine before the integration is called');
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['capability_refused'])).length, 3);
+  assert.match(await h.tool('facilitation_plan_followup_meeting', { subject: 'x', durationMinutes: 60, earliest: '2026-11-19T08:00:00Z', latest: '2026-11-20T08:00:00Z' }, { conversation: conv }), /^Refused \(no_facilitation\)/, 'after the close the facilitator has no tools here');
+});
+
+test('the grant is revoked when the follow-up ends: scheduling is refused afterwards', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-revoke', [ANNA, BERT, CARA]);
+  const f = await closedWithFollowup(conv);
+  assert.equal((await h.facilitation(conv)).settings.followupGrant, 'active');
+  h.clock.advance(14 * DAY_MS + HOUR_MS);
+  await h.tick();
+  const revoked = await h.facilitation(conv);
+  assert.equal(revoked.settings.followupGrant, 'revoked');
+  const calls = followup.calls.length;
+  const outcome = await h.engine.core.work(f.id, (w) =>
+    scheduleFollowupMeeting(w, h.engine.core, { subject: 'Too late', durationMinutes: 30, from: h.clock.now().toISOString(), to: new Date(h.clock.now().getTime() + 5 * DAY_MS).toISOString(), online: true }),
+  );
+  assert.equal(outcome, 'unavailable');
+  assert.equal(followup.calls.length, calls, 'the integration is not called without a grant');
+  const events = await store.listEvents(h.db.pool, f.id, ['grant_issued', 'grant_revoked', 'capability_refused']);
+  assert.deepEqual(events.map((e) => e.kind), ['grant_issued', 'grant_revoked', 'capability_refused']);
+});
+
+test('with action items the grant ends with their follow-up', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-items', [ANNA, BERT]);
+  await tool(conv, 'facilitation_start', { goal: 'Next steps', definitionOfDone: 'Owners agreed', followUp: true, agenda: [{ kind: 'assign', title: 'Assign' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  await tool(conv, 'facilitation_record_action_item', { description: 'Book the boat', owner: 'Anna', dueDate: new Date(h.clock.now().getTime() + 2 * DAY_MS).toISOString() });
+  await say(conv, 'anna', 'yes');
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await all(conv, 'agreed', ['anna', 'bert']);
+  assert.equal((await h.facilitation(conv)).settings.followupGrant, 'active');
+  await say(conv, 'anna', 'done 1');
+  const ended = await h.facilitation(conv);
+  assert.equal(ended.followupState, 'ended');
+  assert.equal(ended.settings.followupGrant, 'revoked');
+});
+
+test('no integration, or one that is not configured: the close stands and the group is told what to do itself', { skip: PG_SKIP }, async () => {
+  followup.configured = false;
+  const conv = h.kernel.conversation('ca-unconfigured', [ANNA, BERT, CARA]);
+  const f = await closedWithFollowup(conv, { meeting: true });
+  followup.configured = true;
+  assert.equal(f.phase, 'closed');
+  const texts = posts(conv);
+  assert.ok(texts.includes('The protocol could not be mailed (no calendar integration is set up for this instance). It is in this group, and participants got it privately where I can reach them.'));
+  assert.ok(texts.includes('I could not schedule "Offsite follow-up" (no calendar integration is set up for this instance). Please send the invitation yourselves.'));
+
+  h.kernel.absent.add('followup');
+  const none = h.kernel.conversation('ca-none', [ANNA, BERT, CARA]);
+  const g = await closedWithFollowup(none, { meeting: true });
+  h.kernel.absent.delete('followup');
+  assert.equal(g.phase, 'closed');
+  assert.ok(posts(none).includes('I could not schedule "Offsite follow-up" (no calendar integration is installed). Please send the invitation yourselves.'));
+});
+
+test('an invitation without a meeting link, and no common free time, are both said to the group', { skip: PG_SKIP }, async () => {
+  followup.joinLinks = false;
+  const conv = h.kernel.conversation('ca-nolink', [ANNA, BERT, CARA]);
+  await closedWithFollowup(conv, { meeting: true });
+  followup.joinLinks = true;
+  assert.match(posts(conv).at(-1) ?? '', /The invitation went out without a meeting link\./);
+
+  followup.calendars.set('bert@example.com', [{ start: '2026-11-18T00:00:00Z', end: '2027-03-31T00:00:00Z' }]);
+  const full = h.kernel.conversation('ca-noslot', [ANNA, BERT, CARA]);
+  await closedWithFollowup(full, { meeting: true });
+  followup.calendars.set('bert@example.com', []);
+  assert.equal(posts(full).at(-1), 'I found no time between the agreed dates at which everybody is free for "Offsite follow-up". Please pick a time yourselves.');
+});

@@ -52,6 +52,17 @@ export interface FollowupPolicy {
   leadHours: number;
   /** ISO time at which the status of the action items is posted to the group. */
   statusAt?: string;
+  /** A follow-up meeting the group agreed on; scheduled after the close. */
+  meeting?: FollowupMeetingPlan;
+}
+
+export interface FollowupMeetingPlan {
+  subject: string;
+  durationMinutes: number;
+  /** ISO: the earliest start and the latest end the group agreed on. */
+  from: string;
+  to: string;
+  online: boolean;
 }
 
 export interface FacilitationSettings {
@@ -66,6 +77,8 @@ export interface FacilitationSettings {
   directNoticeSent?: boolean;
   /** People a private message could not reach; not tried again. */
   unreachable?: string[];
+  /** The facilitation-scoped grant for protocol dispatch and scheduling. */
+  followupGrant?: 'active' | 'revoked';
 }
 
 export interface Facilitation {

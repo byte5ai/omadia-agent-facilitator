@@ -81,7 +81,7 @@ test('the result goes to the group first, then to the initiator with the protoco
   const f = await h.facilitation(conv);
   const sent = (await rows<OutboxRow>(h.db.pool, `SELECT * FROM facilitation_outbox WHERE facilitation_id = $1 AND status = 'sent' ORDER BY sent_at, seq`, [f.id])).map((r) => r.purpose);
   assert.ok(sent.indexOf('result') < sent.indexOf('initiator_report'), 'group first');
-  const report = h.kernel.dms.slice(dmsBefore);
+  const report = h.kernel.dms.slice(dmsBefore).filter((d) => d.text.includes('you started this facilitation'));
   assert.deepEqual(report.map((d) => [d.as, d.principal]), [['mira', 'user:anna']]);
   assert.match(report[0]?.text ?? '', /^Hello Anna, you started this facilitation, so here is the report\. It contains nothing the group was not told\./);
   assert.match(report[0]?.text ?? '', /Result for "Pick a venue":\n- Pick a venue: Harbour/);
@@ -97,7 +97,7 @@ test('the result goes to the group first, then to the initiator with the protoco
   const before = h.kernel.dms.length;
   for (const who of ['bert', 'cara', 'dave']) await say(left, who, 'B');
   assert.equal((await h.facilitation(left)).phase, 'closed');
-  assert.equal(h.kernel.dms.length, before, 'no report to an initiator who left');
+  assert.equal(h.kernel.dms.slice(before).filter((d) => d.principal === 'user:anna').length, 0, 'no report to an initiator who left');
   assert.equal((await store.listEvents(h.db.pool, (await h.facilitation(left)).id, ['initiator_report_skipped'])).length, 1);
 });
 

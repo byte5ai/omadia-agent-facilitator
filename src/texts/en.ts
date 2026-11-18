@@ -367,6 +367,30 @@ export const en = {
   spokenEcho: (name: string, summary: string): string =>
     `${name}, I heard you say: ${summary}. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.`,
 
+  // ── scoped capabilities ──────────────────────────────────────────────────
+  stakeholderRoles: { receives_protocol: 'receives the protocol', invited_to_followups: 'is invited to follow-up meetings' },
+  proposeStakeholder: (name: string, role: string): string => `add ${name} as a stakeholder who ${role}`,
+  proposeFollowupMeeting: (subject: string, minutes: number, from: string, to: string): string =>
+    `after the close I look for a common free time and send the invitation for "${subject}" (${String(minutes)} minutes, between ${from} and ${to}). For that I read only when people are busy, never what their appointments are`,
+  protocolDirect: (name: string, protocol: string): string => `Hello ${name}, here is the protocol of the facilitation you took part in.\n\n${protocol}`,
+  protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
+  protocolSent: (channel: number, mail: number): string =>
+    `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}` : ''}.`,
+  protocolMailUnavailable: (reason: string): string => `The protocol could not be mailed (${reason}). It is in this group, and participants got it privately where I can reach them.`,
+  followupCreated: (subject: string, when: string, link: boolean, unknown: number): string =>
+    `Follow-up meeting "${subject}" is in the calendars for ${when}.${link ? '' : ' The invitation went out without a meeting link.'}${unknown > 0 ? ` For ${String(unknown)} ${unknown === 1 ? 'person' : 'people'} I could not see availability, so please check the time.` : ''}`,
+  followupNoSlot: (subject: string): string => `I found no time between the agreed dates at which everybody is free for "${subject}". Please pick a time yourselves.`,
+  followupUnavailable: (subject: string, reason: string): string => `I could not schedule "${subject}" (${reason}). Please send the invitation yourselves.`,
+  followupReasons: {
+    not_configured: 'no calendar integration is set up for this instance',
+    no_service: 'no calendar integration is installed',
+    recipient_not_allowed: 'somebody on the list was not confirmed by the group',
+    provider_error: 'the calendar service reported an error',
+    grant_revoked: 'the follow-up of this facilitation has ended',
+    no_addresses: 'I have no mail addresses for the participants',
+  },
+  invitationBody: (goal: string, summary: string): string => `Follow-up to "${goal}".\n\n${summary}`,
+
   phase: {
     configuring: 'being set up',
     active: 'running',

@@ -267,6 +267,16 @@ setup:
         de: "Standard false: Die Verarbeitung des Gesprochenen eines Calls beginnt nach Ankündigung, wenn niemand widerspricht. Bei true muss jede teilnehmende Person zustimmen (z. B. für Betriebsvereinbarungen)."
       required: false
       default: false
+    - key: "followup_grant_days"
+      type: "number"
+      label:
+        en: "Follow-up capabilities after close (days)"
+        de: "Follow-up-Fähigkeiten nach Abschluss (Tage)"
+      help:
+        en: "How long after the close a facilitator may dispatch the protocol and schedule the agreed follow-up meeting, when no action items are followed up. With action items the grant ends with their follow-up."
+        de: "Wie lange nach dem Abschluss ein Facilitator das Protokoll versenden und den vereinbarten Folgetermin planen darf, wenn keine Aufgaben nachverfolgt werden. Mit Aufgaben endet die Berechtigung mit deren Nachverfolgung."
+      required: false
+      default: 14
     - key: "protocol_mail_enabled"
       type: "boolean"
       label:

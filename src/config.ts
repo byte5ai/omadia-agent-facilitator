@@ -28,6 +28,8 @@ export interface EngineConfig {
   readonly sessionAgendaLeadMinutes: number;
   /** Processing a call's speech needs a yes from every participant. */
   readonly mediaConsentExplicit: boolean;
+  /** How long the scoped grant lasts after the close when no action items are followed up. */
+  readonly followupGrantDays: number;
 }
 
 export const CONFIG_DEFAULTS: EngineConfig = {
@@ -48,6 +50,7 @@ export const CONFIG_DEFAULTS: EngineConfig = {
   protocolMailEnabled: false,
   sessionAgendaLeadMinutes: 60,
   mediaConsentExplicit: false,
+  followupGrantDays: 14,
 };
 
 export type ConfigReader = <T>(key: string) => T | undefined;
@@ -134,6 +137,7 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     maxMessagesPerFacilitation: positive('max_messages_per_facilitation', CONFIG_DEFAULTS.maxMessagesPerFacilitation, { integer: true }),
     protocolMailEnabled,
     sessionAgendaLeadMinutes: positive('session_agenda_lead_minutes', CONFIG_DEFAULTS.sessionAgendaLeadMinutes),
+    followupGrantDays: positive('followup_grant_days', CONFIG_DEFAULTS.followupGrantDays),
     mediaConsentExplicit: read<unknown>('media_consent_explicit') === true || read<unknown>('media_consent_explicit') === 'true',
   };
 }
