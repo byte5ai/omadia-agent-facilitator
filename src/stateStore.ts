@@ -20,6 +20,12 @@ export interface FacilitationProgress {
   contributors?: string[];
 }
 
+export interface FacilitationContribution {
+  participant: string;
+  text: string;
+  at: string;
+}
+
 export interface FacilitationRecord {
   conversationId: string;
   /** The conversation's origin channel type, when the event carried one. */
@@ -43,6 +49,9 @@ export interface FacilitationRecord {
   progress?: FacilitationProgress;
   /** #330 C3 — nudge accounting for the per-facilitation cap. */
   nudgesSent?: number;
+  /** 0.7.3 — per-participant ledger (facilitation_contribution): one entry
+   *  per participant, the latest contribution wins. */
+  contributions?: FacilitationContribution[];
   /** 0.7.1 — when facilitation_start created the run. The minimum nudge
    *  spacing also counts from here: a group that was just asked to act
    *  needs no reminder seconds later. */
@@ -168,6 +177,7 @@ export class FacilitationStateStore {
     lastNudge?: { at: string; text: string };
     amendedAt?: string;
     startedAt?: string;
+    contributions?: FacilitationContribution[];
     conversationUnknown?: boolean;
   }): FacilitationRecord | undefined {
     const existing = this.records.get(input.conversationId);
@@ -197,6 +207,7 @@ export class FacilitationStateStore {
       ...(input.lastNudge ? { lastNudge: { ...input.lastNudge } } : {}),
       ...(input.amendedAt ? { amendedAt: input.amendedAt } : {}),
       ...(input.startedAt ? { startedAt: input.startedAt } : {}),
+      ...(input.contributions ? { contributions: input.contributions.map((c) => ({ ...c })) } : {}),
       ...(input.conversationUnknown ? { conversationUnknown: true } : {}),
       restored: true,
       createdAt: existing?.createdAt ?? iso,
@@ -241,6 +252,37 @@ export class FacilitationStateStore {
         summary: progress.summary,
         updatedAt: iso,
         ...(contributors ? { contributors: [...contributors] } : {}),
+      },
+      updatedAt: iso,
+    };
+    this.records.set(conversationId, next);
+    return next;
+  }
+
+  /** facilitation_contribution — one ledger entry per participant; a second
+   *  contribution replaces the first. Also refreshes the progress stamp (the
+   *  group is demonstrably working) and the contributors list. Returns
+   *  undefined when no record exists or `cap` distinct contributors is hit. */
+  recordContribution(
+    conversationId: string,
+    input: { participant: string; text: string },
+    at: Date,
+    cap: number,
+  ): FacilitationRecord | undefined {
+    const record = this.records.get(conversationId);
+    if (!record) return undefined;
+    const iso = at.toISOString();
+    const others = (record.contributions ?? []).filter((c) => c.participant !== input.participant);
+    if (others.length >= cap) return undefined;
+    const contributions = [...others, { participant: input.participant, text: input.text, at: iso }];
+    const next: FacilitationRecord = {
+      ...record,
+      contributions,
+      progress: {
+        dodMet: record.progress?.dodMet ?? false,
+        summary: record.progress?.summary ?? '',
+        updatedAt: iso,
+        contributors: contributions.map((c) => c.participant),
       },
       updatedAt: iso,
     };

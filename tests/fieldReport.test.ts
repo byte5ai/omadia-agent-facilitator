@@ -389,3 +389,77 @@ describe('unknown conversationId (0.7.2)', () => {
     assert.equal(t.store.get('grp-1')?.phase, 'active');
   });
 });
+
+describe('facilitation_contribution (0.7.3)', () => {
+  const names = ['Christian Wendler', 'Christian Köhler', 'Teresita Biel', 'Marcel Wege'];
+  const rosters: ConversationRostersService = {
+    getRoster: async () => ({
+      conversationType: 'group',
+      participants: names.map((displayName, i) => ({ userRef: { kind: 'teams-aad', id: `u${String(i)}`, displayName } })),
+      partial: false,
+    }),
+  };
+
+  async function started() {
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON, rosters });
+    t.store.markPending({ conversationId: 'grp-1', channelType: 'teams' });
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-1' });
+    return { kernel, t };
+  }
+
+  it('records a relayed vote, names who is pending and lists it in the status', async () => {
+    const { t } = await started();
+    const out = await t.call('facilitation_contribution', {
+      participant: 'Christian Köhler',
+      contribution: 'Parken wir das 3, Müsli 2, Windstill 1',
+      conversationId: '19:felix.hoffmann@example.net',
+    });
+    assert.ok(out.includes('Beitrag von Christian Köhler protokolliert'), out);
+    assert.ok(out.includes('Stand: 1 von 4. Ausstehend: Christian Wendler, Teresita Biel, Marcel Wege'), out);
+    assert.deepEqual(t.store.get('grp-1')?.progress?.contributors, ['Christian Köhler']);
+
+    const status = await t.call('facilitation_status', { conversationId: 'grp-1' });
+    assert.ok(status.includes('Protokollierte Beiträge:'), status);
+    assert.ok(status.includes('- Christian Köhler ('), status);
+    assert.ok(status.includes('Parken wir das 3, Müsli 2, Windstill 1'), status);
+    assert.ok(status.includes('Ausstehend: Christian Wendler, Teresita Biel, Marcel Wege'), status);
+  });
+
+  it('refuses a name that fits nobody or two people, with the valid names', async () => {
+    const { t } = await started();
+    for (const participant of ['Felix', 'Christian']) {
+      const out = await t.call('facilitation_contribution', { participant, contribution: 'Müsli 3', conversationId: 'grp-1' });
+      assert.ok(out.includes('NICHT protokolliert'), out);
+      assert.ok(out.includes('Gültige Namen: Christian Wendler, Christian Köhler, Teresita Biel, Marcel Wege'), out);
+    }
+    assert.equal(t.store.get('grp-1')?.contributions, undefined);
+  });
+
+  it('a second contribution replaces the first, and the last one prompts the DoD check', async () => {
+    const { t } = await started();
+    await t.call('facilitation_contribution', { participant: 'Marcel', contribution: 'Müsli 3', conversationId: 'grp-1' });
+    const again = await t.call('facilitation_contribution', { participant: 'Marcel Wege', contribution: 'Anker 3, Müsli 2', conversationId: 'grp-1' });
+    assert.ok(again.includes('ersetzt den früheren Beitrag'), again);
+    assert.equal(t.store.get('grp-1')?.contributions?.length, 1);
+
+    await t.call('facilitation_contribution', { participant: 'Teresita Biel', contribution: 'Anker 3', conversationId: 'grp-1' });
+    await t.call('facilitation_contribution', { participant: 'Christian Wendler', contribution: 'Müsli 3', conversationId: 'grp-1' });
+    const last = await t.call('facilitation_contribution', { participant: 'Christian Köhler', contribution: 'Windstill 3', conversationId: 'grp-1' });
+    assert.ok(last.includes('Stand: 4 von 4. Ausstehend: –'), last);
+    assert.ok(last.includes('facilitation_progress mit dodMet=true'), last);
+  });
+
+  it('survives a restart and refuses without an active facilitation', async () => {
+    const { kernel, t } = await started();
+    await t.call('facilitation_contribution', { participant: 'Teresita Biel', contribution: 'Anker 3', conversationId: 'grp-1' });
+
+    const after = buildTools({ ephemeralRuns: kernel.service, now: () => NOON, rosters });
+    const status = await after.call('facilitation_status');
+    assert.ok(status.includes('- Teresita Biel ('), status);
+    assert.deepEqual(after.store.get('grp-1')?.contributions?.map((c) => c.participant), ['Teresita Biel']);
+
+    const idle = buildTools({ ephemeralRuns: fakeKernel().service });
+    assert.ok((await idle.call('facilitation_contribution', { participant: 'A', contribution: 'x' })).includes('Keine aktive Facilitation'));
+  });
+});

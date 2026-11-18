@@ -138,6 +138,15 @@ Abschlussbedingung nur per Neustart zu korrigieren war.
   ob jemand zur Gruppe gehört, prüft `facilitation_progress` gegen die echte
   Teilnehmerliste.
 
+### 0.7.3
+
+- **`facilitation_contribution(participant, contribution)`** — ein enges Tool
+  für genau einen Beitrag. Im Live-Lauf hatte das Modell eine Stimme dreimal
+  selbst „geprüft" und nie protokolliert. Das Tool gleicht den Namen mit der
+  Teilnehmerliste ab, führt ein Protokoll je Person (letzter Beitrag gilt),
+  nennt Stand und Ausstehende und fordert bei vollständiger Beteiligung zur
+  DoD-Prüfung auf. Der Status listet die protokollierten Beiträge.
+
 ## Grenzen (bewusst)
 
 - **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`
