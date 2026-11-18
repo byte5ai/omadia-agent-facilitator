@@ -1,178 +1,184 @@
 # omadia Facilitator (`@omadia/agent-facilitator`)
 
-Moderiert Gruppen-Chats zu einem definierten Ergebnis — wie ein professioneller
-Facilitator, transparent und announced. Workstream C (Slice C1) des Epics
-[byte5ai/omadia#330](https://github.com/byte5ai/omadia/issues/330).
+The facilitation engine for native facilitators
+([byte5ai/omadia#2043](https://github.com/byte5ai/omadia/issues/2043)).
 
-**Das Modell:** EIN sichtbarer **Convener** mit Modi (moderieren,
-protokollieren, Zeit halten) — nie ein Bot pro Funktion, nie ein verdeckter
-Beobachter. Die Facilitation läuft als **ephemerer Conductor-Workflow**
-(kuratiertes Pattern `facilitation`, Workstream A): Moderation ist kreativ
-(der Agent), Terminierung/Deadline/Report/Cleanup sind deterministisch (der
-Conductor).
+A facilitator is a kind of agent the kernel owns: its identity, the neutrality
+block in its prompt, its own channel identity, the stored inbound messages and
+the model turn. Everything a facilitation is made of lives in this plugin:
 
-## Voraussetzungen
+- the data model and its migrations (`migrations/`), the lifecycle, and
+  contributions whose authorship is copied from the kernel's stored message;
+- decision methods that are counted without a model: ranked vote, single
+  choice, approval, consent, assignment, with runoff after a tie;
+- a scheduler that runs from the deadline, an outbox with delivery classes,
+  and one advisory lock per facilitation;
+- the process: agenda templates, steps and timeboxes, silent voices, clusters
+  and summaries by consent, action items with follow-up, the protocol;
+- transparency: handshake, status, result to the group first, rule changes by
+  consent of the group;
+- visibility, retention, quotas per facilitator, an audited operator API and
+  the facilitations view;
+- sessions (meetings) and media-adaptive moderation;
+- facilitation-scoped capabilities for protocol dispatch and follow-up
+  scheduling.
 
-| Was | Version |
+## Requirements
+
+| What | Version |
 |---|---|
-| omadia Kernel | main ≥ `1fa8eda7` (A+B1); für Zero-Touch-Setup ≥ #330 C2a (`agentProvisioning`/`conversationBindings`/`conductorRoleAssignments`) |
-| Teams-Channel-Plugin | `@omadia/channel-teams` ≥ 0.13.0 (B2: `bot_added`-Events, Roster, Targeted Send) |
-| Postgres | ja (Conductor) — ohne DB degradieren die Tools mit ehrlichen Meldungen |
+| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0. With 1.56.0 the engine asks the kernel whether a subscription still stands (`isSubscribed`); on 1.55 it infers it |
+| Model of the facilitator | Sonnet-class or stronger (see "Which model") |
+| Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
+| Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |
+| Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0 |
 
-Alle Kernel-Services sind `optional_requires`: auf älteren Kernels aktiviert
-das Plugin und antwortet mit klaren Degradations-Hinweisen statt zu brechen.
+## Set-up
 
-## Betriebs-Setup
+1. Install the plugin and **grant its SQL permission**. It owns the tables
+   `plg_omadia_agent_facilitator_*` (the kernel-reserved namespace of this
+   plugin) and records its migrations in
+   `plg_omadia_agent_facilitator_migrations`. Without the grant the engine
+   activates, reports itself unavailable, and every facilitator says that
+   facilitation is not available.
+2. Create a facilitator under "Facilitators" and give it its **own channel
+   identity**. A facilitator never speaks through another agent's bot; without
+   an identity of its own it does not start and says so.
+3. Give the facilitator a **Sonnet-class model or stronger**.
+4. Add the facilitator to a group conversation and ask it there to start.
 
-**Zero-Touch (Default, Kernel >= #330 C2a):** Plugin installieren — fertig.
-Beim Aktivieren provisioniert das Plugin den Top-Level-Agenten
-`facilitator` automatisch (Persona = das gebundelte Playbook als
-`agent_persona_skills`-Skill, create-only). Wird der Bot in einen
-Gruppen-Chat eingeladen, bindet der Kernel die Conversation automatisch
-(invite-guarded: nur Conversations mit kernel-beobachtetem `bot_added`,
-nie ein fremd-gebundenes Binding). Beim `facilitation_start` wird der
-Einladende als Holder einer auto-provisionierten per-Conversation-Rolle
-(`facilitation-<hash>`) gesetzt (E-Mail via Roster, AAD-Fallback) — Binding
-und Rolle werden mit dem ephemeren Workflow vom Kernel-Reaper wieder
-entsorgt. Alles auditierbar (`channel.binding_change`,
-`conductor.role_holders_change`). `auto_setup=false` schaltet auf den
-manuellen Modus zurück.
+### Which model
 
-**Manuell (Kernel < C2a oder `auto_setup=false`):** Agent anlegen
-(Playbook als Instructions), Binding via
-`PUT /api/v1/operator/agents/facilitator/bindings` setzen, Rolle
-`facilitation-initiator` mit Holdern besetzen — die Tools degradieren mit
-ehrlichen Meldungen, solange etwas fehlt.
+A facilitator needs a Sonnet-class model. The engine does what must not
+depend on a model: it records ballots, counts, keeps time, never names in the
+group who has not contributed, does not let a turn call something closed that
+is open, and posts the reason when a tool refused. What is left to the model
+is understanding free text, choosing the right tool and wording.
 
-## Ablauf
+In the integration runs a small model (Haiku class) did that unreliably: it
+described a setup without storing it, picked a close rule that contradicted
+its own definition of done, and ignored a participant's proposal. The engine
+now refuses or repairs what it can see, but it cannot see a turn that the
+channel started (the kernel posts that answer). Use a small model only for
+trying things out. The engine cannot read which model a facilitator runs on,
+so the facilitations view shows no warning: the choice is the operator's.
 
-1. Initiator lädt den Bot ein und nennt Ziel + machine-checkable
-   Definition-of-Done.
-2. Agent ruft `facilitation_start` → genau EIN ephemerer Run
-   (TTL-gedeckelt, Kernel-Quotas) → sichtbarer Opening-Handshake (Ziel, DoD,
-   Deadline, Report-Ziel-Offenlegung, `/facilitator stop`).
-3. Moderation im Chat (Round-Robin, stille Stimmen, reflektierendes
-   Zusammenfassen, Timeboxing, Neutralität — siehe Playbook).
-4. Ergebnis → Bestätigung durch die Initiator-Rolle (Conductor human-step)
-   → `facilitation_report` (final) an `role:<initiator_role_key>`;
-   Fehlschlag/Deadline → ehrlicher Abort-Report. Der ephemere Workflow wird
-   danach vom Kernel-Reaper entsorgt — Run-Historie bleibt als Audit-Trace.
+The kernel attaches this engine to every facilitator. It is the one provider
+of `facilitationEngine@1` on the instance; its tools cannot be granted to a
+standard agent.
 
-## Durabler Facilitation-State (0.6.0)
+## How a facilitation runs
 
-- **Neustart-fest:** Ziel, DoD, `conversationId`, Kanal, Initiator-Rolle und
-  Deadline stehen im Payload des ephemeren Runs; Phase, Fortschritt und
-  Nudge-Zähler schreibt das Plugin in den kernel-seitigen Run-State
-  (`saveRunState`, owner-guarded, wird mit dem Workflow entsorgt). Nach einem
-  Neustart baut das Plugin seine Records **lazy beim ersten Tool-Aufruf**
-  wieder auf (`listOwnRuns` + `listOwnAttachments`) — der Kernel aktiviert
-  Agent-Plugins vor seinen Conductor-Services, ein reiner Activate-Pass fände
-  nichts. Das Nudge-Limit gilt damit pro Facilitation, nicht pro Prozess.
-- **Deadline:** `facilitation_start(…, deadline)` (ISO mit Zeitzone) setzt die
-  Workflow-TTL auf mindestens Deadline + 2 h. Kappt der Kernel die Laufzeit
-  (`CONDUCTOR_EPHEMERAL_MAX_TTL_MS`), sagt der Handshake das ehrlich.
-- **`facilitation_stop`** schickt den Abschlussbericht (letzter Stand) an die
-  Initiator-Rolle und bricht den Workflow-Run über `cancelOwnRun` ab. Auf
-  einem älteren Kernel läuft der Run wie bisher bis Deadline/TTL weiter — die
-  Rückgabe sagt, welcher Fall vorliegt; der Stop bleibt dann durabel
-  gespeichert.
-- `facilitation_report(kind, text, conversationId?)` berichtet an die Rolle
-  DIESER Konversation (unbekannte `conversationId` → abgelehnt, nie an eine
-  andere Facilitation umgeleitet). `facilitation_stop` ohne
-  `conversationId` verweigert bei mehreren aktiven Facilitations.
-- Nach einem Neustart erzeugt die erste Gruppen-Nachricht (`bot_present`)
-  oft einen pending-Marker, bevor die Rehydration läuft — der durable Run
-  wertet ihn dann zur aktiven Facilitation auf (kein zweiter Start).
-- Alle neuen Kernel-Methoden sind optional: gegen einen älteren Kernel
-  verhält sich das Plugin wie 0.5.x (State in-memory, Stop ohne Cancel).
+`configuring -> active -> concluding -> closed`, or `aborted` (stop, a deadline
+without a result, an error). Nothing ends silently: every way out posts a
+report in the group.
 
-## Feldbericht-Fixes (0.7.0)
+- **Deterministic first.** A message is a command (`status`, `stop`), a
+  confirmation, an answer to a proposal, or a ballot in the announced format
+  (`A > C > B`). Those are read without a model. Only free text reaches the
+  facilitator's turn, which the kernel runs; what the model reads from it
+  counts only after its author confirmed.
+- **Authorship** comes from the kernel's stored message, never from a tool
+  argument. A quoted or forwarded ballot, a message from another conversation
+  or from before the start, and a non-participant's message record nothing.
+- **Time** runs from the deadline: reminders 24 h and 2 h before it (neutral in
+  the group, private to the people concerned where the channel can reach
+  them), then a close with the state at that moment.
+- **Every send** is written to the outbox first. Reminders and echoes are
+  at-most-once and bound to the state they were computed from; handshake,
+  result and abort report are retried until delivered.
+- **Rules change by consent**: anyone proposes, it holds when nobody objects
+  within the window (12 h by default, never past the deadline). While a
+  consent vote is open, and always for consent to processing speech, only a
+  reply to the proposal's own message answers the proposal.
+- **On a shared pool.** The engine holds at most two connections for locked
+  work, takes a facilitation's lock with a deadline, and never keeps a
+  transaction open across a call into the channel or an integration. Mail and
+  calendar calls run after the close is committed, at most once.
+- **Every outgoing text** passes one guard: no tool fragments, no raw JSON, no
+  unrestored privacy placeholders.
 
-Auslöser: eine Abstimmung in einem Teams-Gruppenchat, bei der drei
-Stundenschleifen dieselbe Konversation erinnerten (zwölf Nudges an einem Tag,
-drei davon nach Mitternacht und nach der letzten Stimme) und die
-Abschlussbedingung nur per Neustart zu korrigieren war.
+Contributions count only from the group conversation. A private message to a
+facilitator is not a turn, so private reminders ask to answer in the group.
 
-- **`facilitation_update(goal?, definitionOfDone?, deadline?)`** ändert den
-  Auftrag der laufenden Facilitation ohne Stop/Start. Der Run-Payload bleibt
-  der ursprüngliche Auftrag; der aktuelle Wortlaut liegt im Record und im
-  persistierten Run-State und gewinnt bei der Rehydration.
-- **Nudge-Disziplin im Tool** (`nudgePolicy.ts`), nicht nur im Prompt: kein
-  Nudge bei `dodMet`, nach Ablauf der Deadline, innerhalb des Mindestabstands
-  (`nudge_min_interval_hours`, Default 4) oder in der Ruhezeit
-  (`nudge_quiet_hours`, Default `20-8`, Zeitzone `timezone`).
-- **Der Status nennt den letzten Nudge** (Zeit + Text). Der Chat-Agent sieht
-  die Posts des Ticks nicht in seiner Session — so erfährt er, was die Gruppe
-  bereits gelesen hat.
-- **Teilnehmende:** `facilitation_progress(…, contributors)` hält fest, wessen
-  Beitrag erfasst ist; der Status zeigt Teilnehmerliste (live vom Kernel,
-  ohne Bots, nicht persistiert), Erfasste und Ausstehende. Ein Name, der
-  nicht auf genau EINEN Teilnehmer passt, wird als nicht zuordenbar gemeldet
-  statt geraten (zwei Personen mit gleichem Vornamen).
-- **Neustart räumt den Vorgänger ab:** `facilitation_start` bricht den Run
-  einer gestoppten Facilitation ab, falls der Stop das nicht konnte.
-- **Keine erfundenen Bedingungen:** Tool-Beschreibungen und Playbook
-  verlangen die DoD im Wortlaut des Initiators; `dodMet` gilt, sobald die DoD
-  wie formuliert erfüllt ist. Dazu gehört Kernel-Pattern `facilitation` v6.
+## Configuration
 
-### 0.7.1
+All fields are optional; defaults in brackets.
 
-- Der Mindestabstand zwischen Nudges zählt auch ab dem Start (der erste
-  Assess-Tick hatte 25 s nach dem Handshake erinnert).
-- Alle ausgegebenen Zeiten tragen zusätzlich die Ortszeit der konfigurierten
-  `timezone` (`<ISO> = Fr., 20.11.2026, 14:00 Uhr (Europe/Berlin)`).
-- `facilitation_progress` prüft `contributors` beim Schreiben gegen die
-  Teilnehmerliste: ein Name, der auf niemanden oder auf mehrere passt, lässt
-  den Aufruf mit der Liste der gültigen Namen scheitern; gespeichert werden
-  die Namen der Liste.
-- Der Handshake bittet den Initiator, Ziel und Definition of Done zu prüfen.
+| Field | Meaning |
+|---|---|
+| `language` [de], `timezone` [Europe/Berlin] | used when the facilitator's profile or the facilitation states none |
+| `reminder_offsets_hours` [24,2] | reminders before the deadline |
+| `change_window_hours` [12] | consent window for rule changes |
+| `runoff_window_hours` [12] | runoff after a tie |
+| `confirm_window_minutes` [30] | clusters, summaries, closing a step |
+| `ranked_points` [3,2,1] | points per rank |
+| `action_reminder_lead_hours` [24] | reminder before an action item is due |
+| `retention_days` [90] | records are deleted this long after the close |
+| `max_lifetime_days` [30] | a facilitation still open then ends with an abort report |
+| `max_active_per_facilitator` [10], `max_active_instance` [50], `starts_per_hour_per_facilitator` [20], `max_messages_per_facilitation` [500] | quotas; reaching one produces a system notice |
+| `session_agenda_lead_minutes` [60] | agenda before a meeting |
+| `media_consent_explicit` [false] | speech of a call needs a yes from every participant |
+| `followup_grant_days` [14] | how long the scoped grant lasts without action items |
+| `protocol_mail_enabled` [false] | also mail the protocol through the follow-up integration |
 
-### 0.7.2
+## Operators
 
-- Eine unbekannte `conversationId` wird bei genau EINER aktiven Facilitation
-  auf diese aufgelöst (das Modell hatte die ID als Datenschutz-Platzhalter
-  im Kontext und reichte sie so durch); bei keiner oder mehreren bleibt es
-  beim Fehlschlag. Gilt für status, progress, nudge und update — nie für
-  start, report oder stop.
-- Tool-Beschreibung und Playbook: Der Agent lehnt keinen Beitrag selbst ab —
-  ob jemand zur Gruppe gehört, prüft `facilitation_progress` gegen die echte
-  Teilnehmerliste.
+- **Facilitations view** in the navigation ("Facilitations" / "Moderationen"):
+  which facilitator runs which facilitation, phase, counts and dates. No
+  contents.
+- **API** under `/api/v1/facilitation` (operator session):
+  `GET /facilitations`, `GET /facilitations/:id`,
+  `POST /facilitations/:id/content` and `POST /facilitations/:id/terminate`
+  (both need `{ "reason": "..." }` and are audited),
+  `GET /facilitations/:id/audit`.
 
-### 0.7.3
+- **After a restart or a grant change** the engine comes up by itself and
+  resumes what was running. A facilitation whose conversation the kernel no
+  longer lets it read (grant revoked, engine reinstalled, facilitator
+  disabled) is taken up again with a line to the group, or, when the kernel
+  keeps refusing for two minutes, ended as aborted with the reason in its
+  protocol. It is never left active.
 
-- **`facilitation_contribution(participant, contribution)`** — ein enges Tool
-  für genau einen Beitrag. Im Live-Lauf hatte das Modell eine Stimme dreimal
-  selbst „geprüft" und nie protokolliert. Das Tool gleicht den Namen mit der
-  Teilnehmerliste ab, führt ein Protokoll je Person (letzter Beitrag gilt),
-  nennt Stand und Ausstehende und fordert bei vollständiger Beteiligung zur
-  DoD-Prüfung auf. Der Status listet die protokollierten Beiträge.
+## Upgrading from 0.7.x
 
-## Grenzen (bewusst)
+1.0.0 is a cut-over, not an upgrade in place. There is nothing to migrate.
 
-- **Proaktives Posten** in den Gruppen-Chat nur über `facilitation_nudge`
-  (kernel-gescoped, gedeckelt) — alles andere ist Turn-Antwort; Reports
-  laufen als DM über `targetedSend`.
-- **Eigene Teams-App-Identität** (zweiter Bot) ist C2 — bis dahin tritt der
-  Facilitator über den gebundenen Teams-Bot auf.
-- **TTL-Ablauf ist ein stiller Abbruch:** läuft der Workflow ab, bevor die
-  Facilitation abgeschlossen ist, entsorgt der Reaper ihn ohne Abort-Report
-  (Kernel-Follow-up). Deshalb die Deadline beim Start mitgeben.
-- **Runs von vor 0.6.0** tragen keine `conversationId`: ohne Attachment
-  werden sie als `run:<runId>` wiederhergestellt — Status ja, Nudges nein.
-- **Eine Facilitation zur Zeit empfohlen:** Tool-Aufrufe ohne
-  `conversationId` fallen auf die zuletzt aktualisierte Facilitation zurück —
-  bei mehreren parallelen Gruppen die `conversationId` explizit mitgeben
-  (die Pattern-Prompts ab v5 reichen sie automatisch durch).
-- Confirm-Deadline ist im Pattern fix (`PT24H`); konfigurierbar ist die
-  Workflow-TTL.
+- The plugin is now an `extension` that provides `facilitationEngine@1`. The
+  ephemeral Conductor run, its state blob, the auto-provisioned "omadia
+  Facilitator" agent and the scoped roles are gone.
+- The old tools (`facilitation_progress`, `facilitation_nudge`,
+  `facilitation_contribution`, `facilitation_update`, and the `query_facilitation`
+  sub-agent) no longer exist. The default agent loses them when 1.0.0 is
+  installed; facilitators are created under "Facilitators" instead.
+- Install it together with the kernel release that has native facilitators and
+  with channel-teams 0.36.0. 0.7.x does not run on that kernel.
 
-## Entwicklung
+## What is verified, and how
 
-```bash
-npm install                    # devDeps lösen @omadia/plugin-api aus ../odoo-bot auf (>= 1.7.0, gebaut)
-npm run typecheck && npm run build && npm test
-npm run package                # → out/@omadia-agent-facilitator-<version>.zip
+| | |
+|---|---|
+| Verified by tests against Postgres | everything in this repository, on a fake kernel with a simulated channel and a fake clock (`tests/acceptance.test.ts` for spec 9, criteria 1 to 20 except 13) |
+| Verified in a browser | the facilitations view, in Chrome, through `scripts/ui-preview.mjs` with a mock API |
+| Not verified here | the kernel's implementation of the services, a real Teams tenant (criterion 13), the facilitations view inside the web UI's frame, a real `facilitation.followup` integration |
+
+## Development
+
+```sh
+npm install        # links @omadia/plugin-api from ../odoo-bot/middleware/packages/plugin-api
+npm run typecheck  # sources and tests
+npm run build
+npm test           # or: npm test -- scheduler
+npm run package    # out/omadia-agent-facilitator-<version>.zip
 ```
 
-Hub-Publish folgt den Hub-Regeln (Registry messen, ein Plugin pro Publish)
-und bleibt bewusst ein manueller Schritt.
+`npm test` transpiles `tests/*.test.ts` with esbuild and runs them with
+`node --test`. Tests that need Postgres run against
+`FACILITATOR_TEST_DATABASE_URL`; without it the runner starts a throwaway
+cluster when `initdb` and `pg_ctl` are on the PATH. With neither, those tests
+are reported as skipped, and the runner says so in its last line.
+
+`node scripts/ui-preview.mjs` serves the facilitations view with the host's
+content security policy and sample data.
+
+The version lives in `package.json` and `manifest.yaml`; bump both.

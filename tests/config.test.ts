@@ -1,46 +1,48 @@
-import { describe, it } from 'node:test';
-import { strict as assert } from 'node:assert';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 
-import { CONFIG_DEFAULTS, parseConfig } from '../src/config.js';
+import { CONFIG_DEFAULTS, parseConfig, parseNumberList } from '../src/config.js';
 
-function accessor(values: Record<string, unknown>): <T>(key: string) => T | undefined {
-  return <T>(key: string) => values[key] as T | undefined;
-}
+const reader = (values: Record<string, unknown>) => <T,>(key: string): T | undefined => values[key] as T | undefined;
 
-describe('parseConfig', () => {
-  it('returns the declared defaults on an empty config', () => {
-    assert.deepEqual(parseConfig(accessor({})), CONFIG_DEFAULTS);
-  });
+test('defaults apply when nothing is configured', () => {
+  assert.deepEqual(parseConfig(reader({})), CONFIG_DEFAULTS);
+});
 
-  it('accepts valid overrides (including numeric strings from setup fields)', () => {
-    const config = parseConfig(
-      accessor({
-        facilitator_agent_slug: ' moderator ',
-        initiator_role_key: 'management',
-        default_ttl_hours: '48',
-        reporting_mode: 'interim',
-        language: 'en',
-        disclose_report_target: false,
-      }),
-    );
-    assert.equal(config.facilitatorAgentSlug, 'moderator');
-    assert.equal(config.initiatorRoleKey, 'management');
-    assert.equal(config.defaultTtlHours, 48);
-    assert.equal(config.reportingMode, 'interim');
-    assert.equal(config.language, 'en');
-    assert.equal(config.discloseReportTarget, false);
-  });
+test('owner defaults: retention 90 days, reminders 24 h and 2 h before the deadline', () => {
+  const config = parseConfig(reader({}));
+  assert.equal(config.retentionDays, 90);
+  assert.deepEqual(config.reminderOffsetsHours, [24, 2]);
+  assert.equal(config.changeWindowHours, 12);
+});
 
-  it('falls back loudly on invalid values instead of failing activation', () => {
-    const logs: string[] = [];
-    const config = parseConfig(
-      accessor({ default_ttl_hours: -5, reporting_mode: 'loud', language: 'fr' }),
-      (msg) => logs.push(msg),
-    );
-    assert.equal(config.defaultTtlHours, CONFIG_DEFAULTS.defaultTtlHours);
-    assert.equal(config.reportingMode, 'result-only');
-    assert.equal(config.language, 'de');
-    assert.ok(logs.some((l) => l.includes('default_ttl_hours')));
-    assert.ok(logs.some((l) => l.includes('reporting_mode')));
-  });
+test('reminder offsets are sorted furthest first', () => {
+  assert.deepEqual(parseConfig(reader({ reminder_offsets_hours: '2, 48,24' })).reminderOffsetsHours, [48, 24, 2]);
+});
+
+test('invalid values fall back to the default and are logged', () => {
+  const logs: string[] = [];
+  const config = parseConfig(
+    reader({ language: 'fr', timezone: 'Mars/Olympus', retention_days: -3, ranked_points: '3,x', change_window_hours: 'soon' }),
+    (m) => logs.push(m),
+  );
+  assert.equal(config.language, 'de');
+  assert.equal(config.timezone, 'Europe/Berlin');
+  assert.equal(config.retentionDays, 90);
+  assert.deepEqual(config.rankedPoints, [3, 2, 1]);
+  assert.equal(config.changeWindowHours, 12);
+  assert.equal(logs.length, 5);
+});
+
+test('numbers stored as strings are accepted', () => {
+  const config = parseConfig(reader({ retention_days: '30', max_active_per_facilitator: '4', protocol_mail_enabled: 'true' }));
+  assert.equal(config.retentionDays, 30);
+  assert.equal(config.maxActivePerFacilitator, 4);
+  assert.equal(config.protocolMailEnabled, true);
+});
+
+test('parseNumberList refuses empty and non-positive entries', () => {
+  assert.equal(parseNumberList(''), undefined);
+  assert.equal(parseNumberList('3,0'), undefined);
+  assert.deepEqual(parseNumberList(' 5 , 3,1 '), [5, 3, 1]);
 });

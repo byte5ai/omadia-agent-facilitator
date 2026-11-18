@@ -1,6 +1,6 @@
 {
   "name": "@omadia/agent-facilitator",
-  "version": "0.7.3",
+  "version": "1.0.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -15,26 +15,30 @@
   "files": [
     "dist",
     "skills",
+    "migrations",
+    "ui",
     "manifest.yaml"
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
     "test": "node scripts/test.mjs",
     "package": "node scripts/build-zip.mjs",
     "clean": "rm -rf dist out .test-build *.tsbuildinfo"
   },
   "peerDependencies": {
-    "@omadia/plugin-api": ">=1.7.0"
+    "@omadia/plugin-api": ">=1.55.0"
   },
   "devDependencies": {
-    "typescript": "^6.0.2",
+    "@omadia/plugin-api": "file:../odoo-bot/middleware/packages/plugin-api",
     "@types/node": "^25.6.0",
+    "@types/pg": "^8.11.0",
     "esbuild": "^0.24.0",
-    "zod": "^3.24.0",
-    "@omadia/plugin-api": "file:../odoo-bot/middleware/packages/plugin-api"
+    "pg": "^8.13.0",
+    "typescript": "^6.0.2",
+    "zod": "^3.24.0"
   },
-  "description": "omadia Facilitator/Convener agent plugin — moderates group chats to a defined outcome, on ephemeral Conductor workflows (#330).",
+  "description": "omadia Facilitator \u2014 the facilitation engine for native facilitators (#2043): data model, lifecycle, decision methods, scheduler and outbox as a plugin.",
   "homepage": "https://github.com/byte5ai/omadia-agent-facilitator",
   "repository": {
     "type": "git",

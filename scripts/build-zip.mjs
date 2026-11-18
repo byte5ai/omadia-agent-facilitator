@@ -42,8 +42,8 @@ const pkgRoot = process.cwd();
 /** Everything the host needs at runtime. `node_modules` must never be in here. */
 const REQUIRED_FILES = ['manifest.yaml'];
 const REQUIRED_DIRS = ['dist'];
-const OPTIONAL_FILES = ['README.md', 'LICENSE', 'NOTICE', 'INTEGRATION.md'];
-const OPTIONAL_DIRS = ['assets', 'skills'];
+const OPTIONAL_FILES = ['README.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE', 'INTEGRATION.md'];
+const OPTIONAL_DIRS = ['assets', 'skills', 'migrations', 'ui'];
 
 /** The manifest's `lifecycle.entry`. Its absence means `tsc` did not finish. */
 const REQUIRED_IN_DIST = ['plugin.js'];
