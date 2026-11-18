@@ -39,7 +39,7 @@ describe('activate', () => {
     const handle = await activate(ctx);
     assert.deepEqual(
       handle.toolkit.tools.map((t) => t.spec.name).sort(),
-      ['facilitation_nudge', 'facilitation_progress', 'facilitation_report', 'facilitation_start', 'facilitation_status', 'facilitation_stop'],
+      ['facilitation_nudge', 'facilitation_progress', 'facilitation_report', 'facilitation_start', 'facilitation_status', 'facilitation_stop', 'facilitation_update'],
     );
     assert.equal(subscribed, 1);
 
@@ -51,7 +51,7 @@ describe('activate', () => {
     const { ctx, logs } = fakeContext({});
     const handle = await activate(ctx);
 
-    assert.equal(handle.toolkit.tools.length, 6);
+    assert.equal(handle.toolkit.tools.length, 7);
     for (const name of ['conductorEphemeralRuns', 'targetedSend', 'conversationEvents', 'agentProvisioning', 'conversationBindings', 'conductorRoleAssignments', 'conversationRosters', 'conversationSend']) {
       assert.ok(logs.some((l) => l.includes(name)), `missing degradation log for ${name}`);
     }

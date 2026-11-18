@@ -110,6 +110,9 @@ function harness(opts?: {
   };
   const config = {
     ...CONFIG_DEFAULTS,
+    // The nudge discipline has its own tests (nudgePolicy.test.ts).
+    nudgeMinIntervalHours: 0,
+    nudgeQuietHours: undefined,
     reportingMode: opts?.reportingMode ?? CONFIG_DEFAULTS.reportingMode,
     nudgesEnabled: opts?.nudgesEnabled ?? true,
   };

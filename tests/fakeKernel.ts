@@ -8,7 +8,12 @@ import { CONFIG_DEFAULTS } from '../src/config.js';
 import type { FacilitatorConfig } from '../src/config.js';
 import { FacilitationStateStore } from '../src/stateStore.js';
 import { buildFacilitationToolkit } from '../src/toolkit.js';
-import type { ConversationBindingsService, EphemeralRunsService, TargetedSendService } from '../src/services.js';
+import type {
+  ConversationBindingsService,
+  ConversationRostersService,
+  EphemeralRunsService,
+  TargetedSendService,
+} from '../src/services.js';
 
 export const AGENT = '@omadia/agent-facilitator';
 
@@ -95,6 +100,7 @@ export function buildTools(opts: {
   events?: string[];
   config?: Partial<FacilitatorConfig>;
   now?: () => Date;
+  rosters?: ConversationRostersService;
 }) {
   const store = opts.store ?? new FacilitationStateStore();
   const reports: Array<{ principal: string; text: string }> = [];
@@ -114,13 +120,15 @@ export function buildTools(opts: {
   };
   const toolkit = buildFacilitationToolkit({
     agentId: AGENT,
-    config: { ...CONFIG_DEFAULTS, ...(opts.config ?? {}) },
+    // The nudge discipline (min interval, quiet hours) has its own tests —
+    // off by default here so the durability tests do not depend on the clock.
+    config: { ...CONFIG_DEFAULTS, nudgeMinIntervalHours: 0, nudgeQuietHours: undefined, ...(opts.config ?? {}) },
     store,
     getEphemeralRuns: () => opts.ephemeralRuns,
     getTargetedSend: () => targetedSend,
     getRoleAssignments: () => undefined,
     getConversationBindings: () => opts.bindings,
-    getConversationRosters: () => undefined,
+    getConversationRosters: () => opts.rosters,
     getConversationSend: () => ({
       sendToConversation: async (request: { conversationId: string; message: { text: string } }) => {
         nudges.push(`${request.conversationId}:${request.message.text}`);
