@@ -14,7 +14,7 @@ import { rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
 import { texts } from '../texts/index.js';
-import type { EngineCore } from './core.js';
+import type { EngineCore, GroupFallback } from './core.js';
 import { messageQuotaReached } from './quota.js';
 
 type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; message: string };
@@ -22,7 +22,7 @@ type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; 
 type StoredPayload = OutboxPayload & {
   link?: { kind: 'ack' | 'proposal'; id: string };
   /** What goes to the group when this private message cannot arrive. */
-  fallback?: { purpose: string; text: string; mentions?: { user: string; text: string }[] };
+  fallback?: GroupFallback;
 };
 
 /** How long one channel call may take. The facilitation's lock is held for
@@ -272,7 +272,11 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
       payload: { purpose: row.purpose, to: row.targetKind === 'group' ? 'group' : row.targetPrincipal, error, attempts },
     });
     engine.log(`facilitation ${f.id}: essential ${row.purpose} could not be delivered (${error}); giving up after ${String(attempts)} attempt(s)`);
-    if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
+    if (row.targetKind === 'direct') {
+      await noteUnreachable(engine, client, f, row, result.code);
+      // What the person is owed is said in the group instead.
+      await fallbackToGroup(engine, client, f, row);
+    }
     return;
   }
   await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
@@ -284,7 +288,7 @@ async function fallbackToGroup(engine: EngineCore, client: PoolClientLike, f: Fa
   const fallback = (row.payload as StoredPayload).fallback;
   if (!fallback) return;
   await engine.workOn(client, f.id, async (w) => {
-    w.post({ purpose: fallback.purpose, key: row.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: fallback.text, ...(fallback.mentions ? { mentions: fallback.mentions } : {}) });
+    w.post({ purpose: fallback.purpose, key: fallback.key ?? row.id, to: 'group', deliveryClass: fallback.deliveryClass ?? 'droppable', versionBound: false, text: fallback.text, ...(fallback.mentions ? { mentions: fallback.mentions } : {}) });
   });
 }
 
@@ -303,14 +307,6 @@ async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Fa
       `UPDATE plg_omadia_agent_facilitator_facilitations SET settings = jsonb_set(settings, '{unreachable}', coalesce(settings->'unreachable', '[]'::jsonb) || to_jsonb($2::text)) WHERE id = $1`,
       [f.id, row.targetPrincipal],
     );
-  }
-  if (row.purpose === 'initiator_report') {
-    // The report could not be sent privately: say so where everything is anyway.
-    const initiator = await store.getParticipant(client, f.id, row.targetPrincipal ?? '');
-    await engine.workOn(client, f.id, async (w) => {
-      w.post({ purpose: 'initiator_unreachable', key: 'once', to: 'group', deliveryClass: 'essential', text: texts(f.language).initiatorUnreachable(initiator?.displayName ?? '') });
-    });
-    return;
   }
   if (f.settings.directNoticeSent === true || (f.phase !== 'active' && f.phase !== 'configuring')) return;
   await engine.workOn(client, f.id, async (w) => {

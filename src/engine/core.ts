@@ -64,6 +64,17 @@ export class Refusal extends Error {
   }
 }
 
+/** What is said in the group when a private message cannot arrive. */
+export interface GroupFallback {
+  purpose: string;
+  text: string;
+  mentions?: { user: string; text: string }[];
+  /** With a key the fallbacks of several private messages are one group message. */
+  key?: string;
+  /** Default: droppable. Essential for what somebody is owed. */
+  deliveryClass?: 'essential' | 'droppable';
+}
+
 export interface Outgoing {
   /** What the message is, for the protocol and for idempotency. */
   purpose: string;
@@ -81,7 +92,7 @@ export interface Outgoing {
   versionBound?: boolean;
   /** A private message only: what goes to the group instead when the person
    *  cannot be reached privately. */
-  fallback?: { purpose: string; text: string; mentions?: { user: string; text: string }[] };
+  fallback?: GroupFallback;
   /** Row to stamp with the channel's message id once the send returned. */
   link?: { kind: 'ack' | 'proposal'; id: string };
 }

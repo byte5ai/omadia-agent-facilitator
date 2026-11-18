@@ -26,7 +26,7 @@ import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
 import { scheduleJob } from './jobs.js';
 import { openProposal, registerProposalKind } from './proposals.js';
-import { buildProtocol, closingSummary } from './protocol.js';
+import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { withTimeout } from './outbox.js';
 import { registerExternalJob, registerJobHandler } from './scheduler.js';
 import type { ExternalJob } from './scheduler.js';
@@ -359,7 +359,7 @@ export function installCapabilities(): void {
     // The initiator already received the protocol with the report.
     const viaChannel = participants.filter((p) => p.principalId !== w.f.initiatorParticipant);
     for (const person of viaChannel) {
-      w.post({ purpose: 'protocol', key: person.principalId, to: { principalId: person.principalId }, deliveryClass: 'essential', text: t.protocolDirect(person.displayName, protocol) });
+      sendWithProtocol(w, { principalId: person.principalId }, { purpose: 'protocol', key: person.principalId, text: t.protocolDirect(person.displayName, protocol) }, protocol);
     }
     // A dispatch to nobody is not a use of anything.
     if (viaChannel.length > 0) {

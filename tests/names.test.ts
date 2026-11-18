@@ -73,7 +73,7 @@ test('a kernel that states the caller by name: the initiator is named and takes 
   const handshake = posts(conv)[0] ?? '';
   assert.match(handshake, /Gestartet von: Marcel Wege/);
   assert.match(handshake, /Teilnehmende: Marcel Wege \(die Mitgliederliste konnte ich nicht vollständig abrufen; wer hier schreibt, nimmt teil\)/);
-  assert.match(handshake, /danach mit dem Protokoll an Marcel Wege\./);
+  assert.match(handshake, /danach mit dem Protokoll an Marcel Wege\. Marcel Wege erhält nichts/);
 });
 
 test('a member the channel lists without a name is not shown as an id, and gets the name of their first message', { skip: PG_SKIP }, async () => {

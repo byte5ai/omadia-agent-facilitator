@@ -6,6 +6,7 @@ import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import type { Facilitation, ProtocolEvent } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import type { Work } from './core.js';
 import { facilitatorName } from './lifecycle.js';
 import { initiatorName } from './names.js';
 
@@ -86,4 +87,22 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     '',
     `${p.outcome}: ${t.phase[f.phase]}${f.closeReason && f.phase === 'aborted' ? ` (${f.closeReason})` : ''}`,
   ].join('\n');
+}
+
+/**
+ * Send somebody what they are owed with the protocol, privately.
+ *
+ * A facilitator can write privately only to people who have its app, so a
+ * private message that cannot arrive is the normal case, not an error. Then
+ * the protocol stands in the group, once, with one short line: nobody is
+ * pointed at a private message that will not come, and nobody is named.
+ */
+export function sendWithProtocol(w: Work, to: { principalId: string }, message: { purpose: string; key: string; text: string }, protocol: string): void {
+  const inGroup = { purpose: 'protocol_in_group', key: 'once', deliveryClass: 'essential' as const, text: texts(w.f.language).protocolInGroup(protocol) };
+  // Who could not be reached before is not tried again.
+  if ((w.f.settings.unreachable ?? []).includes(to.principalId)) {
+    w.post({ purpose: inGroup.purpose, key: inGroup.key, to: 'group', deliveryClass: 'essential', text: inGroup.text });
+    return;
+  }
+  w.post({ ...message, to, deliveryClass: 'essential', fallback: inGroup });
 }

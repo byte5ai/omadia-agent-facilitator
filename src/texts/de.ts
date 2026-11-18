@@ -242,8 +242,8 @@ export const de: Texts = {
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
       h.initiator
-        ? `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt.`
-        : 'Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an die Person, die diese Moderation gestartet hat. Sie erhält nichts, was ihr nicht erfahren habt.',
+        ? `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.`
+        : 'Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an die Person, die diese Moderation gestartet hat. Sie erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.',
       'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
     ].join('\n'),
   reminderTimes: (hours) => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} Min.` : `${String(h)} Std.`)).join(', '),
@@ -262,7 +262,7 @@ export const de: Texts = {
 
   initiatorReport: (name, outcome, protocol) =>
     `Hallo ${name}, du hast diese Moderation gestartet, deshalb hier der Bericht. Er enthält nichts, was die Gruppe nicht erfahren hat.\n\n${outcome}\n\n${protocol}`,
-  initiatorUnreachable: (name) => `Ich konnte den Bericht nicht privat an ${name} senden. Es steht alles hier in der Gruppe.`,
+  protocolInGroup: (protocol) => `Den Bericht mit dem Protokoll konnte ich nicht allen privat senden, deshalb steht er hier:\n\n${protocol}`,
 
   change: {
     definition_of_done: (text, version) => `die Definition of Done ändern in (Version ${String(version)}): ${text}`,

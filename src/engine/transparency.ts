@@ -15,7 +15,7 @@ import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake } from './lifecycle.js';
 import { initiatorName } from './names.js';
 import { openProposal, registerProposalKind } from './proposals.js';
-import { buildProtocol, closingSummary } from './protocol.js';
+import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
 
 export type HandshakeNote = (w: Work) => Promise<{ perception?: string; notes?: string[] }>;
@@ -70,13 +70,8 @@ async function reportToInitiator(w: Work, outcome: string): Promise<void> {
     return;
   }
   const t = texts(w.f.language);
-  w.post({
-    purpose: 'initiator_report',
-    key: 'report',
-    to: { principalId: initiator.principalId },
-    deliveryClass: 'essential',
-    text: t.initiatorReport(initiator.displayName, outcome, await buildProtocol(w.tx, w.f)),
-  });
+  const protocol = await buildProtocol(w.tx, w.f);
+  sendWithProtocol(w, { principalId: initiator.principalId }, { purpose: 'initiator_report', key: 'report', text: t.initiatorReport(initiator.displayName, outcome, protocol) }, protocol);
   await w.event('initiator_report', 'engine', { to: initiator.principalId });
 }
 

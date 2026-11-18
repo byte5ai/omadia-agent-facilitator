@@ -281,8 +281,8 @@ export const en = {
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
       h.initiator
-        ? `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`
-        : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about.',
+        ? `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.`
+        : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.',
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
   reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),
@@ -313,7 +313,8 @@ export const en = {
 
   initiatorReport: (name: string, outcome: string, protocol: string): string =>
     `Hello ${name}, you started this facilitation, so here is the report. It contains nothing the group was not told.\n\n${outcome}\n\n${protocol}`,
-  initiatorUnreachable: (name: string): string => `I could not send the report to ${name} privately. It is all here in the group.`,
+  /** A report or protocol could not arrive privately: said once, with what is owed. */
+  protocolInGroup: (protocol: string): string => `I could not send the report with the protocol to everybody privately, so here it is:\n\n${protocol}`,
 
   change: {
     definition_of_done: (text: string, version: number): string => `change the definition of done to (version ${String(version)}): ${text}`,
