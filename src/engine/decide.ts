@@ -430,7 +430,7 @@ export async function withoutTakenItems(w: Work, step: Step, author: Participant
   return { ...ballot, nominations: free };
 }
 
-export function installDecisionMethods(engine: EngineCore): void {
+export function installDecisionMethods(): void {
   registerInboundHandler(ballots, PRIORITY.ballots);
   registerAfterInbound(async (w) => {
     await advance(w, 'contribution');
@@ -481,5 +481,4 @@ export function installDecisionMethods(engine: EngineCore): void {
     });
   };
 
-  engine.onAfterDispatch(closeWhenResultDelivered);
 }

@@ -230,7 +230,7 @@ async function revoke(w: Work, reason: string): Promise<void> {
   await w.event('grant_revoked', 'engine', { summary: `grant revoked: ${reason}` });
 }
 
-export function installCapabilities(engine: EngineCore): void {
+export function installCapabilities(): void {
   registerProposalKind('stakeholder', {
     describe: (_w, p) => p.summary,
     accept: async (w, p) => {
@@ -261,11 +261,11 @@ export function installCapabilities(engine: EngineCore): void {
     const grant = await grantOf(work);
     await w.event('grant_issued', 'engine', { summary: `grant issued for ${String(grant.allowed.length)} addresses (participants and confirmed stakeholders)` });
     try {
-      await dispatchProtocol(work, engine);
-      if (w.f.followupPolicy.meeting) await scheduleFollowupMeeting(work, engine, w.f.followupPolicy.meeting);
+      await dispatchProtocol(work, w.engine);
+      if (w.f.followupPolicy.meeting) await scheduleFollowupMeeting(work, w.engine, w.f.followupPolicy.meeting);
     } catch (err) {
       // A failing integration never undoes the close.
-      engine.log(`facilitation ${w.f.id}: follow-up capabilities failed: ${err instanceof Error ? err.message : String(err)}`);
+      w.engine.log(`facilitation ${w.f.id}: follow-up capabilities failed: ${err instanceof Error ? err.message : String(err)}`);
       await w.event('capability_refused', 'engine', { capability: 'follow-up', summary: `follow-up failed: ${err instanceof Error ? err.message : String(err)}` });
     }
     // With action items the grant ends with their follow-up; otherwise after

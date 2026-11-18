@@ -185,3 +185,28 @@ test('an unlisted roster is said out loud and whoever writes joins', { skip: PG_
   const f = await h.facilitation(conv);
   assert.deepEqual((await store.listParticipants(h.db.pool, f.id)).map((p) => p.principalId).sort(), ['user:anna', 'user:bert']);
 });
+
+test('a second engine in the same process shares the hooks without doubling them or crossing kernels', { skip: PG_SKIP }, async () => {
+  // Another engine on another kernel and database: a replica, or a second activation.
+  const other = await createHarness();
+  try {
+    const conv = h.kernel.conversation('lc-two-engines', [ANNA, BERT]);
+    await h.tool('facilitation_start', { goal: 'Where to eat', definitionOfDone: 'A place is chosen', agenda: [{ kind: 'discuss', title: 'Talk' }, { kind: 'decide', title: 'Vote', method: 'single', options: ['Thai', 'Pizza'] }] }, { conversation: conv });
+    await h.tool('facilitation_open', {}, { conversation: conv });
+    await h.kernel.say(conv, 'anna', 'what are the options?');
+    await h.settle();
+    const context = h.kernel.turns.at(-1)?.engineContext ?? '';
+    assert.equal(context.split('# Agenda').length - 1, 1, 'each section of the turn context appears once');
+    assert.equal(context.split('# Means in this session').length - 1, 1);
+    await h.tool('facilitation_step', { action: 'close' }, { conversation: conv });
+    await h.tool('facilitation_step', { action: 'close' }, { conversation: conv });
+    await h.kernel.say(conv, 'anna', 'A');
+    await h.kernel.say(conv, 'bert', 'A');
+    await h.settle();
+    const posts = h.kernel.groupPosts(conv).map((p) => p.text);
+    assert.equal(posts.filter((t) => t.startsWith('Result for')).length, 1);
+    assert.equal(other.kernel.posts.length + other.kernel.dms.length + other.kernel.turns.length, 0, 'nothing went through the other engine\'s kernel');
+  } finally {
+    await other.close();
+  }
+});

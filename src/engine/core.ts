@@ -79,6 +79,9 @@ export interface Work {
   readonly tx: Queryable;
   readonly now: Date;
   readonly config: EngineConfig;
+  /** The engine this unit of work runs in. Hooks are shared by every engine
+   *  of the process, so they take the kernel from here, never from a closure. */
+  readonly engine: EngineCore;
   /** The facilitation as of the last change in this unit of work. */
   readonly f: Facilitation;
   patch(patch: Partial<Facilitation>): Promise<Facilitation>;
@@ -157,6 +160,7 @@ export class EngineCore {
         tx,
         now,
         config: this.deps.config,
+        engine: this,
         get f() {
           return current;
         },

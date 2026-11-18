@@ -11,7 +11,7 @@ import { installCapabilities } from './capabilities.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installActionItems } from './actionItems.js';
-import { installDecisionMethods } from './decide.js';
+import { closeWhenResultDelivered, installDecisionMethods } from './decide.js';
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
 import { installGovernance, purgeExpired } from './governance.js';
@@ -25,6 +25,31 @@ import { runFacilitatorTurn } from './turn.js';
 
 const REPLAY_PAGE = 200;
 
+let installed = false;
+
+/**
+ * Register the engine's readings, job handlers, proposal kinds and hooks.
+ *
+ * They live at module level and are shared by every engine of the process (a
+ * replica in a test, a second activation after an upgrade), so they are
+ * registered exactly once and none of them holds on to an engine: a hook takes
+ * the kernel from the unit of work it runs in.
+ */
+function installOnce(): void {
+  if (installed) return;
+  installed = true;
+  installDecisionMethods();
+  installScheduler();
+  onOpened(scheduleDeadlineJobs);
+  installProposals();
+  installProcess();
+  installActionItems();
+  installTransparency();
+  installGovernance();
+  installSessions();
+  installCapabilities();
+}
+
 export class FacilitationEngine {
   readonly core: EngineCore;
   private readonly attached = new Map<string, () => void>();
@@ -35,16 +60,8 @@ export class FacilitationEngine {
 
   constructor(deps: EngineDeps) {
     this.core = new EngineCore(deps);
-    installDecisionMethods(this.core);
-    installScheduler();
-    installProposals();
-    installProcess();
-    installActionItems();
-    installTransparency();
-    installGovernance();
-    installSessions(this.core);
-    installCapabilities(this.core);
-    onOpened(scheduleDeadlineJobs);
+    installOnce();
+    this.core.onAfterDispatch(closeWhenResultDelivered);
   }
 
   /** Whether the engine can keep state at all. */

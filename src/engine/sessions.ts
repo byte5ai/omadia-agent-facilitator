@@ -53,13 +53,11 @@ export async function currentSession(q: Queryable, facilitationId: string): Prom
   return sessions.find((s) => s.kind === 'live' && s.status === 'running') ?? sessions.find((s) => s.kind === 'async');
 }
 
-let engineRef: EngineCore | undefined;
-
 /** The chat phase of a facilitation, with what the channel offers there. */
 async function ensureChatSession(w: Work): Promise<Session> {
   const existing = (await store.listSessions(w.tx, w.f.id)).find((s) => s.kind === 'async');
   if (existing) return existing;
-  const snapshot = engineRef ? await fetchSnapshot(engineRef, w.f) : baselineSnapshot(w.f.channelType, w.f.conversationId, w.now);
+  const snapshot = await fetchSnapshot(w.engine, w.f);
   return insert<Session>(w.tx, 'facilitation_sessions', {
     facilitationId: w.f.id,
     kind: 'async',
@@ -126,7 +124,7 @@ async function sendAgenda(w: Work, session: Session): Promise<void> {
 export async function startSession(w: Work, session: Session): Promise<Session> {
   if (session.status !== 'scheduled') return session;
   const t = texts(w.f.language);
-  const snapshot = engineRef ? await fetchSnapshot(engineRef, w.f, session.meetingRef ?? undefined) : baselineSnapshot(w.f.channelType, w.f.conversationId, w.now);
+  const snapshot = await fetchSnapshot(w.engine, w.f, session.meetingRef ?? undefined);
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
   const started = (await update<Session>(w.tx, 'facilitation_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
   await sendAgenda(w, session);
@@ -333,8 +331,7 @@ export async function speakingOrder(w: Work): Promise<{ names: string[]; remoteF
   return { names, remoteFirst: balance?.remoteFirst === true };
 }
 
-export function installSessions(engine: EngineCore): void {
-  engineRef = engine;
+export function installSessions(): void {
   registerInboundHandler(stopListening, PRIORITY.commands + 5);
   registerInboundHandler(pollAnswers, PRIORITY.proposals + 2);
   onVoteOpened(postPoll);
