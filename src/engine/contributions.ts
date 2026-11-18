@@ -140,6 +140,27 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
   return contribution;
 }
 
+/**
+ * Retire the confirmation requests a person has open for a step: they voted
+ * directly, or the step moved on to another round. The reading that waited
+ * for a "yes" is superseded with it, so no later "yes" can bring it back.
+ */
+export async function cancelOpenRequests(w: Work, stepId: string, principal?: string): Promise<number> {
+  const stale = await w.tx.query<{ ack_id: string; contribution_id: string }>(
+    `SELECT a.id AS ack_id, c.id AS contribution_id
+       FROM plg_omadia_agent_facilitator_acks a
+       JOIN plg_omadia_agent_facilitator_contributions c ON c.id = a.ref_id
+      WHERE a.facilitation_id = $1 AND a.kind = 'contribution' AND a.status = 'pending'
+        AND c.step_id = $2 AND ($3::text IS NULL OR a.principal = $3)`,
+    [w.f.id, stepId, principal ?? null],
+  );
+  for (const row of stale.rows) {
+    await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: row.ack_id }, { status: 'cancelled', resolvedAt: w.now });
+    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_contributions SET status = 'superseded' WHERE id = $1 AND status = 'unconfirmed'`, [row.contribution_id]);
+  }
+  return stale.rows.length;
+}
+
 const summaryOf = (c: Contribution): string => String(c.payload['summary'] ?? '');
 
 /** The author confirmed the echo: the contribution counts from now on. */

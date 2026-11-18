@@ -16,7 +16,7 @@ import { DEFAULT_POINTS, evaluate } from '../methods/evaluate.js';
 import type { AssignmentEvent, CastBallot, Evaluation, ItemAssignment } from '../methods/evaluate.js';
 import type { Ack, Contribution, ContributionKind, Decision, OutboxRow, Participant, Step, StepOption } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
-import { askClarification, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
+import { askClarification, cancelOpenRequests, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
@@ -101,13 +101,21 @@ export interface BallotInput {
   source?: 'message' | 'card';
 }
 
-/** One ballot counts per person and round: the newest. */
-async function supersedeOlderBallots(w: Work, step: Step, principal: string, keepId: string): Promise<boolean> {
-  const older = (await store.listContributions(w.tx, w.f.id, step.id)).filter(
+/** One ballot counts per person and round. A ballot replaces the ones that
+ *  were recorded up to `asOf` (for a confirmed reading: up to the moment the
+ *  confirmation was asked for). If the person has voted again since, that
+ *  newer ballot stands and `keepId` is the one that is retired. */
+async function supersedeOlderBallots(w: Work, step: Step, principal: string, keepId: string, asOf?: Date): Promise<'kept' | 'retired'> {
+  const others = (await store.listContributions(w.tx, w.f.id, step.id)).filter(
     (c) => c.id !== keepId && c.participantPrincipal === principal && c.round === step.round && c.status === 'valid' && ballotOf(c) !== undefined,
   );
-  for (const c of older) await store.patchContribution(w.tx, c.id, { status: 'superseded' });
-  return older.length > 0;
+  const newer = asOf ? others.filter((c) => c.recordedAt.getTime() > asOf.getTime()) : [];
+  if (newer.length > 0) {
+    await store.patchContribution(w.tx, keepId, { status: 'superseded' });
+    return 'retired';
+  }
+  for (const c of others) await store.patchContribution(w.tx, c.id, { status: 'superseded' });
+  return 'kept';
 }
 
 async function promptNominees(w: Work, input: BallotInput, contribution: Contribution, participants: readonly Participant[]): Promise<void> {
@@ -174,10 +182,17 @@ export async function recordBallot(w: Work, input: BallotInput): Promise<Contrib
   return contribution;
 }
 
-/** What happens once a ballot counts (at once, or when its author confirmed). */
-async function countBallot(w: Work, input: BallotInput, contribution: Contribution, participants: readonly Participant[]): Promise<void> {
-  if (input.ballot.type === 'assignment') await promptNominees(w, input, contribution, participants);
-  else await supersedeOlderBallots(w, input.step, input.author.principalId, contribution.id);
+/** What happens once a ballot counts (at once, or when its author confirmed).
+ *  `requestedAt` is set for a confirmed reading: when the confirmation was
+ *  asked for. */
+async function countBallot(w: Work, input: BallotInput, contribution: Contribution, participants: readonly Participant[], requestedAt?: Date): Promise<void> {
+  if (input.ballot.type === 'assignment') {
+    await promptNominees(w, input, contribution, participants);
+    return;
+  }
+  await supersedeOlderBallots(w, input.step, input.author.principalId, contribution.id, requestedAt);
+  // A vote cast directly settles what was waiting for this person's "yes".
+  if (!requestedAt) await cancelOpenRequests(w, input.step.id, input.author.principalId);
 }
 
 // ── moving on ───────────────────────────────────────────────────────────────
@@ -345,6 +360,8 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
       const next = step.round + 1;
       await store.patchStep(w.tx, step.id, { round: next, roundOptions: options.filter((o) => outcome.tied.includes(o.key)), roundDeadline: until });
       await scheduleJob(w, 'runoff_deadline', step.id, until, { stepId: step.id });
+      // A new round: readings of the old one that still wait for a "yes" are void.
+      await cancelOpenRequests(w, step.id);
       w.bump();
       await w.event('runoff', 'engine', { stepId: step.id, round: next, tied: outcome.tied, until: until.toISOString() });
       w.post({ purpose: 'runoff', key: `${step.id}:${String(next)}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: t.runoff(t.list(tied), formatWhen(until, w.f.timezone, w.f.language)) });
@@ -478,12 +495,20 @@ export function installDecisionMethods(): void {
       await declineContribution(w, ack, author, record.messageId);
       return;
     }
+    // A reading from an earlier round, or of a step that has closed, can no
+    // longer be confirmed into the count.
+    const waiting = await store.getContribution(w.tx, ack.refId);
+    const waitingStep = waiting ? await store.getStep(w.tx, waiting.stepId) : undefined;
+    if (waiting && waitingStep && ballotOf(waiting) !== undefined && (waitingStep.status !== 'open' || waiting.round !== waitingStep.round)) {
+      await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'cancelled', resolvedAt: w.now, resolvedByMessageId: record.messageId });
+      await store.patchContribution(w.tx, waiting.id, { status: 'superseded' });
+      w.bump();
+      return;
+    }
     const contribution = await confirmContribution(w, ack, author, record.messageId);
     const ballot = contribution ? ballotOf(contribution) : undefined;
-    if (!contribution || !ballot) return;
-    const step = await store.getStep(w.tx, contribution.stepId);
-    if (!step || step.status !== 'open') return;
-    await countBallot(w, { record, author, step, ballot, interpreted: false }, contribution, await store.listParticipants(w.tx, w.f.id));
+    if (!contribution || !ballot || !waitingStep) return;
+    await countBallot(w, { record, author, step: waitingStep, ballot, interpreted: false }, contribution, await store.listParticipants(w.tx, w.f.id), ack.createdAt);
   };
 
   // The named person says yes or no in their own message.

@@ -80,12 +80,40 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
   return undefined;
 };
 
-/** Pick the acknowledgement a "yes" refers to. */
-function pickAck(pending: Ack[], replyTo: string | undefined): Ack | 'ambiguous' | undefined {
+/** Purposes of messages in which the facilitator asks one person something. */
+const ASKS = ['echo', 'clarification', 'nomination', 'action_item', 'which_confirmation', 'proposal_hint'];
+
+/**
+ * Is this request the most recent thing the facilitator asked that person?
+ * A bare "yes" answers the last question, not an older one: if the
+ * facilitator has asked the person anything since (or the request never
+ * reached the chat), only a reply to the request itself confirms it.
+ */
+async function isLatestAsk(w: Work, ack: Ack): Promise<boolean> {
+  if (!ack.promptMessageId) return false;
+  const later = await w.tx.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_outbox later
+      WHERE later.facilitation_id = $1
+        AND later.status IN ('pending', 'sending', 'sent')
+        AND later.purpose = ANY($4::text[])
+        AND later.payload->'mentions' @> $3::jsonb
+        AND later.seq > (SELECT max(asked.seq) FROM plg_omadia_agent_facilitator_outbox asked WHERE asked.facilitation_id = $1 AND asked.payload->'link'->>'id' = $2)
+      LIMIT 1`,
+    [w.f.id, ack.id, JSON.stringify([{ user: ack.principal }]), `{${ASKS.join(',')}}`],
+  );
+  return later.rows.length === 0;
+}
+
+/** Pick the acknowledgement a "yes" refers to. A reply to (or a reaction on)
+ *  the request settles it. Without one, a bare "yes" counts only when exactly
+ *  one request is open and it is the last thing the person was asked. */
+async function pickAck(w: Work, pending: Ack[], replyTo: string | undefined): Promise<Ack | 'ambiguous' | undefined> {
   if (pending.length === 0) return undefined;
   const direct = replyTo ? pending.find((a) => a.promptMessageId === replyTo) : undefined;
   if (direct) return direct;
-  return pending.length === 1 ? pending[0] : 'ambiguous';
+  if (pending.length > 1) return 'ambiguous';
+  const only = pending[0];
+  return only && (await isLatestAsk(w, only)) ? only : undefined;
 }
 
 export type AckResolver = (w: Work, ack: Ack, author: Participant, record: ConversationMessageRecord, confirmed: boolean) => Promise<void>;
@@ -115,7 +143,7 @@ const acknowledgements: InboundHandler = async ({ w, record, author, command }) 
   } else {
     return undefined;
   }
-  const ack = pickAck(pending, record.kind === 'reaction' ? record.messageId : record.replyToMessageId);
+  const ack = await pickAck(w, pending, record.kind === 'reaction' ? record.messageId : record.replyToMessageId);
   if (!ack) return undefined;
   if (ack === 'ambiguous') {
     w.post({

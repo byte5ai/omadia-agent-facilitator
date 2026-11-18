@@ -8,6 +8,7 @@
 import * as store from '../db/store.js';
 import type { CloseRule, DodVersion, MethodId, Proposal, Step, StepOption } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import { cancelOpenRequests } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { conclude, onClosed } from './decide.js';
@@ -167,6 +168,7 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
         ? []
         : (await store.listContributions(w.tx, w.f.id, step.id)).filter((c) => (c.status === 'valid' || c.status === 'unconfirmed') && c.payload['ballot'] !== undefined);
       for (const c of affected) await store.patchContribution(w.tx, c.id, { status: 'superseded' });
+      if (affected.length > 0) await cancelOpenRequests(w, step.id);
       await store.patchStep(w.tx, step.id, { ...next, methodConfig: payload['methodConfig'] as Record<string, unknown>, round: affected.length > 0 ? step.round + 1 : step.round, roundOptions: null, roundDeadline: null });
       announce(t.changed.method(step.title, String(payload['rules'] ?? '')));
       if (affected.length > 0) {
