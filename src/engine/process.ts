@@ -9,7 +9,7 @@ import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Cluster, Contribution, Participant, Proposal, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
-import { recordContribution } from './contributions.js';
+import { recordContribution, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { castBallots, conclude, setAfterStepDecided } from './decide.js';
@@ -252,7 +252,7 @@ const collecting: InboundHandler = async ({ w, record, author, retired }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   if (record.quoted === true || record.forwarded === true) return undefined;
-  if (!w.f.activatedAt || Date.parse(record.occurredAt) < w.f.activatedAt.getTime()) return undefined;
+  if (!(await writtenAfterStart(w, record))) return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step || step.kind !== 'collect' || step.method !== null) return undefined;
   const text = (record.text ?? '').trim();

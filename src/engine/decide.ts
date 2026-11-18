@@ -16,7 +16,7 @@ import { DEFAULT_POINTS, evaluate } from '../methods/evaluate.js';
 import type { AssignmentEvent, CastBallot, Evaluation, ItemAssignment } from '../methods/evaluate.js';
 import type { Ack, Contribution, ContributionKind, Decision, OutboxRow, Participant, Step, StepOption } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
-import { askClarification, cancelOpenRequests, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
+import { askClarification, cancelOpenRequests, writtenAfterStart, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
@@ -426,7 +426,7 @@ const ballots: InboundHandler = async ({ w, record, author, retired }) => {
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   // A quoted or forwarded ballot is not the sender's ballot.
   if (record.quoted === true || record.forwarded === true) return undefined;
-  if (!w.f.activatedAt || Date.parse(record.occurredAt) < w.f.activatedAt.getTime()) return undefined;
+  if (!(await writtenAfterStart(w, record))) return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) return undefined;
   const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');

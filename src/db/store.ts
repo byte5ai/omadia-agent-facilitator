@@ -309,6 +309,20 @@ export async function claimInbound(q: Queryable, values: InboundRow): Promise<In
 export const setInboundOutcome = (q: Queryable, facilitationId: string, eventId: string, outcome: string): Promise<unknown> =>
   update<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { facilitationId, eventId }, { outcome });
 
+/** When a message was first written, as the engine saw it arrive. An edit
+ *  carries the time of the edit; the message is as old as its creation.
+ *  Undefined when the engine never saw the message being created. */
+export async function writtenAt(q: Queryable, facilitationId: string, messageId: string): Promise<Date | undefined> {
+  const row = await one<{ occurredAt: Date }>(
+    q,
+    `SELECT occurred_at FROM plg_omadia_agent_facilitator_inbound
+      WHERE facilitation_id = $1 AND message_id = $2 AND kind = 'created'
+      ORDER BY seq LIMIT 1`,
+    [facilitationId, messageId],
+  );
+  return row?.occurredAt;
+}
+
 /** Write down that an event could not be processed. Returns the attempts so
  *  far and whether it is given up now. */
 export async function recordInboundFailure(q: Queryable, values: InboundRow, error: string): Promise<{ attempts: number; gaveUp: boolean }> {

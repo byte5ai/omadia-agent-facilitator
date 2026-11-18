@@ -216,3 +216,27 @@ test('review 9: after the conclusion an edit or a deletion changes nothing that 
   const events = (await store.listEvents(h.db.pool, f.id, ['late_change'])).map((e) => e.payload['kind']);
   assert.deepEqual(events, ['edited', 'deleted']);
 });
+
+test('review: a message written before the start does not become a contribution by being edited after it', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('co-old-edit', [ANNA, BERT]);
+  await h.tool('facilitation_start', { goal: 'Where to eat', definitionOfDone: 'd', method: 'single', options: ['Thai', 'Pizza'] }, { conversation: conv });
+  const early = await h.kernel.say(conv, 'anna', 'I am hungry');
+  await h.settle();
+  h.clock.advance(60_000);
+  await h.tool('facilitation_open', {}, { conversation: conv });
+  const f = await h.facilitation(conv);
+
+  // Edited after the start into a perfect ballot.
+  await h.kernel.edit(conv, 'anna', early.messageId, 'A');
+  await h.settle();
+  assert.deepEqual(await store.listContributions(h.db.pool, f.id), [], 'not recorded as a ballot');
+  assert.match(await record(conv, early.messageId, 'chooses Thai', 'vote'), /^Refused \(before_start\)/, 'and not through the tool either');
+
+  // A message written after the start and then edited still counts in its latest revision.
+  const late = await h.kernel.say(conv, 'bert', 'B');
+  await h.settle();
+  await h.kernel.edit(conv, 'bert', late.messageId, 'A');
+  await h.settle();
+  const valid = (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid');
+  assert.deepEqual(valid.map((c) => [c.participantPrincipal, c.sourceRevision]), [['user:bert', 1]]);
+});

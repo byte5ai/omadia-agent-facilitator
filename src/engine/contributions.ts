@@ -20,6 +20,20 @@ export const mention = (p: Pick<Participant, 'principalId' | 'displayName'>): { 
   text: p.displayName,
 });
 
+/**
+ * Was the message written after the facilitation became active? What counts
+ * is when the message was CREATED: an old message does not become current by
+ * being edited. For anything but a 'created' record the engine looks up when
+ * it saw the message being created; a message it never saw created predates
+ * its reading of the conversation.
+ */
+export async function writtenAfterStart(w: Pick<Work, 'tx' | 'f'>, record: ConversationMessageRecord): Promise<boolean> {
+  if (!w.f.activatedAt) return false;
+  // A card answer is its own event, not a revision of an older message.
+  const created = record.kind === 'created' || record.kind === 'card_answer' ? new Date(record.occurredAt) : await store.writtenAt(w.tx, w.f.id, record.messageId);
+  return created !== undefined && created.getTime() >= w.f.activatedAt.getTime();
+}
+
 /** Who may contribute with this message, or why not. */
 export async function authorOf(w: Work, record: ConversationMessageRecord): Promise<Participant> {
   if (record.channelType !== w.f.channelType || record.conversationId !== w.f.conversationId) {
@@ -29,7 +43,7 @@ export async function authorOf(w: Work, record: ConversationMessageRecord): Prom
   if (w.f.phase !== 'active') {
     throw new Refusal('not_active', `The facilitation is ${w.f.phase}; contributions are recorded only while it is active.`);
   }
-  if (!w.f.activatedAt || Date.parse(record.occurredAt) < w.f.activatedAt.getTime()) {
+  if (!(await writtenAfterStart(w, record))) {
     throw new Refusal('before_start', 'That message was written before this facilitation started. It does not count here.');
   }
   if (record.quoted === true || record.forwarded === true) {
