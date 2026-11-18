@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
     "test": "node scripts/test.mjs",
     "package": "node scripts/build-zip.mjs",
     "clean": "rm -rf dist out .test-build *.tsbuildinfo"

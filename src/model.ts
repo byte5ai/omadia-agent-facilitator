@@ -58,6 +58,10 @@ export interface FacilitationSettings {
   changeWindowHours: number;
   runoffWindowHours: number;
   confirmWindowMinutes: number;
+  /** The facilitator's display name, as it introduced itself at start. */
+  facilitatorName?: string;
+  /** The channel could not list every member: whoever writes joins. */
+  openRoster?: boolean;
 }
 
 export interface Facilitation {

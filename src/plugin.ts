@@ -14,9 +14,12 @@
 import { FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
 import type { PluginContext } from '@omadia/plugin-api';
 
+import { systemClock } from './clock.js';
 import { parseConfig } from './config.js';
 import type { EngineConfig } from './config.js';
+import { FacilitationEngine } from './engine/engine.js';
 import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js';
+import { buildTools } from './tools/index.js';
 
 export const PLUGIN_ID = '@omadia/agent-facilitator' as const;
 export const ENGINE_VERSION = '1.0.0' as const;
@@ -36,6 +39,7 @@ export interface FacilitationEngineInfo {
 export interface FacilitatorHandle {
   readonly config: EngineConfig;
   readonly info: FacilitationEngineInfo;
+  readonly engine: FacilitationEngine;
   close(): Promise<void>;
 }
 
@@ -81,11 +85,25 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   };
   disposers.push(ctx.services.provide(ENGINE_SERVICE_NAME, info));
 
+  // The tools are registered even without a database: a facilitator then
+  // answers "not available, and why" instead of having no tools at all.
+  const engine = new FacilitationEngine({ kernel, config, clock: systemClock, log });
+  for (const tool of buildTools(engine)) disposers.push(ctx.tools.register(tool.spec, tool.handler));
+  if (info.available) {
+    try {
+      await engine.start();
+    } catch (err) {
+      log(`engine start failed, catching up lazily: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   return {
     config,
     info,
+    engine,
     async close() {
       log('deactivating facilitation engine');
+      await engine.stop();
       for (const dispose of disposers.reverse()) {
         try {
           dispose();
