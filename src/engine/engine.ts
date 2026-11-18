@@ -20,6 +20,8 @@ import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
 import { applySnapshot, endSession, installSessions, prepareSessionStart, startSession } from './sessions.js';
 import { processMembership } from './membership.js';
+import { reconcileAll, reconcileSubscription } from './subscription.js';
+import type { SubscriptionState } from './subscription.js';
 import { installTransparency } from './transparency.js';
 import { runFacilitatorTurn } from './turn.js';
 
@@ -92,10 +94,23 @@ export class FacilitationEngine {
       `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_outbox WHERE status IN ('pending', 'sending')`,
     );
     for (const row of waiting.rows) await this.core.flush(row.facilitation_id);
+    await this.catchUp();
+  }
+
+  /** Check the kernel's subscription of every facilitation that reads a
+   *  conversation, then read what the kernel stored for those that still can. */
+  private async catchUp(): Promise<void> {
+    const readable = await reconcileAll(this.core);
     for (const f of await store.listSubscribed(this.core.pool())) {
+      if (!readable.has(f.id)) continue;
       this.attach(f.facilitatorAgent);
       await this.replay(f);
     }
+  }
+
+  /** Before a tool acts on a facilitation: can it still be read? */
+  reconcile(f: Facilitation): Promise<SubscriptionState> {
+    return reconcileSubscription(this.core, f);
   }
 
   async stop(): Promise<void> {
@@ -253,10 +268,7 @@ export class FacilitationEngine {
         await this.finishConcluding();
         await purgeExpired(this.core);
         await this.releaseEnded();
-        for (const f of await store.listSubscribed(this.core.pool())) {
-          this.attach(f.facilitatorAgent);
-          await this.replay(f);
-        }
+        await this.catchUp();
       })(),
     );
   }

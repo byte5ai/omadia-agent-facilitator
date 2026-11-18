@@ -83,6 +83,15 @@ export interface FacilitationSettings {
   released?: boolean;
   /** The group was told that a message could not be processed. */
   unprocessedNoticeSent?: boolean;
+  /** A post was refused because the kernel holds no subscription (any more). */
+  subscriptionLost?: boolean;
+  /** ISO time the engine took the subscription again after it was lost. */
+  subscribedAt?: string;
+  /** ISO time since which the kernel refuses the subscription. */
+  refusedSince?: string;
+  /** The subscription is gone for good: nothing is posted for this
+   *  facilitation any more, whoever subscribes to the conversation later. */
+  orphaned?: boolean;
 }
 
 export interface Facilitation {

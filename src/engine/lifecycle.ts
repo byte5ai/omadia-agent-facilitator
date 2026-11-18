@@ -306,6 +306,15 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     throw new Refusal(subscription.code, subscription.code === 'no_identity' ? OWN_IDENTITY_REQUIRED : `I cannot read this conversation: ${subscription.message}. Nothing was started.`);
   }
 
+  // The subscription is this facilitation's. What an earlier facilitation of
+  // this conversation could not post while it had none stays unsent.
+  await pool.query(
+    `UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"orphaned": true}'::jsonb
+      WHERE facilitator_agent = $1 AND channel_type = $2 AND conversation_id = $3
+        AND phase IN ('closed', 'aborted') AND coalesce((settings->>'subscriptionLost')::boolean, false)`,
+    [input.agentSlug, input.channelType, input.conversationId],
+  );
+
   const roster = await kernel.rosters()?.getRoster(input.channelType, input.conversationId);
   const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
   const openRoster = !roster || roster.partial;

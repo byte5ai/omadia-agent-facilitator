@@ -91,6 +91,10 @@ async function stampLink(q: Queryable, payload: StoredPayload, messageId: string
 
 /** An essential message is retried with a growing pause, at most this often. */
 export const MAX_ESSENTIAL_ATTEMPTS = 20;
+/** The kernel's answer to a post without a subscription. */
+const NO_SUBSCRIPTION_CODE = 'not_permitted';
+/** How often an ended facilitation tries to post without a subscription. */
+export const ORPHAN_ATTEMPTS = 3;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 60 * 60_000;
 /** A private message that can never arrive: retrying changes nothing. */
@@ -160,6 +164,14 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
     return;
   }
 
+  // The subscription this facilitation posted under is gone for good. A later
+  // subscription to the same conversation belongs to another facilitation and
+  // does not carry this one's messages.
+  if (f.settings.orphaned === true) {
+    await drop(client, row, 'the facilitation lost its subscription; nothing is posted for it any more');
+    return;
+  }
+
   // A private message is tried once per person: who could not be reached is
   // not tried again in this facilitation.
   if (row.targetKind === 'direct' && row.deliveryClass === 'droppable' && (f.settings.unreachable ?? []).includes(row.targetPrincipal ?? '')) {
@@ -209,6 +221,25 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 
   const error = `${result.code}: ${result.message}`;
   const attempts = row.attempts + 1;
+  // The kernel holds no subscription for this conversation: remembered, so
+  // that the next pass takes it again or ends the facilitation.
+  const unsubscribed = row.targetKind === 'group' && result.code === NO_SUBSCRIPTION_CODE;
+  if (unsubscribed) {
+    const ended = (f.phase === 'closed' || f.phase === 'aborted') && f.followupState !== 'active';
+    // An ended facilitation is not subscribed again. After a few attempts
+    // its messages are given up, not kept until somebody else subscribes.
+    const orphaned = ended && attempts >= ORPHAN_ATTEMPTS;
+    await client.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || $2::jsonb WHERE id = $1`, [
+      f.id,
+      JSON.stringify(orphaned ? { subscriptionLost: true, orphaned: true } : { subscriptionLost: true }),
+    ]);
+    if (orphaned && row.deliveryClass === 'essential') {
+      await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
+      await store.appendEvent(client, { facilitationId: f.id, kind: 'delivery_failed', actor: 'engine', occurredAt: engine.now(), payload: { purpose: row.purpose, to: 'group', error, attempts } });
+      engine.log(`facilitation ${f.id}: ${row.purpose} is given up, the facilitation has no subscription any more (${error})`);
+      return;
+    }
+  }
   if (row.deliveryClass === 'droppable') {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });
     engine.log(`facilitation ${f.id}: ${row.purpose} not delivered (${error}); not retried`);

@@ -111,6 +111,9 @@ export const en = {
   directUnreachable: (): string =>
     'I cannot reach everybody privately here (my app is not installed for everyone). Reminders therefore stay in this group, without names.',
   abortJobFailed: (): string => 'an internal step failed repeatedly and could not be completed',
+  abortNoSubscription: (): string => 'I can no longer read this conversation',
+  resumed: (): string =>
+    'I could not read this conversation for a while. The facilitation continues. If you wrote something in the meantime that should count, please post it again.',
 
   // ── process ──────────────────────────────────────────────────────────────
   stepKinds: {

@@ -11,7 +11,7 @@ import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
 import type { AgendaStepInput } from '../engine/lifecycle.js';
 import { statusText } from '../engine/status.js';
-import { asObject, defineTool, liveFacilitation, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
+import { asObject, defineTool, liveFacilitation, requireReadable, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ResolvedContext, ToolDefinition } from './toolkit.js';
 
 const CONTRIBUTION_KINDS: readonly ContributionKind[] = [
@@ -110,6 +110,9 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
             })
           : undefined;
         if (closeRule === 'at_deadline' && !deadline) throw new Refusal('bad_input', "closeRule 'at_deadline' needs a deadline.");
+        // A setup that is adjusted must be one the engine can still read.
+        const existing = await store.findLiveByConversation(engine.core.pool(), ctx.channelType, ctx.conversationId);
+        if (existing && existing.facilitatorAgent === ctx.agentSlug) await requireReadable(engine, existing);
         const result = await configureFacilitation(engine.core, {
           ...ctx,
           callerPrincipalId: ctx.callerPrincipalId,
@@ -146,6 +149,18 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
         await openFacilitation(engine.core, f.id);
+        // Opened means: the group can see it. What this call queued is looked
+        // at, not assumed.
+        const handshake = (
+          await engine.core.pool().query<{ status: string; last_error: string | null }>(
+            `SELECT status, last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'handshake' ORDER BY seq DESC LIMIT 1`,
+            [f.id],
+          )
+        ).rows[0];
+        if (!handshake) throw new Error('the opening message was not queued; nothing was posted');
+        if (handshake.status !== 'sent') {
+          return `The opening message was NOT posted in the group yet (${handshake.last_error ?? handshake.status}). It is tried again automatically. Do not tell the group that the facilitation is open or running; say that posting does not work right now.`;
+        }
         return `Opened. The handshake was posted in the group. Answer ${'[silent]'} now unless something else needs saying.`;
       },
     ),

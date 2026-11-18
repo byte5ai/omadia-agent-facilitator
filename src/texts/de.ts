@@ -97,6 +97,9 @@ export const de: Texts = {
   directUnreachable: () =>
     'Ich kann hier nicht alle privat erreichen (meine App ist nicht bei allen installiert). Erinnerungen bleiben deshalb in dieser Gruppe, ohne Namen.',
   abortJobFailed: () => 'ein interner Schritt ist wiederholt fehlgeschlagen und konnte nicht abgeschlossen werden',
+  abortNoSubscription: () => 'ich kann diese Unterhaltung nicht mehr mitlesen',
+  resumed: () =>
+    'Ich konnte diese Unterhaltung eine Zeit lang nicht mitlesen. Die Moderation läuft weiter. Wenn ihr in der Zwischenzeit etwas geschrieben habt, das zählen soll, postet es bitte noch einmal.',
 
   // ── Prozess ──────────────────────────────────────────────────────────────
   stepKinds: {

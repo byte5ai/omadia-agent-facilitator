@@ -203,6 +203,18 @@ export class FakeKernel {
     return id;
   }
 
+  /** The kernel ends a subscription on its own (grant revoked, engine
+   *  reinstalled, agent disabled). Nothing tells the engine. */
+  endSubscription(agentSlug: string, conversationId: string): void {
+    const key = scopeKey({ agentSlug, channelType: this.channelType, conversationId });
+    this.subscriptions.delete(key);
+    this.subscribedFrom.delete(key);
+  }
+
+  /** Subscribe refusals to answer next, per agent (the kernel will not give
+   *  the conversation back). */
+  readonly subscribeRefusals = new Map<string, { code: 'unavailable' | 'not_ready' | 'not_present'; message: string }>();
+
   private user(conversationId: string, userId: string): FakeUser {
     return this.members.get(conversationId)?.find((m) => m.id === userId) ?? { id: userId, displayName: userId };
   }
@@ -347,6 +359,8 @@ export class FakeKernel {
   private readonly messagesService: ConversationMessagesService = {
     subscribe: async (scope) => {
       if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
+      const refusal = this.subscribeRefusals.get(scope.agentSlug);
+      if (refusal && !this.subscriptions.has(scopeKey(scope))) return { outcome: 'refused', ...refusal };
       if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
       if (!this.subscriptions.has(scopeKey(scope))) this.subscribedFrom.set(scopeKey(scope), this.events.length);
       this.subscriptions.add(scopeKey(scope));
@@ -413,6 +427,8 @@ export class FakeKernel {
       let outcome: TargetedSendDeliveryOutcome;
       const blocked = this.dmBlocked.get(request.principal);
       if (!request.asAgentSlug || this.noIdentity.has(request.asAgentSlug)) outcome = { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
+      // As the kernel: it only writes to people of a conversation it moderates.
+      else if (![...this.subscriptions].some((key) => key.startsWith(`${request.asAgentSlug}|`))) outcome = { outcome: 'unreachable', code: 'not_permitted', message: 'not part of a conversation this agent moderates' };
       else if (blocked) outcome = { outcome: 'unreachable', code: blocked, message: `cannot reach ${request.principal}: ${blocked}` };
       else {
         this.dms.push({ as: request.asAgentSlug, principal: request.principal, text: request.message.text });

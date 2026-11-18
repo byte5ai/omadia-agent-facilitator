@@ -45,7 +45,19 @@ export async function liveFacilitation(engine: FacilitationEngine, ctx: Resolved
   if (!f || f.facilitatorAgent !== ctx.agentSlug) {
     throw new Refusal('no_facilitation', 'There is no facilitation in this conversation. Start one with facilitation_start when somebody in the group asks for it.');
   }
+  await requireReadable(engine, f);
   return f;
+}
+
+/** A tool never acts on a facilitation the engine cannot read: it would
+ *  answer "done" while nothing reaches the group. */
+export async function requireReadable(engine: FacilitationEngine, f: Facilitation): Promise<void> {
+  const subscription = await engine.reconcile(f);
+  if (subscription.state !== 'refused') return;
+  throw new Refusal(
+    'no_subscription',
+    `I cannot read or post in this conversation right now (${subscription.code}: ${subscription.message}). Nothing was created, opened or changed. Tell the group that facilitation is not available here right now; do not say that anything was started.`,
+  );
 }
 
 export function asObject(input: unknown): Record<string, unknown> {
