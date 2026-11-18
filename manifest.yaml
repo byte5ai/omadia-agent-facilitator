@@ -23,7 +23,7 @@ identity:
   kind: "extension"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "1.0.0"
+  version: "1.0.1"
   description:
     en: "Facilitation engine for native facilitators: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Facilitation-Engine für native Facilitatoren: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -37,7 +37,10 @@ identity:
     - "collaboration"
 
 compat:
-  core: ">=1.0 <2.0"
+  # Compared as a semver range against the host's @omadia/plugin-api version.
+  # 1.55.0 is the first kernel with native facilitators; what 1.56.0 adds
+  # (isSubscribed) is feature-detected.
+  core: ">=1.55.0 <2.0"
   node: ">=20"
 
 privacy_class: "strict"
