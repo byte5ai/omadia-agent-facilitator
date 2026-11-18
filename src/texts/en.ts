@@ -412,6 +412,19 @@ export const en = {
   proposeStakeholder: (name: string, role: string): string => `add ${name} as a stakeholder who ${role}`,
   proposeFollowupMeeting: (subject: string, minutes: number, from: string, to: string): string =>
     `after the close I look for a common free time and send the invitation for "${subject}" (${String(minutes)} minutes, between ${from} and ${to}). For that I read only when people are busy, never what their appointments are`,
+  /** What the protocol says about the use of scoped capabilities. */
+  capabilityLog: {
+    names: { 'free/busy': 'free/busy', invitation: 'invitation', 'protocol mail': 'protocol mail' } as Record<string, string>,
+    refused: (capability: string, reason: string): string => `${capability}: refused (${reason})`,
+    refusedByIntegration: (capability: string, reason: string): string => `${capability}: refused by the integration (${reason})`,
+    outcomeUnknown: (capability: string, detail: string): string => `${capability}: outcome unknown (${detail})`,
+    freeBusy: (people: number, from: string, to: string): string => `free/busy read for ${String(people)} people, ${from} to ${to}`,
+    invitation: (subject: string, start: string, people: number): string => `invitation "${subject}" for ${start} sent to ${String(people)} people`,
+    mailed: (addresses: number): string => `protocol mailed to ${String(addresses)} addresses`,
+    grantIssued: (addresses: number): string => `grant issued for ${String(addresses)} addresses (participants and confirmed stakeholders)`,
+    grantRevoked: (reason: 'followup_ended' | 'period_ended'): string => `grant revoked: ${reason === 'followup_ended' ? 'the follow-up ended' : 'the follow-up period ended'}`,
+    protocolSent: (participants: number): string => `protocol sent privately to ${String(participants)} participant${participants === 1 ? '' : 's'}`,
+  },
   protocolDirect: (name: string, protocol: string): string => `Hello ${name}, here is the protocol of the facilitation you took part in.\n\n${protocol}`,
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
   protocolSent: (channel: number, mail: number): string =>

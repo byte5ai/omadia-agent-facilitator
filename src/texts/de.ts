@@ -358,6 +358,18 @@ export const de: Texts = {
   proposeStakeholder: (name, role) => `${name} als Stakeholder aufnehmen, der bzw. die ${role}`,
   proposeFollowupMeeting: (subject, minutes, from, to) =>
     `nach dem Abschluss suche ich eine gemeinsame freie Zeit und verschicke die Einladung für "${subject}" (${String(minutes)} Minuten, zwischen ${from} und ${to}). Dafür lese ich nur, wann jemand belegt ist, nie, was die Termine sind`,
+  capabilityLog: {
+    names: { 'free/busy': 'Verfügbarkeiten', invitation: 'Einladung', 'protocol mail': 'Protokoll per Mail' },
+    refused: (capability, reason) => `${capability}: abgelehnt (${reason})`,
+    refusedByIntegration: (capability, reason) => `${capability}: von der Integration abgelehnt (${reason})`,
+    outcomeUnknown: (capability, detail) => `${capability}: Ausgang unbekannt (${detail})`,
+    freeBusy: (people, from, to) => `Verfügbarkeiten von ${String(people)} Personen gelesen, ${from} bis ${to}`,
+    invitation: (subject, start, people) => `Einladung "${subject}" für ${start} an ${String(people)} Personen gesendet`,
+    mailed: (addresses) => `Protokoll per Mail an ${String(addresses)} ${addresses === 1 ? 'Adresse' : 'Adressen'} gesendet`,
+    grantIssued: (addresses) => `Freigabe für ${String(addresses)} ${addresses === 1 ? 'Adresse' : 'Adressen'} erteilt (Teilnehmende und bestätigte Stakeholder)`,
+    grantRevoked: (reason) => `Freigabe beendet: ${reason === 'followup_ended' ? 'Die Nachverfolgung ist abgeschlossen' : 'Die Zeit für die Nachverfolgung ist abgelaufen'}`,
+    protocolSent: (participants) => `Protokoll privat an ${String(participants)} ${participants === 1 ? 'Teilnehmer:in' : 'Teilnehmende'} gesendet`,
+  },
   protocolDirect: (name, protocol) => `Hallo ${name}, hier ist das Protokoll der Moderation, an der du teilgenommen hast.\n\n${protocol}`,
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
   protocolSent: (channel, mail) =>
