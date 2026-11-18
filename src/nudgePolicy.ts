@@ -5,6 +5,7 @@
 // run in the tool, before anything is sent.
 
 import type { FacilitatorConfig, QuietHours } from './config.js';
+import { withLocalTime } from './localTime.js';
 import type { FacilitationRecord } from './stateStore.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -15,7 +16,7 @@ export type NudgeRefusal =
   | { reason: 'dod_met' }
   | { reason: 'deadline_passed'; deadline: string }
   | { reason: 'progress_fresh' }
-  | { reason: 'too_soon'; nextAllowedAt: string }
+  | { reason: 'too_soon'; nextAllowedAt: string; sinceStart: boolean }
   | { reason: 'quiet_hours'; window: QuietHours; timezone: string };
 
 /** The local hour (0-23) of `at` in `timezone`. */
@@ -52,11 +53,18 @@ export function checkNudgePolicy(
     const age = ageMs(record.progress.updatedAt, now);
     if (age !== undefined && age < NUDGE_COOLDOWN_AFTER_PROGRESS_MS) return { reason: 'progress_fresh' };
   }
-  if (record.lastNudge) {
+  // The spacing counts from the last nudge, or from the start when none was
+  // sent yet (0.7.1: the first assess tick nudged 25 s after the handshake).
+  const spacingAnchor = record.lastNudge?.at ?? record.startedAt;
+  if (spacingAnchor) {
     const minGapMs = config.nudgeMinIntervalHours * HOUR_MS;
-    const age = ageMs(record.lastNudge.at, now);
+    const age = ageMs(spacingAnchor, now);
     if (age !== undefined && age < minGapMs) {
-      return { reason: 'too_soon', nextAllowedAt: new Date(new Date(record.lastNudge.at).getTime() + minGapMs).toISOString() };
+      return {
+        reason: 'too_soon',
+        nextAllowedAt: new Date(new Date(spacingAnchor).getTime() + minGapMs).toISOString(),
+        sinceStart: record.lastNudge === undefined,
+      };
     }
   }
   if (config.nudgeQuietHours && isQuietHour(localHour(now, config.timezone), config.nudgeQuietHours)) {
@@ -65,7 +73,7 @@ export function checkNudgePolicy(
   return undefined;
 }
 
-export function describeNudgeRefusal(refusal: NudgeRefusal, de: boolean): string {
+export function describeNudgeRefusal(refusal: NudgeRefusal, de: boolean, timezone: string): string {
   switch (refusal.reason) {
     case 'dod_met':
       return de
@@ -73,16 +81,16 @@ export function describeNudgeRefusal(refusal: NudgeRefusal, de: boolean): string
         : 'No nudge sent: the definition of done is recorded as met — the group needs no further reminder.';
     case 'deadline_passed':
       return de
-        ? `Kein Nudge gesendet: Die Frist (${refusal.deadline}) ist abgelaufen — jetzt zählt das Ergebnis, keine Erinnerung.`
-        : `No nudge sent: the deadline (${refusal.deadline}) has passed — report the outcome instead of reminding.`;
+        ? `Kein Nudge gesendet: Die Frist (${withLocalTime(refusal.deadline, timezone, de)}) ist abgelaufen — jetzt zählt das Ergebnis, keine Erinnerung.`
+        : `No nudge sent: the deadline (${withLocalTime(refusal.deadline, timezone, de)}) has passed — report the outcome instead of reminding.`;
     case 'progress_fresh':
       return de
         ? 'Kein Nudge gesendet: Die Gruppe arbeitet aktiv (Progress vor weniger als 45 Minuten protokolliert) — ein Impuls würde als zweiter Facilitator wirken.'
         : 'No nudge sent: the group is actively working (progress recorded less than 45 minutes ago) — an impulse would read as a second facilitator.';
     case 'too_soon':
       return de
-        ? `Kein Nudge gesendet: Der letzte Nudge ist zu frisch — der nächste ist frühestens ${refusal.nextAllowedAt} möglich.`
-        : `No nudge sent: the last nudge is too recent — the next one is possible from ${refusal.nextAllowedAt}.`;
+        ? `Kein Nudge gesendet: ${refusal.sinceStart ? 'Die Facilitation wurde gerade erst gestartet' : 'Der letzte Nudge ist zu frisch'} — der nächste ist frühestens ${withLocalTime(refusal.nextAllowedAt, timezone, de)} möglich.`
+        : `No nudge sent: ${refusal.sinceStart ? 'the facilitation has only just started' : 'the last nudge is too recent'} — the next one is possible from ${withLocalTime(refusal.nextAllowedAt, timezone, de)}.`;
     case 'quiet_hours': {
       const window = `${String(refusal.window.startHour)}-${String(refusal.window.endHour)}`;
       return de

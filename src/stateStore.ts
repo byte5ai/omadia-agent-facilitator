@@ -43,6 +43,10 @@ export interface FacilitationRecord {
   progress?: FacilitationProgress;
   /** #330 C3 — nudge accounting for the per-facilitation cap. */
   nudgesSent?: number;
+  /** 0.7.1 — when facilitation_start created the run. The minimum nudge
+   *  spacing also counts from here: a group that was just asked to act
+   *  needs no reminder seconds later. */
+  startedAt?: string;
   /** 0.7.0 — the last DELIVERED nudge. Drives the minimum spacing between
    *  nudges and lets the chat-side agent (which never sees the tick's posts
    *  in its own session) learn from the status what was posted. */
@@ -111,6 +115,8 @@ export class FacilitationStateStore {
     expiresAt: string;
     roleKey?: string;
     deadline?: string;
+    /** The caller's clock — the nudge policy compares against that same clock. */
+    startedAt?: Date;
   }): FacilitationRecord {
     const iso = this.now().toISOString();
     const existing = this.records.get(input.conversationId);
@@ -118,6 +124,7 @@ export class FacilitationStateStore {
       conversationId: input.conversationId,
       ...(existing?.channelType ? { channelType: existing.channelType } : {}),
       phase: 'active',
+      ...(input.startedAt ? { startedAt: input.startedAt.toISOString() } : {}),
       goal: input.goal,
       definitionOfDone: input.definitionOfDone,
       runId: input.runId,
@@ -160,6 +167,7 @@ export class FacilitationStateStore {
     nudgesSent?: number;
     lastNudge?: { at: string; text: string };
     amendedAt?: string;
+    startedAt?: string;
     conversationUnknown?: boolean;
   }): FacilitationRecord | undefined {
     const existing = this.records.get(input.conversationId);
@@ -188,6 +196,7 @@ export class FacilitationStateStore {
       ...(input.nudgesSent !== undefined ? { nudgesSent: input.nudgesSent } : {}),
       ...(input.lastNudge ? { lastNudge: { ...input.lastNudge } } : {}),
       ...(input.amendedAt ? { amendedAt: input.amendedAt } : {}),
+      ...(input.startedAt ? { startedAt: input.startedAt } : {}),
       ...(input.conversationUnknown ? { conversationUnknown: true } : {}),
       restored: true,
       createdAt: existing?.createdAt ?? iso,

@@ -56,7 +56,7 @@ export function buildNudgeTool(tc: ToolContext): LocalSubAgentTool {
           : 'No nudge sent: the conversation of this facilitation (started before 0.6.0) is unknown after the restart.';
       }
       const refusal = checkNudgePolicy(record, config, tc.now());
-      if (refusal) return describeNudgeRefusal(refusal, de);
+      if (refusal) return describeNudgeRefusal(refusal, de, config.timezone);
 
       const conversationSend = deps.getConversationSend();
       if (!conversationSend) {

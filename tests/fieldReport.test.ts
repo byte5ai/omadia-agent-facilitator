@@ -47,8 +47,19 @@ describe('nudge policy', () => {
   it('keeps the minimum spacing between two nudges and names the next slot', () => {
     const record = activeRecord({ lastNudge: { at: '2026-11-17T08:00:00.000Z', text: 'x' } });
     const refusal = checkNudgePolicy(record, POLICY, NOON);
-    assert.deepEqual(refusal, { reason: 'too_soon', nextAllowedAt: '2026-11-17T12:00:00.000Z' });
+    assert.deepEqual(refusal, { reason: 'too_soon', nextAllowedAt: '2026-11-17T12:00:00.000Z', sinceStart: false });
     assert.equal(checkNudgePolicy(record, POLICY, new Date('2026-11-17T12:00:00.000Z')), undefined);
+  });
+
+  it('counts the spacing from the start while no nudge was sent yet', () => {
+    const record = activeRecord({ startedAt: '2026-11-17T09:59:35.000Z' });
+    assert.deepEqual(checkNudgePolicy(record, POLICY, NOON), {
+      reason: 'too_soon',
+      nextAllowedAt: '2026-11-17T13:59:35.000Z',
+      sinceStart: true,
+    });
+    // A run restored from before 0.7.1 carries no start time and is not held back.
+    assert.equal(checkNudgePolicy(activeRecord(), POLICY, NOON), undefined);
   });
 
   it('refuses during quiet hours in the configured timezone, across midnight', () => {
@@ -102,6 +113,14 @@ describe('facilitation_nudge — discipline through the tool', () => {
     const t = buildTools({ ephemeralRuns: kernel.service, now: time.now, config: POLICY });
     await t.call('facilitation_start', { goal: 'Safeword wählen', definitionOfDone: 'Alle vier haben abgestimmt', conversationId: 'grp-1' });
 
+    // 0.7.1 — the first tick ran 25 s after the handshake and nudged at once.
+    time.advance(25 * 1000);
+    const early = await t.call('facilitation_nudge', { text: 'Noch keine Stimme.', conversationId: 'grp-1' });
+    assert.ok(early.includes('gerade erst gestartet'), early);
+    assert.ok(early.includes('15:00 Uhr (Europe/Berlin)'), early);
+    assert.equal(t.nudges.length, 0);
+
+    time.advance(4 * HOUR_MS);
     assert.ok((await t.call('facilitation_nudge', { text: 'Eine Stimme fehlt noch.', conversationId: 'grp-1' })).includes('Nudge gesendet (1/12)'));
     time.advance(HOUR_MS);
     const second = await t.call('facilitation_nudge', { text: 'Und jetzt?', conversationId: 'grp-1' });
@@ -134,7 +153,14 @@ describe('facilitation_nudge — discipline through the tool', () => {
     const kernel = fakeKernel({ now: time.now });
     const before = buildTools({ ephemeralRuns: kernel.service, now: time.now, config: POLICY });
     await before.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-1' });
-    await before.call('facilitation_nudge', { text: 'Erste Erinnerung', conversationId: 'grp-1' });
+
+    // The start anchor survives a restart too.
+    time.advance(HOUR_MS);
+    const mid = buildTools({ ephemeralRuns: kernel.service, now: time.now, config: POLICY });
+    assert.ok((await mid.call('facilitation_nudge', { text: 'Zu früh', conversationId: 'grp-1' })).includes('gerade erst gestartet'));
+
+    time.advance(3 * HOUR_MS);
+    assert.ok((await mid.call('facilitation_nudge', { text: 'Erste Erinnerung', conversationId: 'grp-1' })).includes('(1/12)'));
 
     time.advance(HOUR_MS);
     const after = buildTools({ ephemeralRuns: kernel.service, now: time.now, config: POLICY });
@@ -262,6 +288,33 @@ describe('participants', () => {
     assert.ok(!status.includes('Karen'), status);
   });
 
+  it('refuses a contributor name that fits nobody and stores the roster spelling', async () => {
+    const rosters: ConversationRostersService = {
+      getRoster: async () => ({
+        conversationType: 'group',
+        participants: roster.participants.map((displayName, i) => ({ userRef: { kind: 'teams-aad', id: `u${String(i)}`, displayName } })),
+        partial: false,
+      }),
+    };
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON, rosters });
+    t.store.markPending({ conversationId: 'grp-1', channelType: 'teams' });
+    await t.call('facilitation_start', { goal: 'g', definitionOfDone: 'd', conversationId: 'grp-1' });
+
+    // "Felix" is what a masked model context turned a real name into.
+    const refused = await t.call('facilitation_progress', { dodMet: false, summary: '2 Stimmen', contributors: ['Teresita Biel', 'Felix'], conversationId: 'grp-1' });
+    assert.ok(refused.includes('NICHT protokolliert'), refused);
+    assert.ok(refused.includes('Felix'), refused);
+    assert.ok(refused.includes('Gültige Namen: Christian Wendler, Christian Köhler, Teresita Biel, Marcel Wege'), refused);
+    assert.equal(t.store.get('grp-1')?.progress, undefined, 'nothing is recorded');
+
+    // An ambiguous first name is refused the same way.
+    assert.ok((await t.call('facilitation_progress', { dodMet: false, summary: 's', contributors: ['Christian'], conversationId: 'grp-1' })).includes('NICHT protokolliert'));
+
+    await t.call('facilitation_progress', { dodMet: false, summary: '2 Stimmen', contributors: ['teresita biel', 'Marcel'], conversationId: 'grp-1' });
+    assert.deepEqual(t.store.get('grp-1')?.progress?.contributors, ['Teresita Biel', 'Marcel Wege']);
+  });
+
   it('keeps the contributors across a restart', async () => {
     const kernel = fakeKernel({ now: () => NOON });
     const before = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
@@ -271,5 +324,25 @@ describe('participants', () => {
     const after = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
     await after.call('facilitation_status');
     assert.deepEqual(after.store.get('grp-1')?.progress?.contributors, ['A B', 'C D']);
+  });
+});
+
+describe('times and wording check in the handshake (0.7.1)', () => {
+  it('prints every time with its local reading and asks the initiator to check the wording', async () => {
+    const kernel = fakeKernel({ now: () => NOON });
+    const t = buildTools({ ephemeralRuns: kernel.service, now: () => NOON });
+    const handshake = await t.call('facilitation_start', {
+      goal: 'g',
+      definitionOfDone: 'd',
+      deadline: '2026-11-20T12:00:00+01:00',
+      conversationId: 'grp-1',
+    });
+    assert.ok(handshake.includes('Deadline: 2026-11-20T12:00:00+01:00 = Fr., 20.11.2026, 12:00 Uhr (Europe/Berlin)'), handshake);
+    // 13:00Z is 14:00 in Berlin — the reading that was got wrong in the chat.
+    assert.ok(handshake.includes('T13:00:00.000Z = Fr., 20.11.2026, 14:00 Uhr (Europe/Berlin)'), handshake);
+    assert.ok(handshake.includes('An den Initiator: Bitte prüfe Ziel und Definition of Done'), handshake);
+
+    const status = await t.call('facilitation_status', { conversationId: 'grp-1' });
+    assert.ok(status.includes('= Fr., 20.11.2026, 14:00 Uhr (Europe/Berlin)'), status);
   });
 });

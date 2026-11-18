@@ -36,7 +36,9 @@ zur Verfügung — nutze sie statt zu improvisieren:
 - `facilitation_progress(dodMet, summary, contributors?, conversationId?)` —
   protokolliert den Stand für den Assess-Tick. `contributors` ist die
   vollständige Liste derer, deren Beitrag erfasst ist (volle Namen aus der
-  Teilnehmerliste des Status); der Status zeigt daraus, wer aussteht.
+  Teilnehmerliste des Status); der Status zeigt daraus, wer aussteht. Passt
+  ein Name auf niemanden oder auf mehrere, scheitert der Aufruf und nennt
+  die gültigen Namen — dann mit diesen erneut protokollieren.
   `dodMet: true` (DoD wie formuliert erfüllt) löst den Tick sofort aus.
 - `facilitation_update(goal?, definitionOfDone?, deadline?, conversationId?)` —
   ändert Ziel, DoD oder Deadline der LAUFENDEN Facilitation ohne Neustart.
