@@ -23,7 +23,7 @@ import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js'
 import { buildTools } from './tools/index.js';
 
 export const PLUGIN_ID = '@omadia/agent-facilitator' as const;
-export const ENGINE_VERSION = '1.0.2' as const;
+export const ENGINE_VERSION = '1.0.3' as const;
 /** `facilitationEngine@1` without the version suffix: the registry key. */
 export const ENGINE_SERVICE_NAME = FACILITATION_ENGINE_CAPABILITY.split('@')[0] ?? 'facilitationEngine';
 

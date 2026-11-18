@@ -87,7 +87,13 @@ export interface ConversationRoster {
 
 /** Kernel `conversationRosters` (#330 B1): who is in a conversation. */
 export interface ConversationRostersService {
-  getRoster(channelType: string, conversationId: string): Promise<ConversationRoster | undefined>;
+  /**
+   * With `agentSlug` the kernel asks the channel as that agent's own bot (an
+   * agent without an identity yields `undefined`). Without it the instance's
+   * default bot is asked, which is often not a member of a conversation a
+   * facilitator moderates. A kernel that predates the option ignores it.
+   */
+  getRoster(channelType: string, conversationId: string, opts?: { agentSlug?: string }): Promise<ConversationRoster | undefined>;
 }
 
 export interface Kernel {

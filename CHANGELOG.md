@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.3
+
+Uses what the kernel adds with plugin-api 1.57.0. Both are optional: on an
+older kernel 1.0.3 behaves like 1.0.2. `compat.core` stays `>=1.55.0 <2.0`.
+
+### Changed
+
+- The member list is read as the facilitator:
+  `rosters.getRoster(channelType, conversationId, { agentSlug })`. The kernel
+  then asks the channel through the facilitator's own bot, which is the one
+  that is in the conversation. Before, the instance's default bot was asked,
+  and in a chat it is not a member of the handshake had no participants.
+- The initiator is named from the tool call (`callerUserRef.displayName`), so
+  the handshake says "Started by: <name>" even when the member list is
+  unavailable. 1.0.2 already read the field; it is now part of the contract.
+
+### Unchanged
+
+- Without a member list the handshake still says so and whoever writes takes
+  part; without a name the initiator is described, never shown as an id.
+
 ## 1.0.2
 
 What the first real facilitation showed (Teams meeting chat, 2026-11-18).

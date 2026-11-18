@@ -349,7 +349,8 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     [input.agentSlug, input.channelType, input.conversationId],
   );
 
-  const roster = await kernel.rosters()?.getRoster(input.channelType, input.conversationId);
+  // Read as the facilitator: its own bot is the one that is in the conversation.
+  const roster = await kernel.rosters()?.getRoster(input.channelType, input.conversationId, { agentSlug: input.agentSlug });
   const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
   // A member list without a single person is no answer either.
   const openRoster = !roster || roster.partial || members.length === 0;

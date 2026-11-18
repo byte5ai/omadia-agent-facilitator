@@ -186,6 +186,12 @@ export class FakeKernel {
   /** Conversations the channel cannot list the members of (people still
    *  write there under their names). */
   private readonly noRosters = new Set<string>();
+  /** Conversations the instance's default bot is not in. */
+  readonly ownBotOnly = new Set<string>();
+  /** A kernel that asks the channel as the agent named with a roster call. */
+  rosterAsAgent = false;
+  /** Every roster call, with the agent it named. */
+  readonly rosterAsks: Array<{ conversationId: string; agentSlug?: string }> = [];
   /** A kernel that states the caller's display name with a tool call. */
   statesCallerName = false;
   private readonly listeners = new Map<string, Set<(record: ConversationMessageRecord) => void | Promise<void>>>();
@@ -528,9 +534,16 @@ export class FakeKernel {
   };
 
   private readonly rostersService: ConversationRostersService = {
-    getRoster: async (_channelType, conversationId): Promise<ConversationRoster | undefined> => {
+    getRoster: async (_channelType: string, conversationId: string, opts?: { agentSlug?: string }): Promise<ConversationRoster | undefined> => {
+      this.rosterAsks.push({ conversationId, ...(opts?.agentSlug ? { agentSlug: opts.agentSlug } : {}) });
       const members = this.members.get(conversationId);
       if (!members || this.noRosters.has(conversationId)) return undefined;
+      // Only the facilitator's own bot is in this conversation: the kernel
+      // can list it as that agent, and only a kernel that knows how.
+      if (this.ownBotOnly.has(conversationId)) {
+        const asked = this.rosterAsAgent ? opts?.agentSlug : undefined;
+        if (!asked || this.noIdentity.has(asked)) return undefined;
+      }
       return {
         conversationType: 'group',
         partial: this.partialRosters.has(conversationId),
