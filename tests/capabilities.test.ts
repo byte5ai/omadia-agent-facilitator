@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test';
 
 import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
-import { scheduleFollowupMeeting, scoped } from '../src/engine/capabilities.js';
+import { scoped } from '../src/engine/capabilities.js';
 import { alignToGrid, findSlot } from '../src/engine/slots.js';
 import { buildProtocol } from '../src/engine/protocol.js';
 import { ANNA, BERT, CARA, createHarness } from './harness.js';
@@ -52,7 +52,7 @@ test('slots: the first common free time in working hours on a weekday, on the qu
   assert.equal(findSlot({ ...base, from: iso('2026-11-18T09:00:00Z'), to: iso('2026-11-18T16:00:00Z'), busy: [{ start: '2026-11-18T00:00:00Z', end: '2026-11-19T00:00:00Z' }] }), undefined);
 });
 
-async function closedWithFollowup(conv: string, opts: { stakeholders?: boolean; meeting?: boolean; fixedDates?: boolean } = {}) {
+async function closedWithFollowup(conv: string, opts: { stakeholders?: boolean; meeting?: boolean; fixedDates?: boolean; tick?: boolean } = {}) {
   await tool(conv, 'facilitation_start', { goal: 'Offsite plan', definitionOfDone: 'Plan agreed', agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }] });
   await tool(conv, 'facilitation_open');
   await say(conv, 'anna', 'A boat trip');
@@ -72,6 +72,8 @@ async function closedWithFollowup(conv: string, opts: { stakeholders?: boolean; 
   await tool(conv, 'facilitation_step', { action: 'close' });
   await tool(conv, 'facilitation_step', { action: 'close' });
   await all(conv, 'agreed');
+  // Mail and invitation run as jobs after the close is committed.
+  if (opts.tick !== false) await h.tick();
   return h.facilitation(conv);
 }
 
@@ -132,18 +134,16 @@ test('the facilitator cannot reach anybody the group did not confirm, and the in
   const conv = h.kernel.conversation('ca-scope', [ANNA, BERT, CARA]);
   const f = await closedWithFollowup(conv);
   const calls = followup.calls.length;
-  await h.engine.core.work(f.id, async (w) => {
-    const api = await scoped(w, h.engine.core);
-    assert.deepEqual([...api.grant.allowed].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com']);
-    const stranger = await api.freeBusy(['anna@example.com', 'ceo@example.com'], iso('2026-11-19T08:00:00Z'), iso('2026-11-20T08:00:00Z'));
-    assert.deepEqual(stranger, { ok: false, code: 'recipient_not_allowed', detail: 'ceo@example.com' });
-    const invite = await api.createInvitation({ attendees: ['ceo@example.com'], subject: 'x', start: iso('2026-11-19T08:00:00Z'), end: iso('2026-11-19T09:00:00Z'), body: '', online: true });
-    assert.equal(invite.ok, false);
-    const mail = await api.sendMail(['press@example.com'], 'x', 'y');
-    assert.equal(mail.ok, false);
-    // The surface has exactly three operations: no reading of mailboxes or calendar contents.
-    assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
-  });
+  const api = await scoped(h.engine.core, f.id);
+  assert.deepEqual([...api.grant.allowed].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com']);
+  const stranger = await api.freeBusy(['anna@example.com', 'ceo@example.com'], iso('2026-11-19T08:00:00Z'), iso('2026-11-20T08:00:00Z'));
+  assert.deepEqual(stranger, { ok: false, code: 'recipient_not_allowed', detail: 'ceo@example.com' });
+  const invite = await api.createInvitation({ attendees: ['ceo@example.com'], subject: 'x', start: iso('2026-11-19T08:00:00Z'), end: iso('2026-11-19T09:00:00Z'), body: '', online: true });
+  assert.equal(invite.ok, false);
+  const mail = await api.sendMail(['press@example.com'], 'x', 'y');
+  assert.equal(mail.ok, false);
+  // The surface has exactly three operations: no reading of mailboxes or calendar contents.
+  assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
   assert.equal(followup.calls.length, calls, 'refused by the engine before the integration is called');
   assert.equal((await store.listEvents(h.db.pool, f.id, ['capability_refused'])).length, 3);
   assert.match(await h.tool('facilitation_plan_followup_meeting', { subject: 'x', durationMinutes: 60, earliest: '2026-11-19T08:00:00Z', latest: '2026-11-20T08:00:00Z' }, { conversation: conv }), /^Refused \(no_facilitation\)/, 'after the close the facilitator has no tools here');
@@ -158,10 +158,8 @@ test('the grant is revoked when the follow-up ends: scheduling is refused afterw
   const revoked = await h.facilitation(conv);
   assert.equal(revoked.settings.followupGrant, 'revoked');
   const calls = followup.calls.length;
-  const outcome = await h.engine.core.work(f.id, (w) =>
-    scheduleFollowupMeeting(w, h.engine.core, { subject: 'Too late', durationMinutes: 30, from: h.clock.now().toISOString(), to: new Date(h.clock.now().getTime() + 5 * DAY_MS).toISOString(), online: true }),
-  );
-  assert.equal(outcome, 'unavailable');
+  const late = await (await scoped(h.engine.core, f.id)).freeBusy(['anna@example.com'], h.clock.now(), new Date(h.clock.now().getTime() + 5 * DAY_MS));
+  assert.deepEqual(late, { ok: false, code: 'grant_revoked' });
   assert.equal(followup.calls.length, calls, 'the integration is not called without a grant');
   const events = await store.listEvents(h.db.pool, f.id, ['grant_issued', 'grant_revoked', 'capability_refused']);
   assert.deepEqual(events.map((e) => e.kind), ['grant_issued', 'grant_revoked', 'capability_refused']);
@@ -213,4 +211,91 @@ test('an invitation without a meeting link, and no common free time, are both sa
   await closedWithFollowup(full, { meeting: true });
   followup.calendars.set('bert@example.com', []);
   assert.equal(posts(full).at(-1), 'I found no time between the agreed dates at which everybody is free for "Offsite follow-up". Please pick a time yourselves.');
+});
+
+test('review 4: the close is committed before any mail or calendar call, and no lock is held during them', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-commit-first', [ANNA, BERT, CARA]);
+  for (const person of ['anna', 'bert', 'cara']) followup.calendars.set(`${person}@example.com`, []);
+  const seen: Array<{ method: string; phase: string | undefined; lockFree: boolean }> = [];
+  followup.onCall = async (method) => {
+    // Looked at from another connection: what is committed, and is the facilitation's lock free?
+    const f = await h.facilitation(conv);
+    const lock = await h.db.pool.query<{ free: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 2043)) AS free, pg_advisory_unlock_all()', [f.id]);
+    seen.push({ method, phase: f.phase, lockFree: lock.rows[0]?.free === true });
+  };
+  try {
+    await closedWithFollowup(conv, { meeting: true });
+    await h.tick();
+  } finally {
+    followup.onCall = () => undefined;
+  }
+  assert.deepEqual(seen.map((s) => s.method), ['sendMail', 'freeBusy', 'createInvitation']);
+  for (const call of seen) assert.deepEqual([call.phase, call.lockFree], ['closed', true], call.method);
+});
+
+test('review 4: a mail or an invitation whose answer is lost is not sent a second time; the close stands and the group is told', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-lost-answer', [ANNA, BERT, CARA]);
+  const mails = followup.mails.length;
+  const invitations = followup.invitations.length;
+  followup.afterEffects.set('sendMail', 'throw');
+  followup.afterEffects.set('createInvitation', 'throw');
+  try {
+    const f = await closedWithFollowup(conv, { meeting: true });
+    assert.equal(f.phase, 'closed');
+    for (let i = 0; i < 6; i += 1) {
+      h.clock.advance(5 * MINUTE_MS);
+      await h.tick();
+    }
+  } finally {
+    followup.afterEffects.clear();
+  }
+  assert.equal((await h.facilitation(conv)).phase, 'closed');
+  assert.equal(followup.mails.length, mails + 1, 'exactly one mail');
+  assert.equal(followup.invitations.length, invitations + 1, 'exactly one invitation');
+  const said = posts(conv);
+  assert.ok(said.some((t) => t.startsWith('I do not know whether the protocol mail went out')), 'the unknown outcome is said');
+  assert.ok(said.some((t) => t.startsWith('I do not know whether the invitation for "Offsite follow-up" went out')));
+});
+
+test('review 4: a close that has to be repeated does not repeat the mail or the invitation', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-close-twice', [ANNA, BERT, CARA]);
+  const mails = followup.mails.length;
+  const invitations = followup.invitations.length;
+  let failed = false;
+  h.hooks.beforeClose = () => {
+    if (failed) return;
+    failed = true;
+    throw new Error('database error while closing');
+  };
+  try {
+    await closedWithFollowup(conv, { meeting: true, tick: false });
+    assert.equal((await h.facilitation(conv)).phase, 'concluding');
+    await h.tick();
+    await h.tick();
+  } finally {
+    delete h.hooks.beforeClose;
+  }
+  assert.equal((await h.facilitation(conv)).phase, 'closed');
+  assert.equal(followup.mails.length, mails + 1);
+  assert.equal(followup.invitations.length, invitations + 1);
+});
+
+test('review 4: an integration that does not answer times out; the conversation is released once the follow-up work is done', { skip: PG_SKIP }, async () => {
+  const { followupLimits } = await import('../src/engine/capabilities.js');
+  const before = { ...followupLimits };
+  followupLimits.timeoutMs = 150;
+  const conv = h.kernel.conversation('ca-hang', [ANNA, BERT, CARA]);
+  followup.afterEffects.set('sendMail', 'hang');
+  try {
+    const f = await closedWithFollowup(conv, { tick: false });
+    assert.equal(f.phase, 'closed');
+    assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), true, 'kept while the mail is still to go (the note about it needs the subscription)');
+    await h.tick();
+    await h.tick();
+  } finally {
+    followup.afterEffects.clear();
+    Object.assign(followupLimits, before);
+  }
+  assert.ok(posts(conv).some((t) => t.startsWith('I do not know whether the protocol mail went out')));
+  assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);
 });

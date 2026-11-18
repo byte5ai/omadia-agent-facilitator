@@ -94,6 +94,17 @@ export class FakeFollowup implements FacilitationFollowupService {
   readonly invitations: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }[] = [];
   configured = true;
   joinLinks = true;
+  /** Called at the start of every call (to look at the world at that moment). */
+  onCall: (method: string) => void | Promise<void> = () => undefined;
+  /** Methods that do their work and then fail to answer: 'throw' or 'hang'. */
+  readonly afterEffects = new Map<string, 'throw' | 'hang'>();
+
+  private async finish<T>(method: string, value: T): Promise<T> {
+    const effect = this.afterEffects.get(method);
+    if (effect === 'throw') throw new Error(`${method}: connection lost after the request was accepted`);
+    if (effect === 'hang') return new Promise<T>(() => undefined);
+    return value;
+  }
 
   private refuse(grant: { allowed: readonly string[] }, people: readonly string[]) {
     if (!this.configured) return { outcome: 'refused' as const, code: 'not_configured' as const, message: 'no organiser mailbox is configured' };
@@ -103,6 +114,7 @@ export class FakeFollowup implements FacilitationFollowupService {
 
   async freeBusy(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; from: string; to: string }) {
     this.calls.push({ method: 'freeBusy', grant, request });
+    await this.onCall('freeBusy');
     const refused = this.refuse(grant, request.attendees);
     if (refused) return refused;
     return {
@@ -113,18 +125,20 @@ export class FakeFollowup implements FacilitationFollowupService {
 
   async createInvitation(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }) {
     this.calls.push({ method: 'createInvitation', grant, request });
+    await this.onCall('createInvitation');
     const refused = this.refuse(grant, request.attendees);
     if (refused) return refused;
     this.invitations.push(request);
-    return { outcome: 'created' as const, eventId: `event-${String(this.invitations.length)}`, ...(request.online && this.joinLinks ? { joinUrl: 'https://teams.example/join/1' } : {}) };
+    return this.finish('createInvitation', { outcome: 'created' as const, eventId: `event-${String(this.invitations.length)}`, ...(request.online && this.joinLinks ? { joinUrl: 'https://teams.example/join/1' } : {}) });
   }
 
   async sendMail(grant: { facilitationId: string; allowed: readonly string[] }, request: { recipients: readonly string[]; subject: string; body: string }) {
     this.calls.push({ method: 'sendMail', grant, request });
+    await this.onCall('sendMail');
     const refused = this.refuse(grant, request.recipients);
     if (refused) return refused;
     this.mails.push(request);
-    return { outcome: 'sent' as const };
+    return this.finish('sendMail', { outcome: 'sent' as const });
   }
 }
 

@@ -333,6 +333,8 @@ export const de: Texts = {
   protocolMailUnavailable: (reason) => `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe, und die Teilnehmenden haben es privat erhalten, wo ich sie erreiche.`,
   followupCreated: (subject, when, link, unknown) =>
     `Der Folgetermin "${subject}" steht für ${when} in den Kalendern.${link ? '' : ' Die Einladung ging ohne Meeting-Link raus.'}${unknown > 0 ? ` Für ${String(unknown)} ${unknown === 1 ? 'Person' : 'Personen'} konnte ich keine Verfügbarkeit sehen, prüft die Zeit bitte.` : ''}`,
+  protocolMailUnknown: () => 'Ich weiß nicht, ob die Protokoll-Mail rausgegangen ist: Der Maildienst hat nicht geantwortet. Ich sende sie nicht noch einmal, damit niemand sie doppelt bekommt. Bitte prüft das oder teilt das Protokoll aus dieser Gruppe.',
+  followupUnknown: (subject) => `Ich weiß nicht, ob die Einladung für "${subject}" rausgegangen ist: Der Kalenderdienst hat nicht geantwortet. Ich sende sie nicht noch einmal. Bitte prüft eure Kalender und verschickt sie selbst, falls sie fehlt.`,
   followupNoSlot: (subject) => `Ich habe zwischen den vereinbarten Daten keine Zeit gefunden, zu der alle für "${subject}" frei sind. Bitte wählt selbst eine Zeit.`,
   followupUnavailable: (subject, reason) => `Ich konnte "${subject}" nicht terminieren (${reason}). Bitte verschickt die Einladung selbst.`,
   followupReasons: {
@@ -341,6 +343,7 @@ export const de: Texts = {
     recipient_not_allowed: 'jemand auf der Liste wurde von der Gruppe nicht bestätigt',
     provider_error: 'der Kalenderdienst hat einen Fehler gemeldet',
     grant_revoked: 'die Nachverfolgung dieser Moderation ist beendet',
+    unknown_outcome: 'der Dienst hat nicht geantwortet',
     no_addresses: 'ich habe keine Mail-Adressen der Teilnehmenden',
   },
   invitationBody: (goal, summary) => `Folgetermin zu "${goal}".\n\n${summary}`,

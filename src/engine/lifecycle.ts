@@ -538,6 +538,13 @@ export async function releaseConversation(engine: EngineCore, f: Facilitation): 
     [f.id],
   );
   if (undelivered.rows.length > 0) return;
+  // Mail and invitation run after the close; what they have to tell the group
+  // needs the subscription too.
+  const working = await pool.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('protocol_mail', 'followup_meeting') LIMIT 1`,
+    [f.id],
+  );
+  if (working.rows.length > 0) return;
   const others = await pool.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_facilitations
       WHERE id <> $1 AND facilitator_agent = $2 AND channel_type = $3 AND conversation_id = $4

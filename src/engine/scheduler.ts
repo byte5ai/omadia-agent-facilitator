@@ -36,24 +36,43 @@ export function registerJobHandler(kind: string, handler: JobHandler, prepare?: 
 
 /** Lease the jobs that are due. `SKIP LOCKED` keeps replicas out of each
  *  other's way; an expired lease (a replica that died mid-job) is taken over. */
-export async function leaseDueJobs(engine: EngineCore, now: Date): Promise<Job[]> {
+export function leaseDueJobs(engine: EngineCore, now: Date): Promise<Job[]> {
   return rows<Job>(
     engine.pool(),
     `UPDATE plg_omadia_agent_facilitator_jobs SET lease_owner = $1, lease_until = $2
       WHERE id IN (
         SELECT id FROM plg_omadia_agent_facilitator_jobs
          WHERE status = 'pending' AND due_at <= $3 AND (lease_until IS NULL OR lease_until < $3)
-         ORDER BY due_at, created_at
+         ORDER BY due_at, seq
          LIMIT ${String(BATCH)}
          FOR UPDATE SKIP LOCKED
       )
       RETURNING *`,
     [engine.instanceId, new Date(now.getTime() + LEASE_MS), now],
-  );
+  ).then((leased) => [...leased].sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime() || Number(a.seq) - Number(b.seq)));
+}
+
+/** A job that talks to an integration. It runs OUTSIDE the facilitation's
+ *  lock and takes the lock itself only for short units of work before and
+ *  after the call; it marks itself done. */
+export type ExternalJob = (engine: EngineCore, job: Job) => Promise<void>;
+const external = new Map<string, ExternalJob>();
+
+export function registerExternalJob(kind: string, run: ExternalJob): void {
+  external.set(kind, run);
 }
 
 async function runJob(engine: EngineCore, job: Job): Promise<void> {
   await engine.deps.hooks?.beforeJob?.(job);
+  const outside = external.get(job.kind);
+  if (outside) {
+    try {
+      await outside(engine, job);
+    } catch (err) {
+      await jobFailed(engine, job, err);
+    }
+    return;
+  }
   try {
     const prepared = await preparations.get(job.kind)?.(engine, job);
     await engine.work(job.facilitationId, async (w) => {

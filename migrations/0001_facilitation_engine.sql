@@ -306,6 +306,8 @@ CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_inbound_by_message ON pl
 -- Time-based work. A job runs under a lease, so two replicas never both fire it.
 CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_jobs (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Jobs that are due at the same moment run in the order they were scheduled.
+  seq             bigserial NOT NULL,
   facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   kind            text NOT NULL,
   dedupe_key      text NOT NULL UNIQUE,

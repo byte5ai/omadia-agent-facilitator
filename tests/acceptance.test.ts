@@ -99,6 +99,7 @@ test('1. field scenario: four people, ranked vote 3/2/1, deadline in three days,
   assert.ok(posts(conv).every((_t, i) => h.kernel.groupPosts(conv)[i]?.as === 'mira'));
 
   // No reminder is sent afterwards.
+  await h.tick(); // what follows the close (the protocol mail) is done
   const before = posts(conv).length;
   const reminders = reminderDms();
   h.clock.set(new Date((f.deadline as Date).getTime() - 24 * HOUR_MS + 1000));
@@ -106,6 +107,7 @@ test('1. field scenario: four people, ranked vote 3/2/1, deadline in three days,
   h.clock.set(new Date((f.deadline as Date).getTime() + 1000));
   await h.tick();
   assert.equal(posts(conv).length, before);
+  assert.equal(count(conv, 'Reminder:'), 0);
   assert.equal(reminderDms(), reminders);
 });
 
@@ -644,6 +646,7 @@ test('18. online meeting with chat and cards only', { skip: PG_SKIP }, async () 
   const dms = h.kernel.dms.length;
   await everybody(conv, 'agreed');
   assert.equal((await h.facilitation(conv)).phase, 'closed');
+  await h.tick(); // mail and invitation run after the close is committed
 
   // The protocol goes to the participants and the two stakeholders; a follow-up meeting is created from free/busy.
   assert.deepEqual(h.kernel.dms.slice(dms).filter((d) => d.text.includes('here is the protocol')).map((d) => d.principal).sort(), ['user:bert', 'user:cara', 'user:dave']);
@@ -692,27 +695,24 @@ test('20. scoped capabilities: no calendar contents or mailboxes, nobody the gro
   const f = await h.facilitation(conv);
   assert.equal(f.phase, 'closed');
 
+  await h.tick();
   const calls = followup.calls.length;
-  await h.engine.core.work(f.id, async (w) => {
-    const api = await scoped(w, h.engine.core);
-    // The whole reach: busy intervals, one invitation, one mail. Nothing that reads a mailbox or an appointment.
-    assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
-    assert.ok(!api.grant.allowed.includes('uwe@example.com'), 'a stakeholder the group refused is not in the grant');
-    const uninvited = await api.createInvitation({ attendees: ['anna@example.com', 'uwe@example.com'], subject: 's', start: new Date('2026-12-01T09:00:00Z'), end: new Date('2026-12-01T10:00:00Z'), body: '', online: true });
-    assert.deepEqual(uninvited, { ok: false, code: 'recipient_not_allowed', detail: 'uwe@example.com' });
-    const busy = await api.freeBusy(['anna@example.com'], new Date('2026-12-01T08:00:00Z'), new Date('2026-12-02T08:00:00Z'));
-    assert.equal(busy.ok, true);
-    if (busy.ok && busy.value.outcome === 'ok') for (const entry of busy.value.busy) assert.deepEqual(Object.keys(entry).sort(), ['attendee', 'intervals'], 'busy intervals only');
-  });
+  const api = await scoped(h.engine.core, f.id);
+  // The whole reach: busy intervals, one invitation, one mail. Nothing that reads a mailbox or an appointment.
+  assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
+  assert.ok(!api.grant.allowed.includes('uwe@example.com'), 'a stakeholder the group refused is not in the grant');
+  const uninvited = await api.createInvitation({ attendees: ['anna@example.com', 'uwe@example.com'], subject: 's', start: new Date('2026-12-01T09:00:00Z'), end: new Date('2026-12-01T10:00:00Z'), body: '', online: true });
+  assert.deepEqual(uninvited, { ok: false, code: 'recipient_not_allowed', detail: 'uwe@example.com' });
+  const busy = await api.freeBusy(['anna@example.com'], new Date('2026-12-01T08:00:00Z'), new Date('2026-12-02T08:00:00Z'));
+  assert.equal(busy.ok, true);
+  if (busy.ok && busy.value.outcome === 'ok') for (const entry of busy.value.busy) assert.deepEqual(Object.keys(entry).sort(), ['attendee', 'intervals'], 'busy intervals only');
   assert.equal(followup.calls.length, calls + 1, 'only the allowed free/busy call reached the integration');
 
   h.clock.advance(14 * DAY_MS + HOUR_MS);
   await h.tick();
   assert.equal((await h.facilitation(conv)).settings.followupGrant, 'revoked');
-  await h.engine.core.work(f.id, async (w) => {
-    const late = await (await scoped(w, h.engine.core)).freeBusy(['anna@example.com'], new Date('2026-12-10T08:00:00Z'), new Date('2026-12-11T08:00:00Z'));
-    assert.deepEqual(late, { ok: false, code: 'grant_revoked' });
-  });
+  const late = await (await scoped(h.engine.core, f.id)).freeBusy(['anna@example.com'], new Date('2026-12-10T08:00:00Z'), new Date('2026-12-11T08:00:00Z'));
+  assert.deepEqual(late, { ok: false, code: 'grant_revoked' });
   assert.equal(followup.calls.length, calls + 1);
   assert.match(await buildProtocol(h.db.pool, await h.facilitation(conv)), /Use of scoped capabilities:[\s\S]*grant issued[\s\S]*grant revoked: the follow-up period ended/);
 });

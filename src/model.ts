@@ -308,6 +308,7 @@ export interface InboundRow {
 
 export interface Job {
   id: string;
+  seq: string;
   facilitationId: string;
   kind: string;
   dedupeKey: string;

@@ -381,6 +381,8 @@ export const en = {
   protocolMailUnavailable: (reason: string): string => `The protocol could not be mailed (${reason}). It is in this group, and participants got it privately where I can reach them.`,
   followupCreated: (subject: string, when: string, link: boolean, unknown: number): string =>
     `Follow-up meeting "${subject}" is in the calendars for ${when}.${link ? '' : ' The invitation went out without a meeting link.'}${unknown > 0 ? ` For ${String(unknown)} ${unknown === 1 ? 'person' : 'people'} I could not see availability, so please check the time.` : ''}`,
+  protocolMailUnknown: (): string => 'I do not know whether the protocol mail went out: the mail service did not answer. I will not send it again, so nobody gets it twice. Please check, or share the protocol from this group.',
+  followupUnknown: (subject: string): string => `I do not know whether the invitation for "${subject}" went out: the calendar service did not answer. I will not send it again. Please check your calendars and send it yourselves if it is missing.`,
   followupNoSlot: (subject: string): string => `I found no time between the agreed dates at which everybody is free for "${subject}". Please pick a time yourselves.`,
   followupUnavailable: (subject: string, reason: string): string => `I could not schedule "${subject}" (${reason}). Please send the invitation yourselves.`,
   followupReasons: {
@@ -389,6 +391,7 @@ export const en = {
     recipient_not_allowed: 'somebody on the list was not confirmed by the group',
     provider_error: 'the calendar service reported an error',
     grant_revoked: 'the follow-up of this facilitation has ended',
+    unknown_outcome: 'the service did not answer',
     no_addresses: 'I have no mail addresses for the participants',
   },
   invitationBody: (goal: string, summary: string): string => `Follow-up to "${goal}".\n\n${summary}`,
