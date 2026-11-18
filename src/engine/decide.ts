@@ -18,7 +18,7 @@ import type { Ack, Contribution, ContributionKind, Decision, Participant, Step, 
 import { formatWhen, texts } from '../texts/index.js';
 import { askClarification, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
-import { ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
+import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { displayNameOf, releaseConversation, releaseOnEnd } from './lifecycle.js';
@@ -430,7 +430,7 @@ export async function withoutTakenItems(w: Work, step: Step, author: Participant
 }
 
 export function installDecisionMethods(engine: EngineCore): void {
-  registerInboundHandler(ballots);
+  registerInboundHandler(ballots, PRIORITY.ballots);
   registerAfterInbound(async (w) => {
     await advance(w, 'contribution');
   });

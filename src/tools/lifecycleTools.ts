@@ -7,9 +7,11 @@ import { advance, putAgain, recordBallot, roundOptions, withoutTakenItems } from
 import { askClarification, authorOf, recordContribution } from '../engine/contributions.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
+import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
+import type { AgendaStepInput } from '../engine/lifecycle.js';
 import { statusText } from '../engine/status.js';
-import { defineTool, liveFacilitation, numberList, oneOf, optionalString, requiredString, stringList } from './toolkit.js';
+import { asObject, defineTool, liveFacilitation, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ResolvedContext, ToolDefinition } from './toolkit.js';
 
 const CONTRIBUTION_KINDS: readonly ContributionKind[] = [
@@ -60,6 +62,24 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           options: { type: 'array', items: { type: 'string' }, description: 'The options to decide between, or the items to assign. The engine labels them A, B, C.' },
           points: { type: 'array', items: { type: 'number' }, description: 'Ranked vote: points per rank, first rank first. Default 3, 2, 1.' },
           statement: { type: 'string', description: 'Consent: the proposal put to the group.' },
+          format: { type: 'string', enum: [...FORMAT_IDS], description: 'An agenda template: decision, prioritisation, assignment, ideas, retrospective, alignment. Each is an agenda the group can adjust. Without it the facilitation is one single step.' },
+          agenda: {
+            type: 'array',
+            description: 'An agenda of your own instead of the template, when the group adjusted it.',
+            items: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: [...STEP_KINDS] },
+                title: { type: 'string' },
+                timeboxMinutes: { type: 'number' },
+                method: { type: 'string', enum: [...METHODS] },
+                options: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['kind', 'title'],
+            },
+          },
+          followUp: { type: 'boolean', description: 'The group agreed that owners are reminded of their action items before the due date.' },
+          followUpStatusAt: { type: 'string', description: 'ISO 8601 with offset: when the status of the action items is posted to the group.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
         },
         required: ['goal', 'definitionOfDone'],
@@ -74,6 +94,23 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const closeRule = oneOf(args, 'closeRule', ['all_contributed', 'at_deadline'] as const);
         const statement = optionalString(args, 'statement');
         const points = numberList(args, 'points');
+        const format = oneOf(args, 'format', FORMAT_IDS);
+        const statusAt = optionalString(args, 'followUpStatusAt');
+        const agenda = Array.isArray(args['agenda'])
+          ? args['agenda'].map((raw): AgendaStepInput => {
+              const o = asObject(raw);
+              const kind = oneOf(o, 'kind', STEP_KINDS);
+              if (!kind) throw new Refusal('bad_input', "every agenda step needs a 'kind'.");
+              const stepMethod = oneOf(o, 'method', METHODS);
+              const timebox = optionalNumber(o, 'timeboxMinutes');
+              return {
+                kind,
+                title: requiredString(o, 'title'),
+                ...(timebox ? { timeboxMinutes: timebox } : {}),
+                ...(stepMethod ? { decision: { method: stepMethod, options: stringList(o, 'options') ?? [] } } : {}),
+              };
+            })
+          : undefined;
         if (closeRule === 'at_deadline' && !deadline) throw new Refusal('bad_input', "closeRule 'at_deadline' needs a deadline.");
         const result = await configureFacilitation(engine.core, {
           ...ctx,
@@ -85,6 +122,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(language ? { language } : {}),
           ...(name ? { facilitatorName: name } : {}),
           ...(closeRule ? { closeRule } : {}),
+          ...(format ? { format } : {}),
+          ...(agenda ? { agenda } : {}),
+          ...(typeof args['followUp'] === 'boolean' ? { followUp: args['followUp'] } : {}),
+          ...(statusAt ? { followUpStatusAt: statusAt } : {}),
           ...(method ? { decision: { method, options: stringList(args, 'options') ?? [], ...(points ? { points } : {}), ...(statement ? { statement } : {}) } } : {}),
         });
         engine.ensureAttached(ctx.agentSlug);

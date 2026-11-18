@@ -14,6 +14,7 @@ import { poolTransaction } from '../db/tx.js';
 import { principalKey } from '../kernel.js';
 import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
+import { FORMATS } from './formats.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
@@ -51,6 +52,12 @@ export interface ConfigureInput extends ConversationRef {
   facilitatorName?: string;
   /** The decision the facilitation is about, when it is one vote. */
   decision?: DecisionSetup;
+  /** An agenda of its own instead of the format's template. */
+  agenda?: AgendaStepInput[];
+  /** Action items are followed up after the close. */
+  followUp?: boolean;
+  /** ISO time at which the status of the action items is posted. */
+  followUpStatusAt?: string;
 }
 
 export interface DecisionSetup {
@@ -64,25 +71,69 @@ export interface DecisionSetup {
 
 type NewStep = Parameters<typeof store.replaceSteps>[2][number];
 
-/** The agenda a setup asks for. */
-export function agendaFor(input: Pick<ConfigureInput, 'goal' | 'decision'>, config: { rankedPoints: readonly number[] }): NewStep[] {
+function decidingStep(title: string, d: DecisionSetup, config: { rankedPoints: readonly number[] }, kind?: NewStep['kind']): NewStep {
+  if (d.method !== 'consent' && d.options.length > 0 && d.options.length < (d.method === 'assignment' ? 1 : 2)) {
+    throw new Refusal('bad_options', 'A vote needs at least two options.');
+  }
+  return {
+    kind: kind ?? (d.method === 'assignment' ? 'assign' : 'decide'),
+    title,
+    method: d.method,
+    options: toOptions(d.options),
+    methodConfig: {
+      ...(d.method === 'ranked' ? { points: d.points ?? [...config.rankedPoints] } : {}),
+      ...(d.method === 'consent' ? { statement: d.statement ?? title } : {}),
+    },
+  };
+}
+
+/** One step of an agenda the facilitator wrote itself. */
+export interface AgendaStepInput {
+  kind: NewStep['kind'];
+  title: string;
+  timeboxMinutes?: number;
+  decision?: DecisionSetup;
+}
+
+/** The agenda a setup asks for: its own steps, the template of its format,
+ *  or one single step. */
+export function agendaFor(
+  input: Pick<ConfigureInput, 'goal' | 'decision' | 'format' | 'agenda' | 'language'>,
+  config: { rankedPoints: readonly number[]; language: 'de' | 'en' },
+): NewStep[] {
+  const language = input.language ?? config.language;
+  if (input.agenda && input.agenda.length > 0) {
+    return input.agenda.map((s) => ({
+      ...(s.decision ? decidingStep(s.title, s.decision, config, s.kind) : { kind: s.kind, title: s.title }),
+      ...(s.timeboxMinutes ? { timeboxMinutes: s.timeboxMinutes } : {}),
+    }));
+  }
+  if (input.format && input.format !== 'custom') {
+    let applied = false;
+    return FORMATS[input.format].map((template) => {
+      const title = template.title[language];
+      if (!template.method) return { kind: template.kind, title, ...(template.timeboxMinutes ? { timeboxMinutes: template.timeboxMinutes } : {}) };
+      // The decision named at set-up belongs to the first deciding step; a
+      // deciding step without options gets them during the facilitation.
+      const fromSetup = !applied && input.decision ? input.decision : undefined;
+      applied = true;
+      return decidingStep(fromSetup ? input.goal : title, fromSetup ?? { method: template.method, options: [] }, config, template.kind);
+    });
+  }
   const d = input.decision;
-  if (!d) return [{ kind: 'collect', title: input.goal }];
+  // No format and no vote: one open discussion, moderated turn by turn.
+  if (!d) return [{ kind: 'discuss', title: input.goal }];
   if (d.method !== 'consent' && d.options.length < (d.method === 'assignment' ? 1 : 2)) {
     throw new Refusal('bad_options', d.method === 'assignment' ? 'Name at least one item to assign.' : 'A vote needs at least two options.');
   }
-  return [
-    {
-      kind: d.method === 'assignment' ? 'assign' : 'decide',
-      title: input.goal,
-      method: d.method,
-      options: toOptions(d.options),
-      methodConfig: {
-        ...(d.method === 'ranked' ? { points: d.points ?? [...config.rankedPoints] } : {}),
-        ...(d.method === 'consent' ? { statement: d.statement ?? input.goal } : {}),
-      },
-    },
-  ];
+  return [decidingStep(input.goal, d, config)];
+}
+
+/** The definition of done an agenda implies when the set-up names none. */
+function criteriaFor(agenda: readonly NewStep[]): DodCriteria | null {
+  const lastDeciding = agenda.map((s) => s.method !== undefined && s.method !== null).lastIndexOf(true);
+  if (lastDeciding === -1) return agenda.some((s) => s.kind === 'close') ? { type: 'all_steps_closed' } : null;
+  return agenda.slice(lastDeciding + 1).every((s) => s.kind === 'close') ? { type: 'decisions_reached' } : { type: 'all_steps_closed' };
 }
 
 /** How to contribute to a step, as the handshake announces it. */
@@ -131,6 +182,12 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     throw new Refusal('bad_timezone', `'${input.timezone}' is not an IANA timezone.`);
   }
 
+  let statusAt: Date | undefined;
+  if (input.followUpStatusAt !== undefined) {
+    statusAt = parseInstant(input.followUpStatusAt);
+    if (!statusAt) throw new Refusal('bad_input', 'followUpStatusAt must be an ISO 8601 date-time with an offset.');
+  }
+
   const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
   if (existing && existing.facilitatorAgent !== input.agentSlug) {
     throw new Refusal('conversation_taken', 'Another facilitator already facilitates this conversation. One facilitation per conversation at a time.');
@@ -148,7 +205,9 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       if (dod && (dod.text !== input.definitionOfDone || JSON.stringify(dod.criteria) !== JSON.stringify(input.dodCriteria ?? null))) {
         await store.patchDodVersion(w.tx, dod.id, { text: input.definitionOfDone, criteria: input.dodCriteria ?? null });
       }
-      await store.replaceSteps(w.tx, existing.id, agendaFor(input, config));
+      const agenda = agendaFor(input, config);
+      await store.replaceSteps(w.tx, existing.id, agenda);
+      if (dod && !input.dodCriteria) await store.patchDodVersion(w.tx, dod.id, { text: input.definitionOfDone, criteria: criteriaFor(agenda) });
       await w.event('reconfigured', 'facilitator', { goal: input.goal });
       return w.patch({
         goal: input.goal,
@@ -159,6 +218,9 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         ...(input.closeRule ? { closeRule: input.closeRule } : {}),
         ...(input.reminderOffsetsHours ? { reminderPolicy: { offsetsHours: [...input.reminderOffsetsHours].sort((a, b) => b - a) } } : {}),
         ...(input.facilitatorName ? { settings: { ...existing.settings, facilitatorName: input.facilitatorName } } : {}),
+        ...(input.followUp !== undefined || statusAt
+          ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) } }
+          : {}),
       });
     });
     return { facilitation, created: false, participants: await store.listParticipants(pool, existing.id), notes };
@@ -212,7 +274,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         timezone: input.timezone ?? config.timezone,
         closeRule: input.closeRule ?? 'all_contributed',
         reminderPolicy: { offsetsHours: [...(input.reminderOffsetsHours ?? config.reminderOffsetsHours)].sort((a, b) => b - a) },
-        followupPolicy: { actionItems: false, leadHours: config.actionReminderLeadHours },
+        followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) },
         settings: {
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
@@ -226,7 +288,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       await store.addDodVersion(tx, {
         facilitationId: facilitation.id,
         text: input.definitionOfDone,
-        criteria: input.dodCriteria ?? (input.decision ? { type: 'decisions_reached' } : null),
+        criteria: input.dodCriteria ?? criteriaFor(agenda),
         proposedBy: input.callerPrincipalId,
         consentState: 'initial',
         effectiveAt: now,
@@ -272,6 +334,14 @@ export function displayNameOf(participants: readonly Participant[], principalId:
 
 export const facilitatorName = (f: Facilitation): string => f.settings.facilitatorName ?? f.facilitatorAgent;
 
+let openFirstStep: (w: Work, step: Step) => Promise<unknown> = async (w, step) => {
+  await store.patchStep(w.tx, step.id, { status: 'open', openedAt: w.now });
+};
+/** How a step of an agenda is opened (process.ts announces it and keeps its timebox). */
+export function setStepOpener(opener: (w: Work, step: Step) => Promise<unknown>): void {
+  openFirstStep = opener;
+}
+
 const onOpen: Array<(w: Work) => Promise<void>> = [];
 /** Work that starts with the facilitation (its reminders and its deadline). */
 export function onOpened(hook: (w: Work) => Promise<void>): void {
@@ -284,8 +354,13 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
     if (w.f.phase !== 'configuring') throw new Refusal('not_configuring', `The facilitation is ${w.f.phase}; only one that is being set up can be opened.`);
     const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
     const dod = await store.currentDod(w.tx, w.f.id);
-    const first = (await store.listSteps(w.tx, w.f.id))[0];
-    const opened = first ? await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now }) : undefined;
+    const steps = await store.listSteps(w.tx, w.f.id);
+    const first = steps[0];
+    // One step: the handshake carries its rules. An agenda: the handshake
+    // lists it, the opening step is the handshake itself, the next one opens.
+    const single = steps.length === 1;
+    const opened = single && first ? await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now }) : undefined;
+    if (!single && first?.kind === 'open') await store.patchStep(w.tx, first.id, { status: 'closed', openedAt: w.now, closedAt: w.now });
     const f = await w.patch({ phase: 'active', activatedAt: w.now });
     const t = texts(f.language);
     w.post({
@@ -300,11 +375,15 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
         definitionOfDone: dod?.text ?? '',
         participants: participants.map((p) => p.displayName),
         ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
-        rules: rulesOf(f, opened),
+        rules: single ? rulesOf(f, opened) : [`${t.protocol.agenda}:`, ...steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes))],
       }),
     });
     await w.event('opened', 'facilitator', { participants: participants.length });
     for (const hook of onOpen) await hook(w);
+    if (!single) {
+      const next = (await store.listSteps(w.tx, w.f.id)).find((s) => s.status === 'pending');
+      if (next) await openFirstStep(w, next);
+    }
     return f;
   });
 }

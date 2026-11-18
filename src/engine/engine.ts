@@ -9,7 +9,10 @@ import type { ConversationMembershipEvent } from '../kernel.js';
 import type { Facilitation } from '../model.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
+import { installActionItems } from './actionItems.js';
 import { installDecisionMethods } from './decide.js';
+import { installProcess } from './process.js';
+import { installProposals } from './proposals.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
@@ -30,6 +33,9 @@ export class FacilitationEngine {
     this.core = new EngineCore(deps);
     installDecisionMethods(this.core);
     installScheduler();
+    installProposals();
+    installProcess();
+    installActionItems();
     onOpened(scheduleDeadlineJobs);
   }
 

@@ -116,6 +116,107 @@ export const de: Texts = {
     'Ich kann hier nicht alle privat erreichen (meine App ist nicht bei allen installiert). Erinnerungen bleiben deshalb in dieser Gruppe, ohne Namen.',
   abortJobFailed: () => 'ein interner Schritt ist wiederholt fehlgeschlagen und konnte nicht abgeschlossen werden',
 
+  // ── Prozess ──────────────────────────────────────────────────────────────
+  stepKinds: {
+    open: 'Eröffnung',
+    collect: 'Sammeln',
+    discuss: 'Diskutieren',
+    cluster: 'Clustern',
+    prioritise: 'Priorisieren',
+    decide: 'Entscheiden',
+    assign: 'Zuweisen',
+    close: 'Abschluss',
+  },
+  stepInstruction: {
+    open: '',
+    collect: 'Schreibt, was ihr einbringen wollt, ein Punkt pro Nachricht.',
+    discuss: 'Sagt, was dafür und dagegen spricht und was euch daran wichtig ist.',
+    cluster: 'Ich schlage Gruppen für das Gesammelte vor; ihr bestätigt oder korrigiert sie.',
+    prioritise: '',
+    decide: '',
+    assign: '',
+    close: '',
+  },
+  agendaLine: (position, title, timebox) => `${String(position)}. ${title}${timebox ? ` (${String(timebox)} Min.)` : ''}`,
+  stepOpened: (position, total, title, instruction, until) =>
+    [`Schritt ${String(position)} von ${String(total)}: ${title}.`, instruction, until ? `Timebox bis ${until}.` : ''].filter((l) => l !== '').join(' '),
+  stepClosed: (title) => `"${title}" ist abgeschlossen.`,
+  stepExtended: (title, minutes, until) => `"${title}" wird um ${String(minutes)} Minuten verlängert, bis ${until}.`,
+  timeboxOver: (title, contributions, people, of) =>
+    `Die Timebox für "${title}" ist abgelaufen. Bisher: ${String(contributions)} ${contributions === 1 ? 'Beitrag' : 'Beiträge'} von ${String(people)} von ${String(of)} Personen.`,
+  timeboxOverVote: (title, open) =>
+    `Die Timebox für "${title}" ist abgelaufen; ${open === 1 ? 'ein Beitrag ist' : `${String(open)} Beiträge sind`} noch offen. Der Schritt bleibt offen, bis entschieden ist.`,
+  needOptions: (title) => `"${title}" braucht noch seine Optionen, bevor ihr abstimmen könnt. Ich lege sie euch gleich vor.`,
+  decisionSet: (title) => `Jetzt wird entschieden: ${title}.`,
+
+  proposalKinds: {
+    step_close: (title) => `"${title}" abschließen und weitergehen`,
+    clusters: (lines) => `das Gesammelte so gruppieren:\n${lines.map((l) => `- ${l}`).join('\n')}`,
+    summary: (text) => `diese Zusammenfassung ins Protokoll nehmen:\n${text}`,
+    decision: (statement) => `diese Entscheidung festhalten: ${statement}`,
+    close: (summary) => `die Moderation mit dieser Zusammenfassung abschließen:\n${summary}`,
+  },
+  proposalAnnounce: (what, until, extendable) =>
+    `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht, oder sofort, wenn alle zugestimmt haben. Schreibt "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.`,
+  proposalAccepted: (what) => `Angenommen, niemand hat widersprochen: ${what}`,
+  proposalRejected: (what, objections) =>
+    `Nicht angenommen: ${what}\n${objections.length === 1 ? 'Stehender Einwand' : 'Stehende Einwände'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,
+  proposalObjection: (name, reason) =>
+    `${name} hat einen Einwand: ${reason}. Solange er steht, gilt der Vorschlag nicht. ${name}, schreib "einverstanden", wenn er für dich ausgeräumt ist.`,
+  proposalBusy: () => 'Ein Vorschlag nach dem anderen: Zuerst wird der offene entschieden.',
+
+  silentInviteDirect: (name, title) =>
+    `Hallo ${name}, wir schließen gleich "${title}" ab. Wenn du noch etwas ergänzen möchtest, würde die Gruppe das gern hören. Schreib es bitte in die Gruppe; hier kann ich keine Beiträge annehmen.`,
+  silentInviteGroup: (title) => `Bevor wir "${title}" abschließen: Wer bisher noch nicht dazu gekommen ist, kann jetzt gern etwas ergänzen.`,
+  parked: (topic) => `Für später geparkt, damit wir beim aktuellen Schritt bleiben: ${topic}`,
+
+  actionPrompt: (owner, number, description, due) =>
+    `${owner}, Aufgabe #${String(number)} ist für dich vorgeschlagen: ${description}, fällig ${due}. Antworte hier in der Gruppe mit "ja", um sie zu übernehmen, oder mit "nein", um abzulehnen.`,
+  actionConfirmed: (owner, number, description, due) => `Aufgabe #${String(number)}: ${description}. Verantwortlich: ${owner}, fällig ${due}.`,
+  actionDeclined: (owner, number, description) => `${owner} hat Aufgabe #${String(number)} (${description}) abgelehnt. Sie hat noch keine verantwortliche Person.`,
+  actionReminder: (owner, number, description, due) =>
+    `Hallo ${owner}, Aufgabe #${String(number)} ist fällig ${due}: ${description}. Wenn sie erledigt ist, schreib "erledigt ${String(number)}" in die Gruppe.`,
+  actionReminderGroup: (owner, number, description, due) =>
+    `${owner}, Aufgabe #${String(number)} ist fällig ${due}: ${description}. Schreib "erledigt ${String(number)}", wenn sie erledigt ist.`,
+  actionDone: (owner, number, description) => `Erledigt, danke ${owner}: #${String(number)} ${description}`,
+  actionNotYours: (name, number) => `${name}, Aufgabe #${String(number)} kannst nicht du abschließen.`,
+  actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
+  actionLine: (number, description, owner, due, status) => `#${String(number)} ${description} (${owner}, fällig ${due}): ${status}`,
+  actionStatusWords: { proposed: 'wartet auf die verantwortliche Person', confirmed: 'offen', done: 'erledigt', declined: 'abgelehnt' },
+  followupEnded: () => 'Die Nachverfolgung der Aufgaben ist beendet. Ich lese diese Unterhaltung nicht mehr mit.',
+
+  closeSummary: (s) =>
+    [
+      'Entscheidungen:',
+      ...(s.decisions.length > 0 ? s.decisions.map((d) => `- ${d}`) : ['- keine']),
+      'Nächste Schritte:',
+      ...(s.actions.length > 0 ? s.actions.map((a) => `- ${a}`) : ['- keine']),
+      'Offene Punkte:',
+      ...(s.open.length > 0 ? s.open.map((o) => `- ${o}`) : ['- keine']),
+    ].join('\n'),
+
+  protocol: {
+    title: (goal) => `Protokoll: ${goal}`,
+    facilitator: 'Facilitator',
+    initiator: 'Gestartet von',
+    participants: 'Teilnehmende',
+    left: 'ausgetreten',
+    definitionOfDone: 'Definition of Done',
+    version: 'Version',
+    agenda: 'Agenda',
+    decisions: 'Entscheidungen',
+    rationale: 'Begründung',
+    clusters: 'Von der Gruppe bestätigte Cluster',
+    summaries: 'Von der Gruppe bestätigte Zusammenfassungen',
+    contributions: 'Beiträge',
+    actions: 'Aufgaben',
+    parked: 'Offene Punkte (Themenspeicher)',
+    changes: 'Regeländerungen',
+    capabilities: 'Nutzung der zweckgebundenen Fähigkeiten',
+    outcome: 'Ergebnis',
+    none: 'keine',
+  },
+
   phase: {
     configuring: 'wird eingerichtet',
     active: 'läuft',

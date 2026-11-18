@@ -153,12 +153,20 @@ const revisions: InboundHandler = async (ctx) => {
   return undefined;
 };
 
-/** In reading order. `registerInboundHandler` adds the method- and
- *  process-specific readings behind the fixed ones. */
-const handlers: InboundHandler[] = [revisions, commands, acknowledgements];
+/** Reading order. Lower runs first; the fixed readings come before the
+ *  method- and process-specific ones other modules register. */
+export const PRIORITY = { revisions: 0, commands: 10, acknowledgements: 20, proposals: 30, followup: 35, ballots: 40, process: 50 } as const;
 
-export function registerInboundHandler(handler: InboundHandler): void {
-  if (!handlers.includes(handler)) handlers.push(handler);
+const handlers: Array<{ priority: number; handler: InboundHandler }> = [
+  { priority: PRIORITY.revisions, handler: revisions },
+  { priority: PRIORITY.commands, handler: commands },
+  { priority: PRIORITY.acknowledgements, handler: acknowledgements },
+];
+
+export function registerInboundHandler(handler: InboundHandler, priority: number): void {
+  if (handlers.some((h) => h.handler === handler)) return;
+  handlers.push({ priority, handler });
+  handlers.sort((a, b) => a.priority - b.priority);
 }
 
 export type AfterInbound = (w: Work) => Promise<void>;
@@ -211,7 +219,7 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   const author = await resolveAuthor(w, record);
   const ctx: InboundContext = { w, record, author, command: normaliseCommand(record.text) };
   let result: InboundResult | undefined;
-  for (const handler of handlers) {
+  for (const { handler } of handlers) {
     result = await handler(ctx);
     if (result) break;
   }

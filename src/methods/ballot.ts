@@ -137,7 +137,7 @@ function resolveList(text: string, options: readonly StepOption[], prefixed: boo
   return { ok: true, keys };
 }
 
-function resolvePerson(name: string, author: Person | undefined, people: readonly Person[]): Person | BallotProblem {
+export function resolvePerson(name: string, author: Person | undefined, people: readonly Person[]): Person | BallotProblem {
   const wanted = norm(name.replace(/^@/, ''));
   if (SELF.test(wanted)) return author ?? 'unknown_person';
   const exact = people.filter((p) => norm(p.name) === wanted);
