@@ -30,8 +30,9 @@ export interface ResolvedContext {
 export const NO_CONTEXT =
   'Refused: this tool call does not say which conversation it belongs to, and a facilitation is never guessed. Nothing was done.';
 
-/** `callerUserRef.displayName` is not part of the contract yet; a kernel that
- *  states it saves the initiator from being unnamed until their next message. */
+/** `callerUserRef.displayName` (plugin-api 1.57.0): set when the channel
+ *  stated the sender's name. Read defensively, an older kernel has no such
+ *  field; then the initiator is unnamed until the roster or a message names them. */
 function statedName(ref: unknown): string | undefined {
   const name = ref !== null && typeof ref === 'object' ? (ref as { displayName?: unknown }).displayName : undefined;
   return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
