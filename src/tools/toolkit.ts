@@ -22,11 +22,20 @@ export interface ResolvedContext {
   channelType: string;
   conversationId: string;
   callerPrincipalId: string | undefined;
+  /** The caller's name, from a kernel that states it with the call. */
+  callerDisplayName: string | undefined;
   inboundEventId: string | undefined;
 }
 
 export const NO_CONTEXT =
   'Refused: this tool call does not say which conversation it belongs to, and a facilitation is never guessed. Nothing was done.';
+
+/** `callerUserRef.displayName` is not part of the contract yet; a kernel that
+ *  states it saves the initiator from being unnamed until their next message. */
+function statedName(ref: unknown): string | undefined {
+  const name = ref !== null && typeof ref === 'object' ? (ref as { displayName?: unknown }).displayName : undefined;
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
+}
 
 export function resolveContext(context: NativeToolCallContext | undefined): ResolvedContext {
   if (!context?.agentSlug || !context.channelType || !context.conversationId) throw new Refusal('no_context', NO_CONTEXT);
@@ -35,6 +44,7 @@ export function resolveContext(context: NativeToolCallContext | undefined): Reso
     channelType: context.channelType,
     conversationId: context.conversationId,
     callerPrincipalId: context.callerPrincipalId,
+    callerDisplayName: statedName(context.callerUserRef),
     inboundEventId: context.inboundEventId,
   };
 }

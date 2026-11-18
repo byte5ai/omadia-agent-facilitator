@@ -13,6 +13,7 @@ import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake } from './lifecycle.js';
+import { initiatorName } from './names.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { buildProtocol, closingSummary } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
@@ -37,17 +38,19 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
     perception = extra.perception ?? perception;
     notes.push(...(extra.notes ?? []));
   }
+  const named = initiatorName(f, participants);
   // Every decision method that is already fixed is announced with its rules.
   const deciding = onlyStep ? [onlyStep] : steps.filter((s) => s.method !== null && (s.method === 'consent' || s.options.length > 0));
   return t.handshakeFull({
     facilitator: facilitatorName(f),
-    initiator: displayNameOf(participants, f.initiatorParticipant, f.initiatorPrincipal),
+    ...(named ? { initiator: named } : {}),
     goal: f.goal,
     definitionOfDone: dod?.text ?? '',
     format: t.formats[f.format],
     agenda: steps.length > 1 ? steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes)) : [],
     rules: deciding.flatMap((s) => rulesOf(f, s)),
     participants: participants.map((p) => p.displayName),
+    rosterOpen: f.settings.openRoster === true,
     ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
     ...(f.deadline && f.reminderPolicy.offsetsHours.length > 0 ? { reminders: t.reminderTimes(f.reminderPolicy.offsetsHours) } : {}),
     followUp: f.followupPolicy.actionItems,
@@ -173,7 +176,7 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
       announce(t.changed.method(step.title, String(payload['rules'] ?? '')));
       if (affected.length > 0) {
         const participants = await store.listParticipants(w.tx, w.f.id);
-        const names = [...new Set(affected.map((c) => c.participantPrincipal))].map((id) => displayNameOf(participants, id, id));
+        const names = [...new Set(affected.map((c) => c.participantPrincipal))].map((id) => displayNameOf(participants, id, t.unnamedPerson));
         // The facilitator names who needs to act again.
         w.post({ purpose: 'act_again', key: proposal.id, to: 'group', deliveryClass: 'essential', text: t.actAgain(t.list(names)) });
       }

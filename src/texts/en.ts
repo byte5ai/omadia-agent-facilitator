@@ -35,6 +35,11 @@ export const en = {
     `${name} asked to stop. The facilitation ends here without a result. Nothing further will be sent.`,
   aborted: (reason: string): string => `This facilitation ends without a result. Reason: ${reason}`,
 
+  /** A participant the channel gave no name for (until a message carries one). */
+  unnamedPerson: 'a participant without a name',
+  /** In place of an id nobody here has a name for. */
+  someone: 'someone here',
+
   joined: (name: string, goal: string): string =>
     `Welcome, ${name}. This conversation is being facilitated. Goal: ${goal}. You count as a participant from now on; ask "status" for where we are.`,
   left: (name: string): string => `${name} has left the conversation. Their contributions so far stay counted.`,
@@ -239,13 +244,16 @@ export const en = {
   },
   handshakeFull: (h: {
     facilitator: string;
-    initiator: string;
+    /** Absent: nobody has stated the name of the person who asked yet. */
+    initiator?: string;
     goal: string;
     definitionOfDone: string;
     format: string;
     agenda: string[];
     rules: string[];
     participants: string[];
+    /** The channel could not list the members (or not all of them). */
+    rosterOpen: boolean;
     deadline?: string;
     reminders?: string;
     followUp: boolean;
@@ -255,13 +263,15 @@ export const en = {
   }): string =>
     [
       `Hello, I am ${h.facilitator} and I facilitate this conversation from now on. I am neutral: I structure the way, you decide. I never vote and I treat every contribution the same.`,
-      `Started by: ${h.initiator}`,
+      `Started by: ${h.initiator ?? 'the person who asked me just now'}`,
       `Goal: ${h.goal}`,
       `Done when (version 1): ${h.definitionOfDone}`,
       `Format: ${h.format}`,
       ...(h.agenda.length > 0 ? ['Agenda:', ...h.agenda] : []),
       ...h.rules,
-      `Participants: ${h.participants.join(', ')}`,
+      h.participants.length === 0
+        ? 'Participants: I could not get the member list of this conversation. Whoever writes here takes part.'
+        : `Participants: ${h.participants.join(', ')}${h.rosterOpen ? ' (I could not get the complete member list; whoever writes here takes part)' : ''}`,
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
       ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
       h.followUp
@@ -270,7 +280,9 @@ export const en = {
       `Changes: anyone can propose to change the definition of done, the method or the deadline. A change holds when nobody objects within ${String(h.changeWindowHours)} hours (never past the deadline), and I announce it with its new version.`,
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
-      `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`,
+      h.initiator
+        ? `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`
+        : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about.',
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
   reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),

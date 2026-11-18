@@ -19,6 +19,7 @@ import type { Kernel } from '../kernel.js';
 import type { DeliveryClass, Facilitation, Job, OutboxPayload, OutboxRow, Phase } from '../model.js';
 import { texts } from '../texts/index.js';
 import { guardOutgoing } from './guard.js';
+import { namePrincipals } from './names.js';
 import { dispatchOutbox } from './outbox.js';
 
 /** Test seams: a fault at a named point of a send. Never set in production. */
@@ -281,18 +282,21 @@ export class EngineCore {
     // Every outgoing text passes the guard, whoever wrote it. What it refuses
     // is replaced by a neutral line and put on record; nothing is posted for
     // "say nothing".
-    const verdict = guardOutgoing(m.text);
+    // People are named by their name: an id the facilitation knows goes out
+    // as that name.
+    const verdict = guardOutgoing(await namePrincipals(tx, f, m.text));
     if (!verdict.ok) {
       await store.appendEvent(tx, { facilitationId, kind: 'text_refused', actor: 'engine', occurredAt: now, payload: { purpose: m.purpose, reason: verdict.reason } });
       this.log(`facilitation ${facilitationId}: outgoing ${m.purpose} refused by the text guard (${verdict.reason})`);
       if (verdict.reason === 'silent' || verdict.reason === 'empty') return;
     }
+    const fallback = m.fallback && m.to !== 'group' ? { ...m.fallback, text: await namePrincipals(tx, f, m.fallback.text) } : undefined;
     const payload: OutboxPayload & { link?: Outgoing['link']; fallback?: Outgoing['fallback'] } = {
       text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),
       ...(m.link ? { link: m.link } : {}),
-      ...(m.fallback && m.to !== 'group' ? { fallback: m.fallback } : {}),
+      ...(fallback ? { fallback } : {}),
     };
     const versionBound = m.versionBound ?? m.deliveryClass === 'droppable';
     await insertIfAbsent<OutboxRow>(

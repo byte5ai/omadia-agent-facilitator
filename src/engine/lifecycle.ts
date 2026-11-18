@@ -17,6 +17,7 @@ import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
 import { lifetimeEnd } from './lifetime.js';
+import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
@@ -42,6 +43,8 @@ export interface ConversationRef {
 export interface ConfigureInput extends ConversationRef {
   /** Kernel-stated principal of the person the turn answers. */
   callerPrincipalId: string;
+  /** The caller's name, when the kernel states it. */
+  callerDisplayName?: string | undefined;
   goal: string;
   /** Absent: the agreed one is kept, or a default from the goal is used. */
   definitionOfDone?: string;
@@ -334,9 +337,15 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
 
   const roster = await kernel.rosters()?.getRoster(input.channelType, input.conversationId);
   const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
-  const openRoster = !roster || roster.partial;
+  // A member list without a single person is no answer either.
+  const openRoster = !roster || roster.partial || members.length === 0;
   if (openRoster) notes.push('The channel could not list every member of this conversation; whoever writes here counts as a participant.');
-  const initiator = members.find((m) => matchesCaller(m, input.callerPrincipalId));
+  const listed = members.find((m) => matchesCaller(m, input.callerPrincipalId));
+  // Whoever asked takes part, listed or not, as soon as their name is known.
+  const statedName = input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? input.callerDisplayName : undefined;
+  const asked: RosterParticipant | undefined = !listed && statedName ? { userRef: { kind: 'user', id: input.callerPrincipalId, displayName: statedName } } : undefined;
+  const initiator = listed ?? asked;
+  if (asked) members.push(asked);
 
   const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
   const agenda = agendaFor({ ...input, language }, config);
@@ -365,6 +374,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
           ...(profile?.displayName ? { facilitatorName: profile.displayName } : {}),
+          ...(statedName ? { initiatorName: statedName } : {}),
           ...(openRoster ? { openRoster: true } : {}),
         },
         deadline: deadline ?? null,
@@ -386,9 +396,9 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
           facilitationId: facilitation.id,
           principalId: principalKey(member.userRef),
           canonicalPrincipal: principalKey(member.userRef),
-          displayName: member.userRef.displayName ?? member.userRef.id,
+          displayName: nameOrPlaceholder(member.userRef.displayName, principalKey(member.userRef), language),
           email: member.userRef.email ?? member.userPrincipalName ?? null,
-          source: 'roster',
+          source: member === asked ? 'joined' : 'roster',
           joinedAt: now,
           changedAt: now,
         });
