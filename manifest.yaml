@@ -1,23 +1,31 @@
 schema_version: "1"
 
 # ===========================================================================
-# omadia Facilitator (Convener) — agent plugin (#330 Workstream C, Slice C1)
+# omadia Facilitator — the facilitation engine for native facilitators
+# (epic byte5ai/omadia#2043).
 # ---------------------------------------------------------------------------
-# ONE Convener identity with modes (facilitate / record / timekeep), never a
-# bot per function. Consumes the #330 kernel seams: ephemeral Conductor runs
-# (Workstream A), group-conversation primitives + targeted delivery (B1/B2).
-# All kernel services are optional_requires — the kernel provides them, no
-# plugin does, so a hard `requires` would be unresolvable and keep this
-# plugin from ever activating (see plugin-api targetedSend.ts header).
+# A facilitator is a kind of agent the KERNEL owns: identity, neutrality block,
+# its own channel identity, authenticated inbound messages and the model turn.
+# Everything else lives here: the data model (migrations/), lifecycle,
+# contributions, decision methods, scheduler and outbox, process, transparency,
+# visibility, retention, quotas, sessions and the facilitations view.
+#
+# `kind: extension`, not `agent`: the engine owns tables, and only the
+# tool/extension runtime hands a plugin `ctx.sql` and the granted pool.
+# Every kernel service is `optional_requires` — the kernel publishes them, no
+# plugin does, so a hard `requires` would be unresolvable. Each one is resolved
+# lazily and its absence degrades with a clear message.
 # ===========================================================================
 
 identity:
   id: "@omadia/agent-facilitator"
-  kind: "agent"
+  kind: "extension"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "0.7.3"
-  description: "Moderiert Gruppen-Chats zu einem definierten Ergebnis wie ein professioneller Facilitator: erkennt die eigene Einladung, startet einen ephemeren Conductor-Workflow mit Ziel + Definition-of-Done, moderiert transparent (announced start/stop, /facilitator status) und berichtet Ergebnis oder Abbruch an den Initiator."
+  version: "1.0.0"
+  description:
+    en: "Facilitation engine for native facilitators: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
+    de: "Facilitation-Engine für native Facilitatoren: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
   authors:
     - name: "byte5 GmbH"
       email: "info@omadia.ai"
@@ -31,29 +39,41 @@ compat:
   core: ">=1.0 <2.0"
   node: ">=20"
 
-multi_instance: true
 privacy_class: "strict"
 
 depends_on: []
 
-# Kernel-published services (#330 A/B1). optional_requires by design: the
-# plugin activates without them and degrades with clear status messages —
-# and the deny-by-default service gate grants exactly what is declared here.
-# Least privilege: exactly the services this slice consumes. The C2a setup
-# services power the zero-touch flow (agent provisioning, invite-guarded
-# auto-bind, per-conversation initiator roles); conversationRosters resolves
-# the inviter's email (role holders are email-keyed). Durable facilitation
-# state (0.6.0) rides on conductorEphemeralRuns itself (listOwnRuns /
-# saveRunState / cancelOwnRun, all optional methods) — no new service.
+# The instance's facilitation engine. A facilitator-kind agent gets exactly
+# the tools this plugin registers; the kernel refuses every other grant.
+provides:
+  - "facilitationEngine@1"
+
+requires: []
+
+# Least privilege: exactly what the engine consumes.
+#   graphPool             the granted Postgres pool (gated by permissions.sql)
+#   conversationMessages  every human message of a moderated conversation,
+#                         with authorship the kernel states
+#   agentTurn             the kernel runs the facilitator turn, returns text
+#   conversationSend      post as the facilitator's own identity
+#   targetedSend          private messages as the facilitator's own identity
+#   channelReadiness      installed / may read all messages / may post
+#   sessionCapabilities   what the channel and its media offer in a session
+#   conversationEvents    membership changes (joined / left)
+#   conversationRosters   the participants at start
+#   facilitation.followup free/busy, invitations and mail for a closed
+#                         facilitation (an integration plugin provides it)
 optional_requires:
-  - "conductorEphemeralRuns@1"
-  - "targetedSend@1"
-  - "conversationEvents@1"
-  - "agentProvisioning@1"
-  - "conversationBindings@1"
-  - "conductorRoleAssignments@1"
-  - "conversationRosters@1"
+  - "graphPool@1"
+  - "conversationMessages@1"
+  - "agentTurn@1"
   - "conversationSend@1"
+  - "targetedSend@1"
+  - "channelReadiness@1"
+  - "sessionCapabilities@1"
+  - "conversationEvents@1"
+  - "conversationRosters@1"
+  - "facilitation.followup@1"
 
 lifecycle:
   entry: "dist/plugin.js"
@@ -69,136 +89,172 @@ lifecycle:
     secrets: "delete"
 
 setup:
+  guide:
+    en: |
+      1. Grant this plugin its database permission (it owns the facilitation
+         tables). Without the grant every facilitator says that the engine is
+         not available and starts nothing.
+      2. Create a facilitator under "Facilitators" and give it its own channel
+         identity. A facilitator never speaks through another agent's bot.
+      3. Add the facilitator to a group chat and ask it there to start.
+    de: |
+      1. Gib diesem Plugin die Datenbank-Berechtigung (es besitzt die
+         Facilitation-Tabellen). Ohne sie sagt jeder Facilitator, dass die
+         Engine nicht verfügbar ist, und startet nichts.
+      2. Lege unter "Facilitatoren" einen Facilitator an und gib ihm eine
+         eigene Channel-Identität. Ein Facilitator spricht nie über den Bot
+         eines anderen Agenten.
+      3. Füge den Facilitator einem Gruppen-Chat hinzu und bitte ihn dort zu
+         starten.
   fields:
-    - key: "facilitator_agent_slug"
-      type: "string"
-      label: "Facilitator-Agent-Slug"
-      help: "Slug des Top-Level-Agenten, der die Moderation fährt (der Agent, den der Operator anlegt und auf die Gruppen-Conversation bindet). Wird als agents:facilitator-Slot in das facilitation-Pattern eingesetzt."
-      required: false
-      default: "facilitator"
-    - key: "initiator_role_key"
-      type: "string"
-      label: "Initiator-Rolle (Conductor role key)"
-      help: "Conductor-Rolle, deren aktuelle Holder das Ergebnis bestätigen und die Reports empfangen (roles:initiator-Slot + targetedSend-Ziel 'role:<key>'). Die Holder pflegt der Operator über die Conductor-Rollen-API."
-      required: false
-      default: "facilitation-initiator"
-    - key: "report_channel_type"
-      type: "string"
-      label: "Report-Channel-Typ"
-      help: "channel_bindings.channel_type, über den Bestätigung + Report zugestellt werden (channels:report-Slot und targetedSend-channelType). Step 1: 'teams'."
-      required: false
-      default: "teams"
-    - key: "default_ttl_hours"
-      type: "number"
-      label: "Standard-TTL (Stunden)"
-      help: "Lebensdauer des ephemeren Facilitation-Workflows, wenn beim Start keine angegeben wird. Der Kernel clamped auf seine CONDUCTOR_EPHEMERAL_*-Grenzen (Default max 7 Tage)."
-      required: false
-      default: 24
-    - key: "reporting_mode"
-      type: "string"
-      label: "Reporting-Modus"
-      help: "'result-only' (Default): nur Endergebnis/Abbruch an den Initiator. 'interim': zusätzlich Zwischenstände, wenn der Agent sie über das facilitation_report-Verhalten anstößt."
-      required: false
-      default: "result-only"
-    - key: "moderation_style"
-      type: "string"
-      label: "Moderations-Stil"
-      help: "Freitext-Hinweis an den Moderations-Prompt (z.B. 'zurückhaltend, nur bei Stillstand eingreifen' oder 'aktiv strukturierend mit Timeboxing')."
-      required: false
-      default: "aktiv strukturierend, aber knapp — eingreifen bei Stillstand, Dominanz einzelner oder Zielabweichung"
     - key: "language"
       type: "string"
-      label: "Sprache"
-      help: "Sprache der Moderation und der Reports ('de' oder 'en')."
+      label:
+        en: "Language"
+        de: "Sprache"
+      help:
+        en: "Language of everything the engine writes itself (handshake, status, reminders, reports): 'de' or 'en'."
+        de: "Sprache aller Texte, die die Engine selbst schreibt (Handshake, Status, Erinnerungen, Berichte): 'de' oder 'en'."
       required: false
       default: "de"
-    - key: "nudges_enabled"
-      type: "boolean"
-      label: "Gruppen-Nudges erlauben"
-      help: "Default true: Der Assess-Tick darf bei Stillstand eine kurze aktivierende Moderationsnachricht in den Gruppen-Chat posten (kernel-seitig auf eigene Facilitations gescoped, max. 12 pro Facilitation). Auf false stellen, wenn proaktive Posts unerwünscht sind."
-      required: false
-      default: true
-    - key: "nudge_min_interval_hours"
-      type: "string"
-      label: "Mindestabstand zwischen Nudges (Stunden)"
-      help: "Default 4: So viele Stunden müssen zwischen zwei Erinnerungen in denselben Gruppen-Chat liegen. 0 hebt den Mindestabstand auf (dann gilt nur der 45-Minuten-Cooldown nach frischem Fortschritt)."
-      required: false
-      default: "4"
-    - key: "nudge_quiet_hours"
-      type: "string"
-      label: "Ruhezeit für Nudges"
-      help: "Default '20-8': In diesem Stundenfenster (Format 'HH-HH', Ortszeit laut 'Zeitzone') wird kein Nudge gepostet. 'off' schaltet die Ruhezeit ab."
-      required: false
-      default: "20-8"
     - key: "timezone"
       type: "string"
-      label: "Zeitzone"
-      help: "IANA-Zeitzone für die Ruhezeit (z.B. 'Europe/Berlin')."
+      label:
+        en: "Timezone"
+        de: "Zeitzone"
+      help:
+        en: "IANA timezone used when a facilitation states none (e.g. 'Europe/Berlin')."
+        de: "IANA-Zeitzone, wenn eine Facilitation keine nennt (z. B. 'Europe/Berlin')."
       required: false
       default: "Europe/Berlin"
-    - key: "auto_setup"
-      type: "boolean"
-      label: "Zero-Touch-Setup"
-      help: "Default true: Beim Aktivieren wird der Top-Level-Agent automatisch provisioniert (inkl. Playbook-Persona), Gruppen-Einladungen binden die Conversation automatisch und der Einladende wird als Initiator-Rolle gesetzt. Auf false stellen, wenn der Operator Agent/Binding/Rolle manuell verwalten will."
+    - key: "reminder_offsets_hours"
+      type: "string"
+      label:
+        en: "Reminders before the deadline (hours)"
+        de: "Erinnerungen vor der Deadline (Stunden)"
+      help:
+        en: "Comma-separated hours before the deadline. Default '24,2'. Announced in the handshake; a facilitation can state its own."
+        de: "Kommagetrennte Stunden vor der Deadline. Standard '24,2'. Wird im Handshake angekündigt; eine Facilitation kann eigene Zeiten nennen."
       required: false
-      default: true
-    - key: "disclose_report_target"
-      type: "boolean"
-      label: "Report-Ziel offenlegen"
-      help: "Default true: Die Gruppe erfährt im Opening-Handshake, an wen berichtet wird (Transparenz-/DSGVO-Default aus #330). Nur ändern, wenn eine andere Rechtsgrundlage greift."
+      default: "24,2"
+    - key: "change_window_hours"
+      type: "number"
+      label:
+        en: "Consent window for rule changes (hours)"
+        de: "Konsent-Fenster für Regeländerungen (Stunden)"
+      help:
+        en: "A proposed change to the definition of done, method or deadline takes effect when nobody objects within this window. Never runs past the deadline."
+        de: "Eine vorgeschlagene Änderung an Definition of Done, Methode oder Deadline gilt, wenn in diesem Fenster niemand widerspricht. Läuft nie über die Deadline hinaus."
       required: false
-      default: true
+      default: 12
+    - key: "runoff_window_hours"
+      type: "number"
+      label:
+        en: "Runoff window after a tie (hours)"
+        de: "Stichwahl-Fenster nach Gleichstand (Stunden)"
+      help:
+        en: "A runoff ends at the earlier of the original deadline and this window."
+        de: "Eine Stichwahl endet zum früheren Zeitpunkt aus ursprünglicher Deadline und diesem Fenster."
+      required: false
+      default: 12
+    - key: "confirm_window_minutes"
+      type: "number"
+      label:
+        en: "Window for confirming proposals (minutes)"
+        de: "Fenster für Bestätigungen (Minuten)"
+      help:
+        en: "Clusters, summaries and closing a step are proposals: they hold when nobody objects within this window, or at once when everyone agreed."
+        de: "Cluster, Zusammenfassungen und das Schließen eines Schritts sind Vorschläge: Sie gelten, wenn in diesem Fenster niemand widerspricht, oder sofort, wenn alle zugestimmt haben."
+      required: false
+      default: 30
+    - key: "ranked_points"
+      type: "string"
+      label:
+        en: "Points per rank (ranked vote)"
+        de: "Punkte pro Rang (Rangwahl)"
+      help:
+        en: "Comma-separated, first rank first. Default '3,2,1'. A facilitation can state its own."
+        de: "Kommagetrennt, erster Rang zuerst. Standard '3,2,1'. Eine Facilitation kann eigene Punkte nennen."
+      required: false
+      default: "3,2,1"
+    - key: "action_reminder_lead_hours"
+      type: "number"
+      label:
+        en: "Action item reminder before due (hours)"
+        de: "Erinnerung an Aufgaben vor Fälligkeit (Stunden)"
+      help:
+        en: "How long before its due date an owner is reminded of an action item, when the group agreed on follow-up."
+        de: "Wie lange vor Fälligkeit eine verantwortliche Person an ihre Aufgabe erinnert wird, wenn die Gruppe Nachverfolgung vereinbart hat."
+      required: false
+      default: 24
+    - key: "retention_days"
+      type: "number"
+      label:
+        en: "Retention after close (days)"
+        de: "Aufbewahrung nach Abschluss (Tage)"
+      help:
+        en: "Facilitation records and protocol are deleted this many days after close. The result in the chat stays where the channel keeps it."
+        de: "Facilitation-Daten und Protokoll werden so viele Tage nach Abschluss gelöscht. Das Ergebnis im Chat bleibt, wo der Channel es aufbewahrt."
+      required: false
+      default: 90
+    - key: "max_active_per_facilitator"
+      type: "number"
+      label:
+        en: "Active facilitations per facilitator"
+        de: "Aktive Facilitations pro Facilitator"
+      help:
+        en: "Quota per facilitator. Reaching it produces a system notice in the conversation."
+        de: "Kontingent pro Facilitator. Wird es erreicht, erscheint ein Systemhinweis in der Konversation."
+      required: false
+      default: 10
+    - key: "max_active_instance"
+      type: "number"
+      label:
+        en: "Active facilitations per instance"
+        de: "Aktive Facilitations pro Instanz"
+      help:
+        en: "Quota across all facilitators of this instance."
+        de: "Kontingent über alle Facilitatoren dieser Instanz."
+      required: false
+      default: 50
+    - key: "starts_per_hour_per_facilitator"
+      type: "number"
+      label:
+        en: "Starts per hour per facilitator"
+        de: "Starts pro Stunde pro Facilitator"
+      help:
+        en: "How many facilitations one facilitator may start within an hour."
+        de: "Wie viele Facilitations ein Facilitator innerhalb einer Stunde starten darf."
+      required: false
+      default: 20
+    - key: "max_messages_per_facilitation"
+      type: "number"
+      label:
+        en: "Messages per facilitation"
+        de: "Nachrichten pro Facilitation"
+      help:
+        en: "How many messages the facilitator may post in one facilitation. Handshake, result and abort report are always sent."
+        de: "Wie viele Nachrichten der Facilitator in einer Facilitation posten darf. Handshake, Ergebnis und Abbruchbericht werden immer gesendet."
+      required: false
+      default: 500
+    - key: "protocol_mail_enabled"
+      type: "boolean"
+      label:
+        en: "Send the protocol by mail"
+        de: "Protokoll per Mail senden"
+      help:
+        en: "Default false: the protocol goes to participants through the channel. When true and a follow-up integration is installed, it is also mailed to participants and confirmed stakeholders."
+        de: "Standard false: Das Protokoll geht über den Channel an die Teilnehmenden. Bei true und installierter Follow-up-Integration wird es zusätzlich an Teilnehmende und bestätigte Stakeholder gemailt."
+      required: false
+      default: false
   self_test: false
 
-llm:
-  prefers:
-    - capabilities: ["tool_use", "long_context"]
-      min_context: 100000
-      class: "frontier"
-      temperature_hint: 0.4
-  fallback_allowed: true
-
-capabilities: []
-
-playbook:
-  when_to_use: |
-    Wenn eine Gruppe in einem Chat zu einem definierten Ergebnis moderiert
-    werden soll: Rollenverteilungen, Entscheidungen, Priorisierungen,
-    Retro-Ergebnisse. Der Facilitator wird sichtbar in die Konversation
-    eingeladen, startet die Facilitation mit Ziel + machine-checkable
-    Definition-of-Done (facilitation_start) und berichtet das Ergebnis an
-    den Initiator. Statusfragen ("werden wir moderiert? von wem? wohin geht
-    der Report?") beantwortet facilitation_status jederzeit wahrheitsgemäß.
-  combines_with: []
-  not_for:
-    - "Verdeckte Moderation oder stilles Mitschneiden — Start/Stop sind immer announced, das Report-Ziel wird per Default offengelegt."
-    - "1:1-Assistenz ohne Gruppenziel — dafür ist der normale Front-Door-Agent da."
-    - "Audio-/Online-Meetings (Step 2 des Epics, nicht Teil dieses Plugins)."
-  example_prompts:
-    - "Start der Facilitation — Ziel: Alle Rollen im Dokument sind mit je genau einem Namen besetzt. DoD: Jede Rolle hat einen bestätigten Namen und die Gruppe hat zugestimmt."
-    - "/facilitator status"
-    - "/facilitator stop"
-
-entities:
-  produces: []
-  consumes: []
-
-skills:
-  - id: "runtime-note"
-    kind: "prompt_partial"
-    path: "skills/runtime-note.md"
-    description: "Beschreibt die in-process Laufzeit und die drei facilitation_*-Tools — überschreibt Playbook-Annahmen."
-    shareable: false
-  - id: "facilitator-playbook"
-    kind: "prompt_partial"
-    path: "skills/facilitator-playbook.md"
-    description: "Convener-Playbook: Moderationstechniken, Transparenzregeln, Tool-Protokoll, Step-Modus für die Pattern-Prompts."
-    shareable: false
-
 permissions:
-  # Facilitation state is persisted kernel-side per ephemeral run (0.6.0,
-  # owner-guarded conductorEphemeralRuns methods) — no memory grants needed
-  # (least privilege).
+  # The engine owns the facilitation tables. `ledger` records which migrations
+  # ran; `migrations` makes the kernel apply the directory before activate().
+  sql:
+    migrations: "migrations"
+    ledger: "plg_omadia_agent_facilitator_migrations"
   memory:
     reads: []
     writes: []

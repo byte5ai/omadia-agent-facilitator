@@ -1,51 +1,47 @@
-// Setup-field parsing (#330 C1). All fields are declared with defaults in
-// manifest.yaml; this module is the single place raw config values are
-// validated and defaulted — everything downstream consumes the typed shape.
+// Setup-field parsing. Every field is declared with its default in
+// manifest.yaml; this module is the one place raw values are validated and
+// defaulted. A bad value falls back to the default and is logged, so a typo in
+// the operator UI never takes the engine down.
 
-export type ReportingMode = 'result-only' | 'interim';
-export type FacilitatorLanguage = 'de' | 'en';
+export type EngineLanguage = 'de' | 'en';
 
-export interface FacilitatorConfig {
-  facilitatorAgentSlug: string;
-  initiatorRoleKey: string;
-  reportChannelType: string;
-  defaultTtlHours: number;
-  reportingMode: ReportingMode;
-  moderationStyle: string;
-  language: FacilitatorLanguage;
-  discloseReportTarget: boolean;
-  /** #330 C2b — provision the top-level agent automatically at activate. */
-  autoSetup: boolean;
-  /** #330 C3 — allow proactive group nudges (operator control over posts). */
-  nudgesEnabled: boolean;
-  /** 0.7.0 — minimum spacing between two delivered nudges. */
-  nudgeMinIntervalHours: number;
-  /** 0.7.0 — local hours in which no nudge is posted; undefined = none. */
-  nudgeQuietHours: QuietHours | undefined;
-  /** IANA zone the quiet hours are read in. */
-  timezone: string;
+export interface EngineConfig {
+  readonly language: EngineLanguage;
+  readonly timezone: string;
+  /** Hours before the deadline at which a reminder goes out, descending. */
+  readonly reminderOffsetsHours: readonly number[];
+  readonly changeWindowHours: number;
+  readonly runoffWindowHours: number;
+  readonly confirmWindowMinutes: number;
+  /** Points per rank, first rank first. */
+  readonly rankedPoints: readonly number[];
+  readonly actionReminderLeadHours: number;
+  readonly retentionDays: number;
+  readonly maxActivePerFacilitator: number;
+  readonly maxActiveInstance: number;
+  readonly startsPerHourPerFacilitator: number;
+  readonly maxMessagesPerFacilitation: number;
+  readonly protocolMailEnabled: boolean;
 }
 
-/** Hours 0-23; `startHour` inclusive, `endHour` exclusive. A window that
- *  wraps midnight has startHour > endHour (21-8 = 21:00 until 07:59). */
-export interface QuietHours {
-  startHour: number;
-  endHour: number;
-}
+export const CONFIG_DEFAULTS: EngineConfig = {
+  language: 'de',
+  timezone: 'Europe/Berlin',
+  reminderOffsetsHours: [24, 2],
+  changeWindowHours: 12,
+  runoffWindowHours: 12,
+  confirmWindowMinutes: 30,
+  rankedPoints: [3, 2, 1],
+  actionReminderLeadHours: 24,
+  retentionDays: 90,
+  maxActivePerFacilitator: 10,
+  maxActiveInstance: 50,
+  startsPerHourPerFacilitator: 20,
+  maxMessagesPerFacilitation: 500,
+  protocolMailEnabled: false,
+};
 
-const QUIET_HOURS_PATTERN = /^(\d{1,2})\s*-\s*(\d{1,2})$/;
-
-/** 'HH-HH' → window; '' / 'off' / 'none' → no quiet hours; anything else is invalid. */
-export function parseQuietHours(raw: string): QuietHours | undefined | 'invalid' {
-  const value = raw.trim().toLowerCase();
-  if (value === '' || value === 'off' || value === 'none') return undefined;
-  const match = QUIET_HOURS_PATTERN.exec(value);
-  if (!match) return 'invalid';
-  const startHour = Number(match[1]);
-  const endHour = Number(match[2]);
-  if (startHour > 23 || endHour > 23 || startHour === endHour) return 'invalid';
-  return { startHour, endHour };
-}
+export type ConfigReader = <T>(key: string) => T | undefined;
 
 export function isValidTimezone(zone: string): boolean {
   try {
@@ -56,105 +52,76 @@ export function isValidTimezone(zone: string): boolean {
   }
 }
 
-export const CONFIG_DEFAULTS: FacilitatorConfig = {
-  facilitatorAgentSlug: 'facilitator',
-  initiatorRoleKey: 'facilitation-initiator',
-  reportChannelType: 'teams',
-  defaultTtlHours: 24,
-  reportingMode: 'result-only',
-  moderationStyle:
-    'aktiv strukturierend, aber knapp — eingreifen bei Stillstand, Dominanz einzelner oder Zielabweichung',
-  language: 'de',
-  discloseReportTarget: true,
-  autoSetup: true,
-  nudgesEnabled: true,
-  nudgeMinIntervalHours: 4,
-  nudgeQuietHours: { startHour: 20, endHour: 8 },
-  timezone: 'Europe/Berlin',
-};
-
-function nonEmptyString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+/** '24, 2' -> [24, 2]. Undefined when any entry is not a positive number. */
+export function parseNumberList(raw: string): number[] | undefined {
+  const parts = raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p !== '');
+  if (parts.length === 0) return undefined;
+  const values = parts.map(Number);
+  return values.every((v) => Number.isFinite(v) && v > 0) ? values : undefined;
 }
 
-/** Parse + validate the plugin's setup fields. Invalid values fall back to
- *  the declared defaults rather than failing activation — a misconfigured
- *  facilitation plugin should degrade loudly (log) but never brick. */
-export function parseConfig(
-  get: <T = unknown>(key: string) => T | undefined,
-  log?: (msg: string) => void,
-): FacilitatorConfig {
-  const rawTtl = get<unknown>('default_ttl_hours');
-  const ttlNumber = typeof rawTtl === 'string' ? Number(rawTtl) : rawTtl;
-  const defaultTtlHours =
-    typeof ttlNumber === 'number' && Number.isFinite(ttlNumber) && ttlNumber > 0
-      ? ttlNumber
-      : CONFIG_DEFAULTS.defaultTtlHours;
-  if (rawTtl !== undefined && defaultTtlHours !== ttlNumber) {
-    log?.(`config: invalid default_ttl_hours '${String(rawTtl)}' — using ${String(CONFIG_DEFAULTS.defaultTtlHours)}`);
-  }
+export function parseConfig(read: ConfigReader, log: (msg: string) => void = () => {}): EngineConfig {
+  const invalid = (key: string, value: unknown, fallback: unknown): void => {
+    log(`config: '${key}' = ${JSON.stringify(value)} is not valid — using ${JSON.stringify(fallback)}`);
+  };
 
-  const rawMode = get<unknown>('reporting_mode');
-  const reportingMode: ReportingMode = rawMode === 'interim' ? 'interim' : 'result-only';
-  if (rawMode !== undefined && rawMode !== 'interim' && rawMode !== 'result-only') {
-    log?.(`config: unknown reporting_mode '${String(rawMode)}' — using 'result-only'`);
-  }
-
-  const rawLanguage = get<unknown>('language');
-  const language: FacilitatorLanguage = rawLanguage === 'en' ? 'en' : 'de';
-
-  const rawDisclose = get<unknown>('disclose_report_target');
-  const discloseReportTarget =
-    typeof rawDisclose === 'boolean' ? rawDisclose : rawDisclose === 'false' ? false : CONFIG_DEFAULTS.discloseReportTarget;
-
-  const rawAutoSetup = get<unknown>('auto_setup');
-  const autoSetup =
-    typeof rawAutoSetup === 'boolean' ? rawAutoSetup : rawAutoSetup === 'false' ? false : CONFIG_DEFAULTS.autoSetup;
-
-  const rawNudges = get<unknown>('nudges_enabled');
-  const nudgesEnabled =
-    typeof rawNudges === 'boolean' ? rawNudges : rawNudges === 'false' ? false : CONFIG_DEFAULTS.nudgesEnabled;
-
-  const rawInterval = get<unknown>('nudge_min_interval_hours');
-  const intervalNumber = typeof rawInterval === 'string' ? Number(rawInterval) : rawInterval;
-  const nudgeMinIntervalHours =
-    typeof intervalNumber === 'number' && Number.isFinite(intervalNumber) && intervalNumber >= 0
-      ? intervalNumber
-      : CONFIG_DEFAULTS.nudgeMinIntervalHours;
-  if (rawInterval !== undefined && nudgeMinIntervalHours !== intervalNumber) {
-    log?.(`config: invalid nudge_min_interval_hours '${String(rawInterval)}' — using ${String(CONFIG_DEFAULTS.nudgeMinIntervalHours)}`);
-  }
-
-  const rawQuiet = get<unknown>('nudge_quiet_hours');
-  let nudgeQuietHours = CONFIG_DEFAULTS.nudgeQuietHours;
-  if (typeof rawQuiet === 'string') {
-    const parsed = parseQuietHours(rawQuiet);
-    if (parsed === 'invalid') {
-      log?.(`config: invalid nudge_quiet_hours '${rawQuiet}' (expected 'HH-HH' or 'off') — using the default`);
-    } else {
-      nudgeQuietHours = parsed;
+  const positive = (key: string, fallback: number, opts: { integer?: boolean } = {}): number => {
+    const raw = read<unknown>(key);
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(value) || value <= 0 || (opts.integer === true && !Number.isInteger(value))) {
+      invalid(key, raw, fallback);
+      return fallback;
     }
+    return value;
+  };
+
+  const list = (key: string, fallback: readonly number[]): readonly number[] => {
+    const raw = read<unknown>(key);
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    const parsed = parseNumberList(String(raw));
+    if (!parsed) {
+      invalid(key, raw, fallback);
+      return fallback;
+    }
+    return parsed;
+  };
+
+  const rawLanguage = read<unknown>('language');
+  let language = CONFIG_DEFAULTS.language;
+  if (rawLanguage === 'de' || rawLanguage === 'en') language = rawLanguage;
+  else if (rawLanguage !== undefined && rawLanguage !== null && rawLanguage !== '') {
+    invalid('language', rawLanguage, language);
   }
 
-  const rawTimezone = nonEmptyString(get('timezone'), CONFIG_DEFAULTS.timezone);
-  const timezone = isValidTimezone(rawTimezone) ? rawTimezone : CONFIG_DEFAULTS.timezone;
-  if (timezone !== rawTimezone) {
-    log?.(`config: unknown timezone '${rawTimezone}' — using ${CONFIG_DEFAULTS.timezone}`);
+  const rawTimezone = read<unknown>('timezone');
+  let timezone = CONFIG_DEFAULTS.timezone;
+  if (typeof rawTimezone === 'string' && rawTimezone.trim() !== '') {
+    if (isValidTimezone(rawTimezone.trim())) timezone = rawTimezone.trim();
+    else invalid('timezone', rawTimezone, timezone);
   }
+
+  const rawMail = read<unknown>('protocol_mail_enabled');
+  const protocolMailEnabled = rawMail === true || rawMail === 'true';
 
   return {
-    facilitatorAgentSlug: nonEmptyString(get('facilitator_agent_slug'), CONFIG_DEFAULTS.facilitatorAgentSlug),
-    initiatorRoleKey: nonEmptyString(get('initiator_role_key'), CONFIG_DEFAULTS.initiatorRoleKey),
-    reportChannelType: nonEmptyString(get('report_channel_type'), CONFIG_DEFAULTS.reportChannelType),
-    defaultTtlHours,
-    reportingMode,
-    moderationStyle: nonEmptyString(get('moderation_style'), CONFIG_DEFAULTS.moderationStyle),
     language,
-    discloseReportTarget,
-    autoSetup,
-    nudgesEnabled,
-    nudgeMinIntervalHours,
-    nudgeQuietHours,
     timezone,
+    // Descending, so "first reminder" is the one furthest from the deadline.
+    reminderOffsetsHours: [...list('reminder_offsets_hours', CONFIG_DEFAULTS.reminderOffsetsHours)].sort((a, b) => b - a),
+    changeWindowHours: positive('change_window_hours', CONFIG_DEFAULTS.changeWindowHours),
+    runoffWindowHours: positive('runoff_window_hours', CONFIG_DEFAULTS.runoffWindowHours),
+    confirmWindowMinutes: positive('confirm_window_minutes', CONFIG_DEFAULTS.confirmWindowMinutes),
+    rankedPoints: list('ranked_points', CONFIG_DEFAULTS.rankedPoints),
+    actionReminderLeadHours: positive('action_reminder_lead_hours', CONFIG_DEFAULTS.actionReminderLeadHours),
+    retentionDays: positive('retention_days', CONFIG_DEFAULTS.retentionDays, { integer: true }),
+    maxActivePerFacilitator: positive('max_active_per_facilitator', CONFIG_DEFAULTS.maxActivePerFacilitator, { integer: true }),
+    maxActiveInstance: positive('max_active_instance', CONFIG_DEFAULTS.maxActiveInstance, { integer: true }),
+    startsPerHourPerFacilitator: positive('starts_per_hour_per_facilitator', CONFIG_DEFAULTS.startsPerHourPerFacilitator, { integer: true }),
+    maxMessagesPerFacilitation: positive('max_messages_per_facilitation', CONFIG_DEFAULTS.maxMessagesPerFacilitation, { integer: true }),
+    protocolMailEnabled,
   };
 }
