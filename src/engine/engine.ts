@@ -76,7 +76,7 @@ export class FacilitationEngine {
     this.attachMembership();
     // What a previous process left undelivered is settled first.
     const waiting = await this.core.pool().query<{ facilitation_id: string }>(
-      `SELECT DISTINCT facilitation_id FROM facilitation_outbox WHERE status IN ('pending', 'sending')`,
+      `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_outbox WHERE status IN ('pending', 'sending')`,
     );
     for (const row of waiting.rows) await this.core.flush(row.facilitation_id);
     for (const f of await store.listSubscribed(this.core.pool())) {

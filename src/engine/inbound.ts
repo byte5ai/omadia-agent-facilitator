@@ -235,7 +235,7 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   if (w.f.phase === 'aborted' || w.f.phase === 'closed') result = { ...result, ended: true };
   await store.setInboundOutcome(w.tx, w.f.id, record.eventId, result.outcome);
   // Not a state change: the cursor moves without bumping the version.
-  await w.tx.query('UPDATE facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);
+  await w.tx.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [w.f.id, record.eventId]);
   return result;
 }
 

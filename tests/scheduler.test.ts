@@ -30,8 +30,8 @@ async function say(conv: string, who: string, text: string) {
   await h.settle();
   return record;
 }
-const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM facilitation_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
-const jobs = async (conv: string) => rows<Job>(h.db.pool, `SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 AND kind NOT IN ('lifetime', 'grant_revoke') ORDER BY due_at`, [(await h.facilitation(conv)).id]);
+const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
+const jobs = async (conv: string) => rows<Job>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind NOT IN ('lifetime', 'grant_revoke') ORDER BY due_at`, [(await h.facilitation(conv)).id]);
 /** A deadline `hours` from the current clock, ISO. */
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 async function at(deadline: Date, hoursBefore: number, plusMs = 1000): Promise<void> {
@@ -268,7 +268,7 @@ test('no silent end: a job that keeps failing ends the facilitation with an abor
   const conv = h.kernel.conversation('sc-jobfail', FOUR);
   const f = await startActive(h, conv, VOTE);
   await h.db.pool.query(
-    `INSERT INTO facilitation_jobs (facilitation_id, kind, dedupe_key, due_at, created_at) VALUES ($1, 'no_such_kind', $2, $3, $3)`,
+    `INSERT INTO plg_omadia_agent_facilitator_jobs (facilitation_id, kind, dedupe_key, due_at, created_at) VALUES ($1, 'no_such_kind', $2, $3, $3)`,
     [f.id, `${f.id}:broken`, h.clock.now()],
   );
   for (let i = 0; i < MAX_JOB_ATTEMPTS - 1; i += 1) {

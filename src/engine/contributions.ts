@@ -65,7 +65,7 @@ export async function supersedeByMessage(w: Work, messageId: string): Promise<Co
   if (!previous) return undefined;
   await store.patchContribution(w.tx, previous.id, { status: 'superseded' });
   await w.tx.query(
-    `UPDATE facilitation_acks SET status = 'cancelled', resolved_at = $3
+    `UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $3
       WHERE facilitation_id = $1 AND kind = 'contribution' AND ref_id = $2 AND status = 'pending'`,
     [w.f.id, previous.id, w.now],
   );
@@ -105,7 +105,7 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
 
   if (input.quiet) return contribution;
   if (input.interpreted) {
-    const ack = await insert<Ack>(w.tx, 'facilitation_acks', {
+    const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', {
       facilitationId: w.f.id,
       principal: author.principalId,
       kind: 'contribution',
@@ -145,7 +145,7 @@ const summaryOf = (c: Contribution): string => String(c.payload['summary'] ?? ''
 /** The author confirmed the echo: the contribution counts from now on. */
 export async function confirmContribution(w: Work, ack: Ack, author: Participant, messageId: string): Promise<Contribution | undefined> {
   const contribution = await store.getContribution(w.tx, ack.refId);
-  await update(w.tx, 'facilitation_acks', { id: ack.id }, { status: 'confirmed', resolvedAt: w.now, resolvedByMessageId: messageId });
+  await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'confirmed', resolvedAt: w.now, resolvedByMessageId: messageId });
   if (!contribution || contribution.status !== 'unconfirmed') return undefined;
   const confirmed = await store.patchContribution(w.tx, contribution.id, { status: 'valid' });
   w.bump();
@@ -165,7 +165,7 @@ export async function confirmContribution(w: Work, ack: Ack, author: Participant
 
 /** The author said the reading was wrong: nothing is recorded. */
 export async function declineContribution(w: Work, ack: Ack, author: Participant, messageId: string): Promise<void> {
-  await update(w.tx, 'facilitation_acks', { id: ack.id }, { status: 'declined', resolvedAt: w.now, resolvedByMessageId: messageId });
+  await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'declined', resolvedAt: w.now, resolvedByMessageId: messageId });
   const contribution = await store.getContribution(w.tx, ack.refId);
   if (contribution && contribution.status === 'unconfirmed') {
     await store.patchContribution(w.tx, contribution.id, { status: 'withdrawn' });
@@ -189,7 +189,7 @@ export async function withdrawByMessage(w: Work, messageId: string, author: Part
   if (!live) return false;
   await store.patchContribution(w.tx, live.id, { status: 'withdrawn' });
   await w.tx.query(
-    `UPDATE facilitation_acks SET status = 'cancelled', resolved_at = $3
+    `UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $3
       WHERE facilitation_id = $1 AND kind = 'contribution' AND ref_id = $2 AND status = 'pending'`,
     [w.f.id, live.id, w.now],
   );

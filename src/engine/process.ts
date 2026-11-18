@@ -79,7 +79,7 @@ export async function afterStepClosed(w: Work, _step: Step, ctx: { atDeadline: b
   if (w.f.phase !== 'active') return;
   if (await dodMet(w)) {
     // Steps that only wrap up are not run after the result is in.
-    await w.tx.query(`UPDATE facilitation_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
+    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
     await conclude(w, ctx);
     return;
   }
@@ -180,7 +180,7 @@ export async function proposeClusters(w: Work, step: Step, clusters: { label: st
       return found;
     });
     created.push(
-      await insert<Cluster>(w.tx, 'facilitation_clusters', {
+      await insert<Cluster>(w.tx, 'plg_omadia_agent_facilitator_clusters', {
         facilitationId: w.f.id,
         stepId: targetStepId,
         label: cluster.label,
@@ -282,12 +282,12 @@ export function installProcess(): void {
   registerProposalKind('clusters', {
     describe: (w, p) => texts(w.f.language).proposalKinds.clusters((p.payload['lines'] as string[]) ?? []),
     accept: async (w, p) => {
-      for (const id of (p.payload['clusterIds'] as string[]) ?? []) await update(w.tx, 'facilitation_clusters', { id }, { confirmed: true });
+      for (const id of (p.payload['clusterIds'] as string[]) ?? []) await update(w.tx, 'plg_omadia_agent_facilitator_clusters', { id }, { confirmed: true });
       await w.event('clusters_confirmed', 'group', { lines: p.payload['lines'] });
     },
     // A cluster the group did not confirm is not part of the record.
     reject: async (w, p) => {
-      for (const id of (p.payload['clusterIds'] as string[]) ?? []) await w.tx.query('DELETE FROM facilitation_clusters WHERE id = $1 AND confirmed = false', [id]);
+      for (const id of (p.payload['clusterIds'] as string[]) ?? []) await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_clusters WHERE id = $1 AND confirmed = false', [id]);
     },
   });
 
@@ -299,7 +299,7 @@ export function installProcess(): void {
   registerProposalKind('decision', {
     describe: (w, p) => texts(w.f.language).proposalKinds.decision(p.summary),
     accept: async (w, p) => {
-      await insert(w.tx, 'facilitation_decisions', {
+      await insert(w.tx, 'plg_omadia_agent_facilitator_decisions', {
         facilitationId: w.f.id,
         stepId: p.payload['stepId'] ?? null,
         statement: p.summary,

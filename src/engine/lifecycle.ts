@@ -340,7 +340,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       // No facilitation stays open forever.
       await insertIfAbsent(
         tx,
-        'facilitation_jobs',
+        'plg_omadia_agent_facilitator_jobs',
         {
           facilitationId: facilitation.id,
           kind: 'lifetime',
@@ -363,7 +363,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   } catch (err) {
     // Nothing was created: do not keep reading a conversation we do not moderate.
     if (!(await store.findLiveByConversation(pool, input.channelType, input.conversationId))) await messages.unsubscribe(input);
-    if (err instanceof Error && err.message.includes('facilitations_one_active_per_conversation')) {
+    if (err instanceof Error && err.message.includes('one_active_per_conversation')) {
       throw new Refusal('already_active', 'This conversation already has a facilitation.');
     }
     throw err;
@@ -442,9 +442,9 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
 
 /** What ends with a facilitation, in the same transaction as the phase change. */
 export async function releaseOnEnd(w: Work, retentionDays: number): Promise<void> {
-  await w.tx.query(`UPDATE facilitation_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
-  await w.tx.query(`UPDATE facilitation_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
-  await w.tx.query(`UPDATE facilitation_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
   await w.patch({ purgeAfter: new Date(w.now.getTime() + retentionDays * DAY_MS) });
 }
 
@@ -491,7 +491,7 @@ export async function releaseConversation(engine: EngineCore, f: Facilitation): 
   // Posting as the facilitator rides on the subscription: keep it until the
   // report is out.
   const undelivered = await engine.pool().query(
-    `SELECT 1 FROM facilitation_outbox WHERE facilitation_id = $1 AND delivery_class = 'essential' AND status IN ('pending', 'sending') LIMIT 1`,
+    `SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND delivery_class = 'essential' AND status IN ('pending', 'sending') LIMIT 1`,
     [f.id],
   );
   if (undelivered.rows.length > 0) return;

@@ -29,8 +29,8 @@ export interface NewActionItem {
 /** Propose an action item to its owner. It counts once they said yes. */
 export async function proposeActionItem(w: Work, input: NewActionItem): Promise<ActionItem> {
   const t = texts(w.f.language);
-  const next = await one<{ n: number }>(w.tx, 'SELECT coalesce(max(number), 0) + 1 AS n FROM facilitation_action_items WHERE facilitation_id = $1', [w.f.id]);
-  const item = await insert<ActionItem>(w.tx, 'facilitation_action_items', {
+  const next = await one<{ n: number }>(w.tx, 'SELECT coalesce(max(number), 0) + 1 AS n FROM plg_omadia_agent_facilitator_action_items WHERE facilitation_id = $1', [w.f.id]);
+  const item = await insert<ActionItem>(w.tx, 'plg_omadia_agent_facilitator_action_items', {
     facilitationId: w.f.id,
     decisionId: input.decisionId ?? null,
     number: next?.n ?? 1,
@@ -39,7 +39,7 @@ export async function proposeActionItem(w: Work, input: NewActionItem): Promise<
     dueDate: input.dueDate,
     createdAt: w.now,
   });
-  const ack = await insert<Ack>(w.tx, 'facilitation_acks', {
+  const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', {
     facilitationId: w.f.id,
     principal: input.owner.principalId,
     kind: 'action_item',
@@ -89,7 +89,7 @@ export function onFollowupEnded(hook: (w: Work) => Promise<void>): void {
 export async function endFollowup(w: Work): Promise<void> {
   if (w.f.followupState !== 'active') return;
   await w.patch({ followupState: 'ended' });
-  await w.tx.query(`UPDATE facilitation_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('action_reminder', 'action_status', 'followup_end')`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('action_reminder', 'action_status', 'followup_end')`, [w.f.id, w.now]);
   await w.event('followup_ended', 'engine', {});
   for (const hook of endHooks) await hook(w);
   w.post({ purpose: 'followup_ended', key: 'end', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).followupEnded() });
@@ -119,7 +119,7 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
     w.post({ purpose: 'action_not_yours', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionNotYours(author.displayName, number) });
     return { outcome: 'action_not_owner' };
   }
-  await update(w.tx, 'facilitation_action_items', { id: item.id }, { status: 'done', doneAt: w.now });
+  await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { status: 'done', doneAt: w.now });
   w.bump();
   await w.event('action_item_done', author.principalId, { number, messageId: record.messageId });
   w.post({ purpose: 'action_done', key: item.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionDone(author.displayName, number, item.description) });
@@ -135,10 +135,10 @@ export function installActionItems(): void {
   // The owner says yes or no in their own message.
   ackResolvers['action_item'] = async (w, ack, author, record, confirmed) => {
     const t = texts(w.f.language);
-    await update(w.tx, 'facilitation_acks', { id: ack.id }, { status: confirmed ? 'confirmed' : 'declined', resolvedAt: w.now, resolvedByMessageId: record.messageId });
-    const item = await one<ActionItem>(w.tx, 'SELECT * FROM facilitation_action_items WHERE id = $1', [ack.refId]);
+    await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: confirmed ? 'confirmed' : 'declined', resolvedAt: w.now, resolvedByMessageId: record.messageId });
+    const item = await one<ActionItem>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_action_items WHERE id = $1', [ack.refId]);
     if (!item || item.status !== 'proposed') return;
-    await update(w.tx, 'facilitation_action_items', { id: item.id }, confirmed ? { status: 'confirmed', ownerConfirmed: true, confirmedAt: w.now } : { status: 'declined' });
+    await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, confirmed ? { status: 'confirmed', ownerConfirmed: true, confirmedAt: w.now } : { status: 'declined' });
     w.bump();
     await w.event(confirmed ? 'action_item_confirmed' : 'action_item_declined', author.principalId, { number: item.number, messageId: record.messageId });
     w.post({
@@ -156,12 +156,12 @@ export function installActionItems(): void {
   // not arrive.
   registerJobHandler('action_reminder', async (w, job) => {
     if (w.f.followupState !== 'active') return;
-    const item = await one<ActionItem>(w.tx, 'SELECT * FROM facilitation_action_items WHERE id = $1', [String(job.payload['itemId'])]);
+    const item = await one<ActionItem>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_action_items WHERE id = $1', [String(job.payload['itemId'])]);
     if (!item || item.status !== 'confirmed') return;
     const owner = await store.getParticipant(w.tx, w.f.id, item.ownerPrincipal);
     if (!owner) return;
     const t = texts(w.f.language);
-    await update(w.tx, 'facilitation_action_items', { id: item.id }, { remindersSent: item.remindersSent + 1 });
+    await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { remindersSent: item.remindersSent + 1 });
     w.post({ purpose: 'action_reminder_direct', key: job.id, to: { principalId: owner.principalId }, deliveryClass: 'droppable', versionBound: false, text: t.actionReminder(owner.displayName, item.number, item.description, due(w, item)) });
     w.post({ purpose: 'action_reminder', key: job.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] });
     await w.event('action_item_reminder', 'engine', { number: item.number });

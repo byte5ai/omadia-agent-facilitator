@@ -58,7 +58,7 @@ async function ensureChatSession(w: Work): Promise<Session> {
   const existing = (await store.listSessions(w.tx, w.f.id)).find((s) => s.kind === 'async');
   if (existing) return existing;
   const snapshot = await fetchSnapshot(w.engine, w.f);
-  return insert<Session>(w.tx, 'facilitation_sessions', {
+  return insert<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', {
     facilitationId: w.f.id,
     kind: 'async',
     modality: 'chat',
@@ -82,7 +82,7 @@ export interface ScheduleInput {
 }
 
 export async function scheduleSession(w: Work, input: ScheduleInput): Promise<Session> {
-  const session = await insert<Session>(w.tx, 'facilitation_sessions', {
+  const session = await insert<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', {
     facilitationId: w.f.id,
     kind: 'live',
     title: input.title,
@@ -103,13 +103,13 @@ export async function scheduleSession(w: Work, input: ScheduleInput): Promise<Se
   return session;
 }
 
-const getSession = (q: Queryable, id: string): Promise<Session | undefined> => one<Session>(q, 'SELECT * FROM facilitation_sessions WHERE id = $1', [id]);
+const getSession = (q: Queryable, id: string): Promise<Session | undefined> => one<Session>(q, 'SELECT * FROM plg_omadia_agent_facilitator_sessions WHERE id = $1', [id]);
 
 async function sendAgenda(w: Work, session: Session): Promise<void> {
   if (session.agendaSentAt || session.status === 'cancelled' || session.status === 'ended') return;
   const t = texts(w.f.language);
   const steps = (await store.listSteps(w.tx, w.f.id)).filter((s) => s.kind !== 'open');
-  await update(w.tx, 'facilitation_sessions', { id: session.id }, { agendaSentAt: w.now });
+  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { agendaSentAt: w.now });
   w.post({
     purpose: 'session_agenda',
     key: session.id,
@@ -126,7 +126,7 @@ export async function startSession(w: Work, session: Session): Promise<Session> 
   const t = texts(w.f.language);
   const snapshot = await fetchSnapshot(w.engine, w.f, session.meetingRef ?? undefined);
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
-  const started = (await update<Session>(w.tx, 'facilitation_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
+  const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
   await sendAgenda(w, session);
   w.bump();
   await w.event('session_started', 'engine', { sessionId: session.id });
@@ -145,7 +145,7 @@ export async function startSession(w: Work, session: Session): Promise<Session> 
 
 export async function endSession(w: Work, session: Session): Promise<void> {
   if (session.status !== 'running') return;
-  await update(w.tx, 'facilitation_sessions', { id: session.id }, { status: 'ended', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
+  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'ended', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
   w.bump();
   await w.event('session_ended', 'engine', { sessionId: session.id });
   w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).sessionEnded(session.title ?? w.f.goal) });
@@ -153,7 +153,7 @@ export async function endSession(w: Work, session: Session): Promise<void> {
 
 // ── media consent and speech ────────────────────────────────────────────────
 
-const setConsent = (w: Work, sessionId: string, mediaConsent: MediaConsent): Promise<unknown> => update(w.tx, 'facilitation_sessions', { id: sessionId }, { mediaConsent });
+const setConsent = (w: Work, sessionId: string, mediaConsent: MediaConsent): Promise<unknown> => update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: sessionId }, { mediaConsent });
 
 /** Processing a call's speech starts only after the facilitator announced it
  *  and no participant objected. */
@@ -178,7 +178,7 @@ const stopListening: InboundHandler = async ({ w, record, author, command }) => 
   if (!session || (session.mediaConsent !== 'granted' && session.mediaConsent !== 'pending')) return undefined;
   await setConsent(w, session.id, 'withdrawn');
   const proposal = await store.openProposal(w.tx, w.f.id);
-  if (proposal?.kind === 'media_consent') await w.tx.query(`UPDATE facilitation_proposals SET status = 'withdrawn', decided_at = $2 WHERE id = $1`, [proposal.id, w.now]);
+  if (proposal?.kind === 'media_consent') await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE id = $1`, [proposal.id, w.now]);
   w.bump();
   await w.event('media_stopped', author.principalId, { sessionId: session.id, messageId: record.messageId });
   w.post({ purpose: 'media_stopped', key: record.eventId, to: 'group', deliveryClass: 'essential', text: texts(w.f.language).mediaStopped(author.displayName) });
@@ -210,7 +210,7 @@ export async function recordSpoken(w: Work, input: { speaker: string; kind: Cont
     interpreted: true,
     recordedAt: w.now,
   });
-  const ack = await insert<Ack>(w.tx, 'facilitation_acks', { facilitationId: w.f.id, principal: speaker.principalId, kind: 'contribution', refId: contribution.id, detail: { summary: input.summary }, createdAt: w.now });
+  const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', { facilitationId: w.f.id, principal: speaker.principalId, kind: 'contribution', refId: contribution.id, detail: { summary: input.summary }, createdAt: w.now });
   w.bump();
   await w.event('contribution_recorded', speaker.principalId, { contributionId: contribution.id, kind: input.kind, summary: input.summary, status: 'unconfirmed', source: 'speech' });
   w.post({
@@ -238,7 +238,7 @@ export async function applySnapshot(w: Work, snapshot: SessionCapabilitySnapshot
     (await ensureChatSession(w));
   const diff = diffSnapshots(snapshotOf(session), snapshot);
   if (!diff.changed) return;
-  await update(w.tx, 'facilitation_sessions', { id: session.id }, { capabilitySnapshot: { ...snapshot, modality: session.kind === 'live' ? session.modality : snapshot.modality } });
+  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { capabilitySnapshot: { ...snapshot, modality: session.kind === 'live' ? session.modality : snapshot.modality } });
   w.bump();
   await w.event('capabilities_changed', 'engine', { sessionId: session.id, gained: diff.gained, lost: diff.lost });
   const key = `${session.id}:${snapshot.capturedAt}`;

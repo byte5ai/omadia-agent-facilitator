@@ -109,7 +109,7 @@ export async function scoped(w: Work, engine: Pick<EngineCore, 'deps'>) {
 }
 
 const setGrant = (w: Work, state: 'active' | 'revoked'): Promise<unknown> =>
-  w.tx.query(`UPDATE facilitations SET settings = settings || jsonb_build_object('followupGrant', $2::text) WHERE id = $1`, [w.f.id, state]);
+  w.tx.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || jsonb_build_object('followupGrant', $2::text) WHERE id = $1`, [w.f.id, state]);
 
 /** Send the confirmed protocol to participants and confirmed stakeholders. */
 export async function dispatchProtocol(w: Work, engine: Pick<EngineCore, 'deps'>): Promise<void> {
@@ -188,7 +188,7 @@ export async function proposeStakeholder(w: Work, input: { displayName: string; 
   const participants = await store.listParticipants(w.tx, w.f.id);
   const known = participants.find((p) => p.displayName.toLowerCase() === input.displayName.toLowerCase());
   if (!known && input.address === undefined) throw new Refusal('bad_input', 'A stakeholder who is not in this conversation needs a mail address.');
-  const stakeholder = await insert<Stakeholder>(w.tx, 'facilitation_stakeholders', {
+  const stakeholder = await insert<Stakeholder>(w.tx, 'plg_omadia_agent_facilitator_stakeholders', {
     facilitationId: w.f.id,
     principal: known?.principalId ?? null,
     address: input.address ? lower(input.address) : (known?.email ?? null),
@@ -234,12 +234,12 @@ export function installCapabilities(): void {
   registerProposalKind('stakeholder', {
     describe: (_w, p) => p.summary,
     accept: async (w, p) => {
-      await update(w.tx, 'facilitation_stakeholders', { id: String(p.payload['stakeholderId']) }, { confirmed: true, confirmedAt: w.now });
+      await update(w.tx, 'plg_omadia_agent_facilitator_stakeholders', { id: String(p.payload['stakeholderId']) }, { confirmed: true, confirmedAt: w.now });
       await w.event('stakeholder_confirmed', 'group', { stakeholderId: p.payload['stakeholderId'] });
     },
     // Somebody the group did not confirm is not a stakeholder.
     reject: async (w, p) => {
-      await w.tx.query('DELETE FROM facilitation_stakeholders WHERE id = $1 AND confirmed = false', [String(p.payload['stakeholderId'])]);
+      await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_stakeholders WHERE id = $1 AND confirmed = false', [String(p.payload['stakeholderId'])]);
     },
   });
 

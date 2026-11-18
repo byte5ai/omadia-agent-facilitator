@@ -62,7 +62,7 @@ export async function openProposal(w: Work, input: NewProposal): Promise<Proposa
   const t = texts(w.f.language);
   const wanted = new Date(w.now.getTime() + input.windowMinutes * MINUTE_MS);
   const windowEndsAt = w.f.deadline && w.f.deadline < wanted ? w.f.deadline : wanted;
-  const proposal = await insert<Proposal>(w.tx, 'facilitation_proposals', {
+  const proposal = await insert<Proposal>(w.tx, 'plg_omadia_agent_facilitator_proposals', {
     facilitationId: w.f.id,
     kind: input.kind,
     summary: input.summary,
@@ -90,7 +90,7 @@ export async function openProposal(w: Work, input: NewProposal): Promise<Proposa
 
 const patchProposal = (w: Work, id: string, patch: Partial<Proposal>): Promise<unknown> =>
   w.tx.query(
-    `UPDATE facilitation_proposals SET
+    `UPDATE plg_omadia_agent_facilitator_proposals SET
        status = coalesce($2, status), consents = coalesce($3::jsonb, consents), objections = coalesce($4::jsonb, objections), decided_at = coalesce($5, decided_at)
      WHERE id = $1`,
     [id, patch.status ?? null, patch.consents ? JSON.stringify(patch.consents) : null, patch.objections ? JSON.stringify(patch.objections) : null, patch.decidedAt ?? null],

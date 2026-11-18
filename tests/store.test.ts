@@ -38,28 +38,28 @@ function newFacilitation(conversationId: string, overrides: Partial<store.NewFac
 }
 
 const EXPECTED_TABLES = [
-  'facilitation_access_audit',
-  'facilitation_acks',
-  'facilitation_action_items',
-  'facilitation_clusters',
-  'facilitation_contributions',
-  'facilitation_decisions',
-  'facilitation_dod_versions',
-  'facilitation_events',
-  'facilitation_inbound',
-  'facilitation_jobs',
-  'facilitation_outbox',
-  'facilitation_participants',
-  'facilitation_proposals',
-  'facilitation_sessions',
-  'facilitation_stakeholders',
-  'facilitation_steps',
-  'facilitations',
+  'plg_omadia_agent_facilitator_access_audit',
+  'plg_omadia_agent_facilitator_acks',
+  'plg_omadia_agent_facilitator_action_items',
+  'plg_omadia_agent_facilitator_clusters',
+  'plg_omadia_agent_facilitator_contributions',
+  'plg_omadia_agent_facilitator_decisions',
+  'plg_omadia_agent_facilitator_dod_versions',
+  'plg_omadia_agent_facilitator_events',
+  'plg_omadia_agent_facilitator_facilitations',
+  'plg_omadia_agent_facilitator_inbound',
+  'plg_omadia_agent_facilitator_jobs',
+  'plg_omadia_agent_facilitator_outbox',
+  'plg_omadia_agent_facilitator_participants',
+  'plg_omadia_agent_facilitator_proposals',
+  'plg_omadia_agent_facilitator_sessions',
+  'plg_omadia_agent_facilitator_stakeholders',
+  'plg_omadia_agent_facilitator_steps',
 ];
 
 test('migrations create every table of spec 5.1 and are recorded in the plugin ledger', { skip: PG_SKIP }, async () => {
   const result = await db.pool.query<{ tablename: string }>(
-    `SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename LIKE 'facilitation%' ORDER BY tablename`,
+    `SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename LIKE 'plg_omadia_agent_facilitator_%' AND tablename <> 'plg_omadia_agent_facilitator_migrations' ORDER BY tablename`,
     [db.schema],
   );
   assert.deepEqual(
@@ -73,7 +73,7 @@ test('migrations create every table of spec 5.1 and are recorded in the plugin l
 
 test('one active facilitation per conversation; a closed one frees the conversation', { skip: PG_SKIP }, async () => {
   const first = await store.createFacilitation(db.pool, newFacilitation('conv-unique'));
-  await assert.rejects(store.createFacilitation(db.pool, newFacilitation('conv-unique')), /facilitations_one_active_per_conversation/);
+  await assert.rejects(store.createFacilitation(db.pool, newFacilitation('conv-unique')), /plg_omadia_agent_facilitator_one_active_per_conversation/);
   await store.patchFacilitation(db.pool, first.id, { phase: 'closed', closedAt: T0 });
   const second = await store.createFacilitation(db.pool, newFacilitation('conv-unique'));
   assert.notEqual(second.id, first.id);
@@ -148,7 +148,7 @@ test('steps, participants, definition of done and contributions hang off the fac
     recordedAt: T0,
   };
   const first = await store.addContribution(db.pool, vote);
-  await assert.rejects(store.addContribution(db.pool, vote), /facilitation_contributions_source_unique/);
+  await assert.rejects(store.addContribution(db.pool, vote), /plg_omadia_agent_facilitator_contributions_source_unique/);
   await store.patchContribution(db.pool, first.id, { status: 'superseded' });
   await store.addContribution(db.pool, { ...vote, sourceRevision: 1, payload: { ranking: ['B', 'A'] } });
   assert.equal((await store.findLiveBySourceMessage(db.pool, f.id, 'm1'))?.sourceRevision, 1);
@@ -162,11 +162,11 @@ test('steps, participants, definition of done and contributions hang off the fac
 test('the protocol is append-only and goes away with its facilitation', { skip: PG_SKIP }, async () => {
   const f = await store.createFacilitation(db.pool, newFacilitation('conv-events'));
   const event = await store.appendEvent(db.pool, { facilitationId: f.id, kind: 'handshake', actor: 'engine', occurredAt: T0, payload: { text: 'hello' } });
-  await assert.rejects(db.pool.query('UPDATE facilitation_events SET kind = $1 WHERE id = $2', ['edited', event.id]), /append-only/);
-  await insert(db.pool, 'facilitation_access_audit', { facilitationId: f.id, action: 'content_read', actor: 'op@example.com', reason: 'complaint', occurredAt: T0 });
-  await db.pool.query('DELETE FROM facilitations WHERE id = $1', [f.id]);
+  await assert.rejects(db.pool.query('UPDATE plg_omadia_agent_facilitator_events SET kind = $1 WHERE id = $2', ['edited', event.id]), /append-only/);
+  await insert(db.pool, 'plg_omadia_agent_facilitator_access_audit', { facilitationId: f.id, action: 'content_read', actor: 'op@example.com', reason: 'complaint', occurredAt: T0 });
+  await db.pool.query('DELETE FROM plg_omadia_agent_facilitator_facilitations WHERE id = $1', [f.id]);
   assert.deepEqual(await store.listEvents(db.pool, f.id), []);
-  const audit = await db.pool.query('SELECT 1 FROM facilitation_access_audit WHERE facilitation_id = $1', [f.id]);
+  const audit = await db.pool.query('SELECT 1 FROM plg_omadia_agent_facilitator_access_audit WHERE facilitation_id = $1', [f.id]);
   assert.equal(audit.rowCount, 1, 'the audit outlives the facilitation');
 });
 
@@ -210,4 +210,19 @@ test('the facilitation lock serialises work across connections and a transaction
     );
   });
   assert.equal((await store.getFacilitation(db.pool, f.id))?.stateVersion, 0);
+});
+
+test('review 10: every table is inside the kernel-reserved plg_<plugin>_ namespace and the migration can run twice', { skip: PG_SKIP }, async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { MIGRATIONS_DIR } = await import('./pg.js');
+  const owned = await db.pool.query<{ tablename: string }>(`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename <> $2 ORDER BY tablename`, [db.schema, 'plg_omadia_agent_facilitator_migrations']);
+  assert.ok(owned.rows.length >= 17);
+  for (const { tablename } of owned.rows) assert.match(tablename, /^plg_omadia_agent_facilitator_[a-z_]+$/);
+  const indexes = await db.pool.query<{ indexname: string }>(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [db.schema]);
+  for (const { indexname } of indexes.rows) assert.ok(indexname.length <= 63 && indexname.startsWith('plg_omadia_agent_facilitator_'), indexname);
+  // Idempotent: the same bytes applied again, without the ledger in between.
+  for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+    await db.pool.query(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
+  }
 });

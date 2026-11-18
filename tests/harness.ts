@@ -84,7 +84,7 @@ export async function createHarness(opts: { config?: Partial<EngineConfig>; star
       await h.settle();
     },
     async facilitation(conversationId) {
-      const result = await db.pool.query<{ id: string }>('SELECT id FROM facilitations WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1', [conversationId]);
+      const result = await db.pool.query<{ id: string }>('SELECT id FROM plg_omadia_agent_facilitator_facilitations WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1', [conversationId]);
       const f = result.rows[0] ? await store.getFacilitation(db.pool, result.rows[0].id) : undefined;
       if (!f) throw new Error(`no facilitation in ${conversationId}`);
       return f;

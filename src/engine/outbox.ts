@@ -64,8 +64,8 @@ async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promis
 
 async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined): Promise<void> {
   if (!payload.link || messageId === undefined) return;
-  if (payload.link.kind === 'ack') await update(q, 'facilitation_acks', { id: payload.link.id }, { promptMessageId: messageId });
-  else await update(q, 'facilitation_proposals', { id: payload.link.id }, { announceMessageId: messageId });
+  if (payload.link.kind === 'ack') await update(q, 'plg_omadia_agent_facilitator_acks', { id: payload.link.id }, { promptMessageId: messageId });
+  else await update(q, 'plg_omadia_agent_facilitator_proposals', { id: payload.link.id }, { announceMessageId: messageId });
 }
 
 /** An essential message is retried with a growing pause, at most this often. */
@@ -91,17 +91,17 @@ export const retryDelayMs = (attempts: number): number => Math.min(RETRY_BASE_MS
  */
 async function recover(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
   await client.query(
-    `UPDATE facilitation_outbox SET status = 'dropped', drop_reason = 'outcome of an earlier attempt is unknown; droppable messages are not retried'
+    `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'outcome of an earlier attempt is unknown; droppable messages are not retried'
       WHERE facilitation_id = $1 AND status = 'sending' AND delivery_class = 'droppable'`,
     [facilitationId],
   );
   await client.query(
-    `UPDATE facilitation_outbox SET status = 'pending', last_error = 'outcome of an earlier attempt is unknown; retrying'
+    `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'pending', last_error = 'outcome of an earlier attempt is unknown; retrying'
       WHERE facilitation_id = $1 AND status = 'sending' AND delivery_class = 'essential'`,
     [facilitationId],
   );
   await client.query(
-    `UPDATE facilitation_outbox SET status = 'dropped', drop_reason = 'queued by an engine process that ended before sending it'
+    `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'queued by an engine process that ended before sending it'
       WHERE facilitation_id = $1 AND status = 'pending' AND delivery_class = 'droppable' AND owner <> $2`,
     [facilitationId, engine.instanceId],
   );
@@ -112,7 +112,7 @@ export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike,
   await recover(engine, client, facilitationId);
   const pending = await rows<OutboxRow>(
     client,
-    `SELECT * FROM facilitation_outbox
+    `SELECT * FROM plg_omadia_agent_facilitator_outbox
       WHERE facilitation_id = $1 AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= $2)
       ORDER BY seq`,
     [facilitationId, engine.now()],
@@ -125,7 +125,7 @@ export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike,
 }
 
 const drop = (q: Queryable, row: OutboxRow, reason: string): Promise<unknown> =>
-  update(q, 'facilitation_outbox', { id: row.id }, { status: 'dropped', dropReason: reason });
+  update(q, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', dropReason: reason });
 
 async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow): Promise<void> {
   // Re-check under the lock: the state the message was computed from must
@@ -151,7 +151,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   if (row.deliveryClass === 'droppable' && messageQuotaReached(f, engine.config.maxMessagesPerFacilitation)) {
     await drop(client, row, 'message quota of the facilitation reached');
     if (!f.quotaNoticeSent) {
-      await client.query('UPDATE facilitations SET quota_notice_sent = true WHERE id = $1', [f.id]);
+      await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET quota_notice_sent = true WHERE id = $1', [f.id]);
       await store.appendEvent(client, { facilitationId: f.id, kind: 'quota_reached', actor: 'engine', occurredAt: engine.now(), payload: { quota: 'messages', max: engine.config.maxMessagesPerFacilitation } });
       await engine.workOn(client, f.id, async (w) => {
         w.post({ purpose: 'system_notice', key: 'message_quota', to: 'group', deliveryClass: 'essential', text: texts(f.language).system.messageQuota(engine.config.maxMessagesPerFacilitation) });
@@ -161,7 +161,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   }
 
   // Recorded before the call, in its own committed statement.
-  await update(client, 'facilitation_outbox', { id: row.id }, { status: 'sending', attempts: row.attempts + 1, owner: engine.instanceId });
+  await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'sending', attempts: row.attempts + 1, owner: engine.instanceId });
   await engine.deps.hooks?.beforeChannelCall?.(row);
 
   let result: SendResult;
@@ -173,8 +173,8 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   await engine.deps.hooks?.afterChannelCall?.(row);
 
   if (result.ok) {
-    await update(client, 'facilitation_outbox', { id: row.id }, { status: 'sent', sentAt: engine.now(), channelMessageId: result.messageId ?? null });
-    await client.query('UPDATE facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
+    await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'sent', sentAt: engine.now(), channelMessageId: result.messageId ?? null });
+    await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
     await stampLink(client, row.payload as StoredPayload, result.messageId);
     await store.appendEvent(client, {
       facilitationId: f.id,
@@ -189,14 +189,14 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
   const error = `${result.code}: ${result.message}`;
   const attempts = row.attempts + 1;
   if (row.deliveryClass === 'droppable') {
-    await update(client, 'facilitation_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });
+    await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });
     engine.log(`facilitation ${f.id}: ${row.purpose} not delivered (${error}); not retried`);
     if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
     return;
   }
   const permanent = row.targetKind === 'direct' && PERMANENT_DIRECT_FAILURES.has(result.code);
   if (permanent || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
-    await update(client, 'facilitation_outbox', { id: row.id }, { status: 'failed', lastError: error });
+    await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
     await store.appendEvent(client, {
       facilitationId: f.id,
       kind: 'delivery_failed',
@@ -208,7 +208,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
     if (row.targetKind === 'direct') await noteUnreachable(engine, client, f, row, result.code);
     return;
   }
-  await update(client, 'facilitation_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
+  await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
   engine.log(`facilitation ${f.id}: essential ${row.purpose} not delivered (${error}); will retry`);
 }
 
@@ -224,7 +224,7 @@ async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Fa
   });
   if (row.targetPrincipal && !(f.settings.unreachable ?? []).includes(row.targetPrincipal)) {
     await client.query(
-      `UPDATE facilitations SET settings = jsonb_set(settings, '{unreachable}', coalesce(settings->'unreachable', '[]'::jsonb) || to_jsonb($2::text)) WHERE id = $1`,
+      `UPDATE plg_omadia_agent_facilitator_facilitations SET settings = jsonb_set(settings, '{unreachable}', coalesce(settings->'unreachable', '[]'::jsonb) || to_jsonb($2::text)) WHERE id = $1`,
       [f.id, row.targetPrincipal],
     );
   }
@@ -239,7 +239,7 @@ async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Fa
   if (f.settings.directNoticeSent === true || (f.phase !== 'active' && f.phase !== 'configuring')) return;
   await engine.workOn(client, f.id, async (w) => {
     // Not a state change: nothing that was computed becomes stale by it.
-    await w.tx.query(`UPDATE facilitations SET settings = settings || '{"directNoticeSent": true}'::jsonb WHERE id = $1`, [f.id]);
+    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"directNoticeSent": true}'::jsonb WHERE id = $1`, [f.id]);
     w.post({ purpose: 'direct_notice', key: 'once', to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(f.language).directUnreachable() });
   });
 }

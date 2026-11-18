@@ -65,7 +65,7 @@ const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 export async function listMetadata(q: Queryable, filter: { phase?: string; facilitator?: string; id?: string } = {}): Promise<FacilitationMetadata[]> {
   const facilitations = await rows<Facilitation>(
     q,
-    `SELECT * FROM facilitations
+    `SELECT * FROM plg_omadia_agent_facilitator_facilitations
       WHERE ($1::text IS NULL OR phase = $1) AND ($2::text IS NULL OR facilitator_agent = $2) AND ($3::uuid IS NULL OR id = $3)
       ORDER BY created_at DESC LIMIT 500`,
     [filter.phase ?? null, filter.facilitator ?? null, filter.id ?? null],
@@ -74,13 +74,13 @@ export async function listMetadata(q: Queryable, filter: { phase?: string; facil
   const counts = await rows<MetadataRow>(
     q,
     `SELECT f.id,
-            (SELECT count(*) FROM facilitation_participants p WHERE p.facilitation_id = f.id) AS participants,
-            (SELECT count(*) FROM facilitation_participants p WHERE p.facilitation_id = f.id AND p.status = 'active') AS active_participants,
-            (SELECT count(*) FROM facilitation_contributions c WHERE c.facilitation_id = f.id AND c.status = 'valid') AS contributions,
-            (SELECT count(*) FROM facilitation_decisions d WHERE d.facilitation_id = f.id) AS decisions,
-            (SELECT count(*) FROM facilitation_action_items a WHERE a.facilitation_id = f.id AND a.status <> 'declined') AS action_items,
-            (SELECT count(*) FROM facilitation_steps s WHERE s.facilitation_id = f.id) AS steps
-       FROM facilitations f WHERE f.id = ANY($1::uuid[])`,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_participants p WHERE p.facilitation_id = f.id) AS participants,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_participants p WHERE p.facilitation_id = f.id AND p.status = 'active') AS active_participants,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_contributions c WHERE c.facilitation_id = f.id AND c.status = 'valid') AS contributions,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_decisions d WHERE d.facilitation_id = f.id) AS decisions,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_action_items a WHERE a.facilitation_id = f.id AND a.status <> 'declined') AS action_items,
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_steps s WHERE s.facilitation_id = f.id) AS steps
+       FROM plg_omadia_agent_facilitator_facilitations f WHERE f.id = ANY($1::uuid[])`,
     [`{${facilitations.map((f) => f.id).join(',')}}`],
   );
   const byId = new Map(counts.map((c) => [c.id, c]));
@@ -124,7 +124,7 @@ function requireReason(reason: string | undefined): string {
 }
 
 async function audit(engine: EngineCore, facilitationId: string, action: AccessAudit['action'], actor: string, reason: string): Promise<void> {
-  await insert<AccessAudit>(engine.pool(), 'facilitation_access_audit', { facilitationId, action, actor, reason, occurredAt: engine.now() });
+  await insert<AccessAudit>(engine.pool(), 'plg_omadia_agent_facilitator_access_audit', { facilitationId, action, actor, reason, occurredAt: engine.now() });
 }
 
 /** Contents and protocol for an operator: audited, with a stated reason, and
@@ -150,7 +150,7 @@ export async function operatorTerminate(engine: EngineCore, facilitationId: stri
 }
 
 export const listAudit = (q: Queryable, facilitationId: string): Promise<AccessAudit[]> =>
-  rows<AccessAudit>(q, 'SELECT * FROM facilitation_access_audit WHERE facilitation_id = $1 ORDER BY id', [facilitationId]);
+  rows<AccessAudit>(q, 'SELECT * FROM plg_omadia_agent_facilitator_access_audit WHERE facilitation_id = $1 ORDER BY id', [facilitationId]);
 
 // ── quotas ──────────────────────────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ export async function checkStartQuota(engine: EngineCore, facilitatorAgent: stri
  *  the chat stays where the channel keeps it. The access audit stays too. */
 export async function purgeExpired(engine: EngineCore): Promise<string[]> {
   const deleted = await engine.pool().query<{ id: string }>(
-    `DELETE FROM facilitations
+    `DELETE FROM plg_omadia_agent_facilitator_facilitations
       WHERE purge_after IS NOT NULL AND purge_after <= $1 AND phase IN ('closed', 'aborted') AND followup_state <> 'active'
       RETURNING id`,
     [engine.now()],

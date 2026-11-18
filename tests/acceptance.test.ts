@@ -63,7 +63,7 @@ const everybody = async (conv: string, text: string, who = ['anna', 'bert', 'car
 };
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 const reminderDms = (): number => h.kernel.dms.filter((d) => d.text.includes('is still open')).length;
-const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM facilitation_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
+const outbox = async (conv: string) => rows<OutboxRow>(h.db.pool, 'SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 ORDER BY seq', [(await h.facilitation(conv)).id]);
 
 test('1. field scenario: four people, ranked vote 3/2/1, deadline in three days, two votes without a mention, restart in between', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('ac-01', FOUR);
@@ -428,7 +428,7 @@ test('11. visibility: a user outside the conversation cannot read a protocol; op
 test('12. no silent end: a failed step and a reached lifetime produce an abort report in the group; a reached quota produces a system notice', { skip: PG_SKIP }, async () => {
   const failed = h.kernel.conversation('ac-12-failed', [ANNA, BERT]);
   const ff = await startActive(h, failed, VENUES);
-  await h.db.pool.query(`INSERT INTO facilitation_jobs (facilitation_id, kind, dedupe_key, due_at, created_at) VALUES ($1, 'broken_step', $2, $3, $3)`, [ff.id, `${ff.id}:broken`, h.clock.now()]);
+  await h.db.pool.query(`INSERT INTO plg_omadia_agent_facilitator_jobs (facilitation_id, kind, dedupe_key, due_at, created_at) VALUES ($1, 'broken_step', $2, $3, $3)`, [ff.id, `${ff.id}:broken`, h.clock.now()]);
   for (let i = 0; i < 5; i += 1) await h.tick();
   assert.equal((await h.facilitation(failed)).phase, 'aborted');
   assert.equal(last(failed), 'This facilitation ends without a result. Reason: an internal step failed repeatedly and could not be completed');

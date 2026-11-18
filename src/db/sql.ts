@@ -5,23 +5,23 @@
 import type { Queryable } from './pool.js';
 
 export type Table =
-  | 'facilitations'
-  | 'facilitation_sessions'
-  | 'facilitation_stakeholders'
-  | 'facilitation_steps'
-  | 'facilitation_participants'
-  | 'facilitation_dod_versions'
-  | 'facilitation_contributions'
-  | 'facilitation_clusters'
-  | 'facilitation_decisions'
-  | 'facilitation_action_items'
-  | 'facilitation_events'
-  | 'facilitation_outbox'
-  | 'facilitation_inbound'
-  | 'facilitation_jobs'
-  | 'facilitation_proposals'
-  | 'facilitation_acks'
-  | 'facilitation_access_audit';
+  | 'plg_omadia_agent_facilitator_facilitations'
+  | 'plg_omadia_agent_facilitator_sessions'
+  | 'plg_omadia_agent_facilitator_stakeholders'
+  | 'plg_omadia_agent_facilitator_steps'
+  | 'plg_omadia_agent_facilitator_participants'
+  | 'plg_omadia_agent_facilitator_dod_versions'
+  | 'plg_omadia_agent_facilitator_contributions'
+  | 'plg_omadia_agent_facilitator_clusters'
+  | 'plg_omadia_agent_facilitator_decisions'
+  | 'plg_omadia_agent_facilitator_action_items'
+  | 'plg_omadia_agent_facilitator_events'
+  | 'plg_omadia_agent_facilitator_outbox'
+  | 'plg_omadia_agent_facilitator_inbound'
+  | 'plg_omadia_agent_facilitator_jobs'
+  | 'plg_omadia_agent_facilitator_proposals'
+  | 'plg_omadia_agent_facilitator_acks'
+  | 'plg_omadia_agent_facilitator_access_audit';
 
 const toSnake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const toCamel = (key: string): string => key.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());

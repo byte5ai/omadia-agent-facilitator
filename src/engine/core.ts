@@ -203,7 +203,7 @@ export class EngineCore {
     const versionBound = m.versionBound ?? m.deliveryClass === 'droppable';
     await insertIfAbsent<OutboxRow>(
       tx,
-      'facilitation_outbox',
+      'plg_omadia_agent_facilitator_outbox',
       {
         facilitationId,
         idempotencyKey: `${facilitationId}:${m.purpose}:${m.key ?? randomUUID()}`,

@@ -178,7 +178,7 @@ test('retention: records are deleted 90 days after the close; the audit of an op
   h.clock.advance(2 * DAY_MS);
   await h.tick();
   assert.equal(await store.getFacilitation(h.db.pool, f.id), undefined);
-  for (const table of ['facilitation_contributions', 'facilitation_events', 'facilitation_participants', 'facilitation_outbox', 'facilitation_decisions']) {
+  for (const table of ['plg_omadia_agent_facilitator_contributions', 'plg_omadia_agent_facilitator_events', 'plg_omadia_agent_facilitator_participants', 'plg_omadia_agent_facilitator_outbox', 'plg_omadia_agent_facilitator_decisions']) {
     const left = await h.db.pool.query(`SELECT 1 FROM ${table} WHERE facilitation_id = $1`, [f.id]);
     assert.equal(left.rows.length, 0, table);
   }

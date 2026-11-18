@@ -206,7 +206,7 @@ export function installTransparency(): void {
   registerProposalKind('dod_met', {
     describe: (w, p) => texts(w.f.language).change.dod_met(p.summary),
     accept: async (w) => {
-      await w.tx.query(`UPDATE facilitation_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
+      await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
       await conclude(w, { atDeadline: false });
     },
   });

@@ -7,8 +7,12 @@
 --
 -- Applied by the kernel's plugin migration runner in ONE transaction under an
 -- advisory lock; the ledger is plg_omadia_agent_facilitator_migrations.
+--
+-- Every object lives in the kernel-reserved plg_omadia_agent_facilitator_
+-- namespace, where no core table and no other plugin's table can be. Every
+-- statement is idempotent, so a pass that is repeated changes nothing.
 
-CREATE TABLE facilitations (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_facilitations (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   facilitator_agent     text NOT NULL,
   channel_type          text NOT NULL,
@@ -50,16 +54,16 @@ CREATE TABLE facilitations (
 );
 
 -- One active facilitation per conversation.
-CREATE UNIQUE INDEX facilitations_one_active_per_conversation
-  ON facilitations (channel_type, conversation_id)
+CREATE UNIQUE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_one_active_per_conversation
+  ON plg_omadia_agent_facilitator_facilitations (channel_type, conversation_id)
   WHERE phase IN ('configuring', 'active', 'concluding');
-CREATE INDEX facilitations_by_facilitator ON facilitations (facilitator_agent, phase);
-CREATE INDEX facilitations_by_conversation ON facilitations (channel_type, conversation_id, created_at DESC);
-CREATE INDEX facilitations_purge ON facilitations (purge_after) WHERE purge_after IS NOT NULL;
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_by_facilitator ON plg_omadia_agent_facilitator_facilitations (facilitator_agent, phase);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_by_conversation ON plg_omadia_agent_facilitator_facilitations (channel_type, conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_purge ON plg_omadia_agent_facilitator_facilitations (purge_after) WHERE purge_after IS NOT NULL;
 
-CREATE TABLE facilitation_sessions (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_sessions (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id     uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id     uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   kind                text NOT NULL CHECK (kind IN ('async', 'live')),
   title               text,
   scheduled_start     timestamptz,
@@ -77,11 +81,11 @@ CREATE TABLE facilitation_sessions (
   ended_at            timestamptz,
   created_at          timestamptz NOT NULL
 );
-CREATE INDEX facilitation_sessions_by_facilitation ON facilitation_sessions (facilitation_id, status);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_sessions_by_facilitation ON plg_omadia_agent_facilitator_sessions (facilitation_id, status);
 
-CREATE TABLE facilitation_stakeholders (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_stakeholders (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   principal       text,
   address         text,
   display_name    text,
@@ -92,12 +96,12 @@ CREATE TABLE facilitation_stakeholders (
   created_at      timestamptz NOT NULL,
   CHECK (principal IS NOT NULL OR address IS NOT NULL)
 );
-CREATE INDEX facilitation_stakeholders_by_facilitation ON facilitation_stakeholders (facilitation_id);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_stakeholders_by_facilitation ON plg_omadia_agent_facilitator_stakeholders (facilitation_id);
 
 -- The agenda.
-CREATE TABLE facilitation_steps (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_steps (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   position        integer NOT NULL,
   kind            text NOT NULL
     CHECK (kind IN ('open', 'collect', 'discuss', 'cluster', 'prioritise', 'decide', 'assign', 'close')),
@@ -118,8 +122,8 @@ CREATE TABLE facilitation_steps (
   UNIQUE (facilitation_id, position)
 );
 
-CREATE TABLE facilitation_participants (
-  facilitation_id     uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_participants (
+  facilitation_id     uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   -- Authenticated channel user id, as the kernel event states it.
   principal_id        text NOT NULL,
   -- Canonical principal ('user:<id>') once an event carried it.
@@ -135,9 +139,9 @@ CREATE TABLE facilitation_participants (
   PRIMARY KEY (facilitation_id, principal_id)
 );
 
-CREATE TABLE facilitation_dod_versions (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_dod_versions (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id     uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id     uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   version             integer NOT NULL,
   text                text NOT NULL,
   -- Machine-checkable criteria; NULL means free text, confirmed by the group.
@@ -151,10 +155,10 @@ CREATE TABLE facilitation_dod_versions (
   UNIQUE (facilitation_id, version)
 );
 
-CREATE TABLE facilitation_contributions (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_contributions (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id       uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
-  step_id               uuid NOT NULL REFERENCES facilitation_steps (id) ON DELETE CASCADE,
+  facilitation_id       uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
+  step_id               uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_steps (id) ON DELETE CASCADE,
   round                 integer NOT NULL DEFAULT 1,
   participant_principal text NOT NULL,
   kind                  text NOT NULL
@@ -178,42 +182,42 @@ CREATE TABLE facilitation_contributions (
   CHECK (source = 'speech' OR source_message_id IS NOT NULL)
 );
 -- A message is the source of at most one live contribution per facilitation.
-CREATE UNIQUE INDEX facilitation_contributions_source_unique
-  ON facilitation_contributions (facilitation_id, source_message_id)
+CREATE UNIQUE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_contributions_source_unique
+  ON plg_omadia_agent_facilitator_contributions (facilitation_id, source_message_id)
   WHERE status IN ('valid', 'unconfirmed', 'ambiguous');
-CREATE INDEX facilitation_contributions_by_step
-  ON facilitation_contributions (step_id, round, participant_principal, status);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_contributions_by_step
+  ON plg_omadia_agent_facilitator_contributions (step_id, round, participant_principal, status);
 
-CREATE TABLE facilitation_clusters (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_clusters (
   id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- The order the clusters were proposed in.
   seq                     bigserial NOT NULL,
-  facilitation_id         uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
-  step_id                 uuid NOT NULL REFERENCES facilitation_steps (id) ON DELETE CASCADE,
+  facilitation_id         uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
+  step_id                 uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_steps (id) ON DELETE CASCADE,
   label                   text NOT NULL,
   member_contribution_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
   proposed_by_facilitator boolean NOT NULL DEFAULT true,
   confirmed               boolean NOT NULL DEFAULT false,
   created_at              timestamptz NOT NULL
 );
-CREATE INDEX facilitation_clusters_by_step ON facilitation_clusters (step_id);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_clusters_by_step ON plg_omadia_agent_facilitator_clusters (step_id);
 
-CREATE TABLE facilitation_decisions (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_decisions (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
-  step_id         uuid REFERENCES facilitation_steps (id) ON DELETE SET NULL,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
+  step_id         uuid REFERENCES plg_omadia_agent_facilitator_steps (id) ON DELETE SET NULL,
   statement       text NOT NULL,
   method          text NOT NULL,
   result          jsonb NOT NULL DEFAULT '{}'::jsonb,
   rationale       text,
   decided_at      timestamptz NOT NULL
 );
-CREATE INDEX facilitation_decisions_by_facilitation ON facilitation_decisions (facilitation_id);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_decisions_by_facilitation ON plg_omadia_agent_facilitator_decisions (facilitation_id);
 
-CREATE TABLE facilitation_action_items (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_action_items (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
-  decision_id     uuid REFERENCES facilitation_decisions (id) ON DELETE SET NULL,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
+  decision_id     uuid REFERENCES plg_omadia_agent_facilitator_decisions (id) ON DELETE SET NULL,
   number          integer NOT NULL,
   description     text NOT NULL,
   owner_principal text NOT NULL,
@@ -231,33 +235,34 @@ CREATE TABLE facilitation_action_items (
 
 -- Append-only protocol: posts, reminders, changes, decisions, reports, every
 -- use of a scoped capability.
-CREATE TABLE facilitation_events (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_events (
   id              bigserial PRIMARY KEY,
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   kind            text NOT NULL,
   actor           text NOT NULL,
   payload         jsonb NOT NULL DEFAULT '{}'::jsonb,
   occurred_at     timestamptz NOT NULL
 );
-CREATE INDEX facilitation_events_by_facilitation ON facilitation_events (facilitation_id, id);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_events_by_facilitation ON plg_omadia_agent_facilitator_events (facilitation_id, id);
 
-CREATE FUNCTION facilitation_events_append_only() RETURNS trigger
+CREATE OR REPLACE FUNCTION plg_omadia_agent_facilitator_events_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  RAISE EXCEPTION 'facilitation_events is append-only';
+  RAISE EXCEPTION 'plg_omadia_agent_facilitator_events is append-only';
 END;
 $$;
 -- Rows go away only with their facilitation (retention); they never change.
-CREATE TRIGGER facilitation_events_no_update
-  BEFORE UPDATE ON facilitation_events
-  FOR EACH ROW EXECUTE FUNCTION facilitation_events_append_only();
+DROP TRIGGER IF EXISTS plg_omadia_agent_facilitator_events_no_update ON plg_omadia_agent_facilitator_events;
+CREATE TRIGGER plg_omadia_agent_facilitator_events_no_update
+  BEFORE UPDATE ON plg_omadia_agent_facilitator_events
+  FOR EACH ROW EXECUTE FUNCTION plg_omadia_agent_facilitator_events_append_only();
 
 -- Every channel send is recorded here before the call.
-CREATE TABLE facilitation_outbox (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_outbox (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- Delivery order: messages of one facilitation go out as they were queued.
   seq                    bigserial NOT NULL,
-  facilitation_id        uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id        uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   idempotency_key        text NOT NULL UNIQUE,
   purpose                text NOT NULL,
   target_kind            text NOT NULL CHECK (target_kind IN ('group', 'direct')),
@@ -281,12 +286,12 @@ CREATE TABLE facilitation_outbox (
   sent_at                timestamptz,
   CHECK (target_kind = 'group' OR target_principal IS NOT NULL)
 );
-CREATE INDEX facilitation_outbox_pending ON facilitation_outbox (facilitation_id, seq)
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_outbox_pending ON plg_omadia_agent_facilitator_outbox (facilitation_id, seq)
   WHERE status IN ('pending', 'sending');
 
 -- Inbound ledger: an event is processed once, whatever the kernel redelivers.
-CREATE TABLE facilitation_inbound (
-  facilitation_id  uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_inbound (
+  facilitation_id  uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   event_id         text NOT NULL,
   message_id       text NOT NULL,
   revision         integer NOT NULL,
@@ -296,12 +301,12 @@ CREATE TABLE facilitation_inbound (
   processed_at     timestamptz NOT NULL,
   PRIMARY KEY (facilitation_id, event_id)
 );
-CREATE INDEX facilitation_inbound_by_message ON facilitation_inbound (facilitation_id, message_id, revision);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_inbound_by_message ON plg_omadia_agent_facilitator_inbound (facilitation_id, message_id, revision);
 
 -- Time-based work. A job runs under a lease, so two replicas never both fire it.
-CREATE TABLE facilitation_jobs (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_jobs (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   kind            text NOT NULL,
   dedupe_key      text NOT NULL UNIQUE,
   due_at          timestamptz NOT NULL,
@@ -315,14 +320,14 @@ CREATE TABLE facilitation_jobs (
   created_at      timestamptz NOT NULL,
   finished_at     timestamptz
 );
-CREATE INDEX facilitation_jobs_due ON facilitation_jobs (due_at) WHERE status = 'pending';
-CREATE INDEX facilitation_jobs_by_facilitation ON facilitation_jobs (facilitation_id, status);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_jobs_due ON plg_omadia_agent_facilitator_jobs (due_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_jobs_by_facilitation ON plg_omadia_agent_facilitator_jobs (facilitation_id, status);
 
 -- A consent decision the facilitator puts to the group: rule changes, clusters,
 -- summaries, closing a step, the binding close.
-CREATE TABLE facilitation_proposals (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_proposals (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id     uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id     uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   kind                text NOT NULL,
   summary             text NOT NULL,
   payload             jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -338,14 +343,14 @@ CREATE TABLE facilitation_proposals (
   decided_at          timestamptz
 );
 -- One open proposal at a time, so "agreed" and "objection" are never ambiguous.
-CREATE UNIQUE INDEX facilitation_proposals_one_open
-  ON facilitation_proposals (facilitation_id) WHERE status = 'open';
+CREATE UNIQUE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_proposals_one_open
+  ON plg_omadia_agent_facilitator_proposals (facilitation_id) WHERE status = 'open';
 
 -- Something one person has to confirm in their own message: the echo of a
 -- contribution read from free text, a nomination, an action item.
-CREATE TABLE facilitation_acks (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_acks (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  facilitation_id        uuid NOT NULL REFERENCES facilitations (id) ON DELETE CASCADE,
+  facilitation_id        uuid NOT NULL REFERENCES plg_omadia_agent_facilitator_facilitations (id) ON DELETE CASCADE,
   principal              text NOT NULL,
   kind                   text NOT NULL CHECK (kind IN ('contribution', 'nomination', 'action_item')),
   ref_id                 uuid NOT NULL,
@@ -357,11 +362,11 @@ CREATE TABLE facilitation_acks (
   resolved_at            timestamptz,
   resolved_by_message_id text
 );
-CREATE INDEX facilitation_acks_pending ON facilitation_acks (facilitation_id, principal) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_acks_pending ON plg_omadia_agent_facilitator_acks (facilitation_id, principal) WHERE status = 'pending';
 
 -- Operator access to contents, and operator terminations. No foreign key:
 -- the audit outlives the facilitation it is about.
-CREATE TABLE facilitation_access_audit (
+CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_access_audit (
   id              bigserial PRIMARY KEY,
   facilitation_id uuid NOT NULL,
   action          text NOT NULL CHECK (action IN ('content_read', 'terminate')),
@@ -369,4 +374,4 @@ CREATE TABLE facilitation_access_audit (
   reason          text NOT NULL,
   occurred_at     timestamptz NOT NULL
 );
-CREATE INDEX facilitation_access_audit_by_facilitation ON facilitation_access_audit (facilitation_id, id);
+CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_access_audit_by_facilitation ON plg_omadia_agent_facilitator_access_audit (facilitation_id, id);

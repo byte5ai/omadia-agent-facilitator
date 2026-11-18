@@ -79,7 +79,7 @@ test('the result goes to the group first, then to the initiator with the protoco
   const dmsBefore = h.kernel.dms.length;
   for (const who of ['anna', 'bert', 'cara', 'dave']) await say(conv, who, 'A');
   const f = await h.facilitation(conv);
-  const sent = (await rows<OutboxRow>(h.db.pool, `SELECT * FROM facilitation_outbox WHERE facilitation_id = $1 AND status = 'sent' ORDER BY sent_at, seq`, [f.id])).map((r) => r.purpose);
+  const sent = (await rows<OutboxRow>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND status = 'sent' ORDER BY sent_at, seq`, [f.id])).map((r) => r.purpose);
   assert.ok(sent.indexOf('result') < sent.indexOf('initiator_report'), 'group first');
   const report = h.kernel.dms.slice(dmsBefore).filter((d) => d.text.includes('you started this facilitation'));
   assert.deepEqual(report.map((d) => [d.as, d.principal]), [['mira', 'user:anna']]);
@@ -213,7 +213,7 @@ test('moving the deadline moves the reminders with it', { skip: PG_SKIP }, async
   await say(conv, 'bert', 'agreed');
   assert.match(last(conv), /^The deadline is now .*Reminders move with it\./);
   assert.equal((await h.facilitation(conv)).deadline?.toISOString(), next);
-  const pending = (await rows<Job>(h.db.pool, `SELECT * FROM facilitation_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime' ORDER BY due_at`, [f.id])).map((j) => [j.kind, j.dueAt.toISOString()]);
+  const pending = (await rows<Job>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime' ORDER BY due_at`, [f.id])).map((j) => [j.kind, j.dueAt.toISOString()]);
   const at = (hours: number): string => new Date(Date.parse(next) - hours * HOUR_MS).toISOString();
   assert.deepEqual(pending, [['reminder', at(24)], ['reminder', at(2)], ['deadline', next]]);
 });

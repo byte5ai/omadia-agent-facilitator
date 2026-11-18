@@ -43,10 +43,10 @@ export type NewFacilitation = Pick<
   Partial<Pick<Facilitation, 'tenantId' | 'deadline' | 'initiatorParticipant'>>;
 
 export const createFacilitation = (q: Queryable, values: NewFacilitation): Promise<Facilitation> =>
-  insert<Facilitation>(q, 'facilitations', { ...values });
+  insert<Facilitation>(q, 'plg_omadia_agent_facilitator_facilitations', { ...values });
 
 export const getFacilitation = (q: Queryable, id: string): Promise<Facilitation | undefined> =>
-  one<Facilitation>(q, 'SELECT * FROM facilitations WHERE id = $1', [id]);
+  one<Facilitation>(q, 'SELECT * FROM plg_omadia_agent_facilitator_facilitations WHERE id = $1', [id]);
 
 /** The one facilitation of a conversation that is configuring, active or concluding. */
 export const findLiveByConversation = (
@@ -56,7 +56,7 @@ export const findLiveByConversation = (
 ): Promise<Facilitation | undefined> =>
   one<Facilitation>(
     q,
-    `SELECT * FROM facilitations
+    `SELECT * FROM plg_omadia_agent_facilitator_facilitations
       WHERE channel_type = $1 AND conversation_id = $2 AND phase IN ('configuring', 'active', 'concluding')`,
     [channelType, conversationId],
   );
@@ -72,7 +72,7 @@ export async function findRoutableByConversation(
   if (live) return live;
   return one<Facilitation>(
     q,
-    `SELECT * FROM facilitations
+    `SELECT * FROM plg_omadia_agent_facilitator_facilitations
       WHERE channel_type = $1 AND conversation_id = $2 AND followup_state = 'active'
       ORDER BY closed_at DESC NULLS LAST LIMIT 1`,
     [channelType, conversationId],
@@ -83,7 +83,7 @@ export async function findRoutableByConversation(
 export const listSubscribed = (q: Queryable): Promise<Facilitation[]> =>
   rows<Facilitation>(
     q,
-    `SELECT * FROM facilitations
+    `SELECT * FROM plg_omadia_agent_facilitator_facilitations
       WHERE phase IN ('configuring', 'active', 'concluding') OR followup_state = 'active'
       ORDER BY created_at`,
   );
@@ -92,13 +92,13 @@ export const patchFacilitation = (
   q: Queryable,
   id: string,
   patch: Partial<Facilitation>,
-): Promise<Facilitation | undefined> => update<Facilitation>(q, 'facilitations', { id }, { ...patch });
+): Promise<Facilitation | undefined> => update<Facilitation>(q, 'plg_omadia_agent_facilitator_facilitations', { id }, { ...patch });
 
 /** Bump `state_version`; every contribution, phase and rule change does. */
 export async function bumpStateVersion(q: Queryable, id: string): Promise<number> {
   const row = await one<{ stateVersion: number }>(
     q,
-    'UPDATE facilitations SET state_version = state_version + 1 WHERE id = $1 RETURNING state_version',
+    'UPDATE plg_omadia_agent_facilitator_facilitations SET state_version = state_version + 1 WHERE id = $1 RETURNING state_version',
     [id],
   );
   if (!row) throw new Error(`facilitation ${id} does not exist`);
@@ -112,7 +112,7 @@ export async function countByPhase(
 ): Promise<number> {
   const row = await one<{ n: string }>(
     q,
-    `SELECT count(*) AS n FROM facilitations
+    `SELECT count(*) AS n FROM plg_omadia_agent_facilitator_facilitations
       WHERE phase = ANY($1::text[]) AND ($2::text IS NULL OR facilitator_agent = $2)`,
     [`{${phases.join(',')}}`, facilitatorAgent ?? null],
   );
@@ -122,7 +122,7 @@ export async function countByPhase(
 export async function countStartsSince(q: Queryable, facilitatorAgent: string, since: Date): Promise<number> {
   const row = await one<{ n: string }>(
     q,
-    'SELECT count(*) AS n FROM facilitations WHERE facilitator_agent = $1 AND created_at > $2',
+    'SELECT count(*) AS n FROM plg_omadia_agent_facilitator_facilitations WHERE facilitator_agent = $1 AND created_at > $2',
     [facilitatorAgent, since],
   );
   return Number(row?.n ?? 0);
@@ -133,7 +133,7 @@ export async function countStartsSince(q: Queryable, facilitatorAgent: string, s
 export const listParticipants = (q: Queryable, facilitationId: string): Promise<Participant[]> =>
   rows<Participant>(
     q,
-    'SELECT * FROM facilitation_participants WHERE facilitation_id = $1 ORDER BY joined_at, display_name',
+    'SELECT * FROM plg_omadia_agent_facilitator_participants WHERE facilitation_id = $1 ORDER BY joined_at, display_name',
     [facilitationId],
   );
 
@@ -142,7 +142,7 @@ export const getParticipant = (
   facilitationId: string,
   principalId: string,
 ): Promise<Participant | undefined> =>
-  one<Participant>(q, 'SELECT * FROM facilitation_participants WHERE facilitation_id = $1 AND principal_id = $2', [
+  one<Participant>(q, 'SELECT * FROM plg_omadia_agent_facilitator_participants WHERE facilitation_id = $1 AND principal_id = $2', [
     facilitationId,
     principalId,
   ]);
@@ -152,7 +152,7 @@ export const addParticipant = (
   values: Pick<Participant, 'facilitationId' | 'principalId' | 'displayName' | 'source' | 'joinedAt' | 'changedAt'> &
     Partial<Pick<Participant, 'canonicalPrincipal' | 'email' | 'changedByEvent'>>,
 ): Promise<Participant | undefined> =>
-  insertIfAbsent<Participant>(q, 'facilitation_participants', { ...values }, '(facilitation_id, principal_id)');
+  insertIfAbsent<Participant>(q, 'plg_omadia_agent_facilitator_participants', { ...values }, '(facilitation_id, principal_id)');
 
 export const patchParticipant = (
   q: Queryable,
@@ -160,20 +160,20 @@ export const patchParticipant = (
   principalId: string,
   patch: Partial<Participant>,
 ): Promise<Participant | undefined> =>
-  update<Participant>(q, 'facilitation_participants', { facilitationId, principalId }, { ...patch });
+  update<Participant>(q, 'plg_omadia_agent_facilitator_participants', { facilitationId, principalId }, { ...patch });
 
 // ── steps ───────────────────────────────────────────────────────────────────
 
 export const listSteps = (q: Queryable, facilitationId: string): Promise<Step[]> =>
-  rows<Step>(q, 'SELECT * FROM facilitation_steps WHERE facilitation_id = $1 ORDER BY position', [facilitationId]);
+  rows<Step>(q, 'SELECT * FROM plg_omadia_agent_facilitator_steps WHERE facilitation_id = $1 ORDER BY position', [facilitationId]);
 
 export const getStep = (q: Queryable, id: string): Promise<Step | undefined> =>
-  one<Step>(q, 'SELECT * FROM facilitation_steps WHERE id = $1', [id]);
+  one<Step>(q, 'SELECT * FROM plg_omadia_agent_facilitator_steps WHERE id = $1', [id]);
 
 export const openStepOf = (q: Queryable, facilitationId: string): Promise<Step | undefined> =>
   one<Step>(
     q,
-    `SELECT * FROM facilitation_steps WHERE facilitation_id = $1 AND status = 'open' ORDER BY position LIMIT 1`,
+    `SELECT * FROM plg_omadia_agent_facilitator_steps WHERE facilitation_id = $1 AND status = 'open' ORDER BY position LIMIT 1`,
     [facilitationId],
   );
 
@@ -181,17 +181,17 @@ export const addStep = (
   q: Queryable,
   values: Pick<Step, 'facilitationId' | 'position' | 'kind' | 'title'> &
     Partial<Pick<Step, 'timeboxMinutes' | 'method' | 'options' | 'methodConfig'>>,
-): Promise<Step> => insert<Step>(q, 'facilitation_steps', { ...values });
+): Promise<Step> => insert<Step>(q, 'plg_omadia_agent_facilitator_steps', { ...values });
 
 export const patchStep = (q: Queryable, id: string, patch: Partial<Step>): Promise<Step | undefined> =>
-  update<Step>(q, 'facilitation_steps', { id }, { ...patch });
+  update<Step>(q, 'plg_omadia_agent_facilitator_steps', { id }, { ...patch });
 
 export async function replaceSteps(
   q: Queryable,
   facilitationId: string,
   steps: ReadonlyArray<Omit<Parameters<typeof addStep>[1], 'facilitationId' | 'position'>>,
 ): Promise<Step[]> {
-  await q.query('DELETE FROM facilitation_steps WHERE facilitation_id = $1', [facilitationId]);
+  await q.query('DELETE FROM plg_omadia_agent_facilitator_steps WHERE facilitation_id = $1', [facilitationId]);
   const created: Step[] = [];
   for (const [index, step] of steps.entries()) {
     created.push(await addStep(q, { ...step, facilitationId, position: index + 1 }));
@@ -202,7 +202,7 @@ export async function replaceSteps(
 // ── definition of done ──────────────────────────────────────────────────────
 
 export const listDodVersions = (q: Queryable, facilitationId: string): Promise<DodVersion[]> =>
-  rows<DodVersion>(q, 'SELECT * FROM facilitation_dod_versions WHERE facilitation_id = $1 ORDER BY version', [
+  rows<DodVersion>(q, 'SELECT * FROM plg_omadia_agent_facilitator_dod_versions WHERE facilitation_id = $1 ORDER BY version', [
     facilitationId,
   ]);
 
@@ -210,7 +210,7 @@ export const listDodVersions = (q: Queryable, facilitationId: string): Promise<D
 export const currentDod = (q: Queryable, facilitationId: string): Promise<DodVersion | undefined> =>
   one<DodVersion>(
     q,
-    `SELECT * FROM facilitation_dod_versions
+    `SELECT * FROM plg_omadia_agent_facilitator_dod_versions
       WHERE facilitation_id = $1 AND consent_state IN ('initial', 'accepted')
       ORDER BY version DESC LIMIT 1`,
     [facilitationId],
@@ -223,14 +223,14 @@ export async function addDodVersion(
 ): Promise<DodVersion> {
   const next = await one<{ v: number }>(
     q,
-    'SELECT coalesce(max(version), 0) + 1 AS v FROM facilitation_dod_versions WHERE facilitation_id = $1',
+    'SELECT coalesce(max(version), 0) + 1 AS v FROM plg_omadia_agent_facilitator_dod_versions WHERE facilitation_id = $1',
     [values.facilitationId],
   );
-  return insert<DodVersion>(q, 'facilitation_dod_versions', { ...values, version: next?.v ?? 1 });
+  return insert<DodVersion>(q, 'plg_omadia_agent_facilitator_dod_versions', { ...values, version: next?.v ?? 1 });
 }
 
 export const patchDodVersion = (q: Queryable, id: string, patch: Partial<DodVersion>): Promise<DodVersion | undefined> =>
-  update<DodVersion>(q, 'facilitation_dod_versions', { id }, { ...patch });
+  update<DodVersion>(q, 'plg_omadia_agent_facilitator_dod_versions', { id }, { ...patch });
 
 // ── contributions ───────────────────────────────────────────────────────────
 
@@ -238,19 +238,19 @@ export const addContribution = (
   q: Queryable,
   values: Omit<Contribution, 'id' | 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted'> &
     Partial<Pick<Contribution, 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted'>>,
-): Promise<Contribution> => insert<Contribution>(q, 'facilitation_contributions', { ...values });
+): Promise<Contribution> => insert<Contribution>(q, 'plg_omadia_agent_facilitator_contributions', { ...values });
 
 export const listContributions = (q: Queryable, facilitationId: string, stepId?: string): Promise<Contribution[]> =>
   rows<Contribution>(
     q,
-    `SELECT * FROM facilitation_contributions
+    `SELECT * FROM plg_omadia_agent_facilitator_contributions
       WHERE facilitation_id = $1 AND ($2::uuid IS NULL OR step_id = $2)
       ORDER BY recorded_at, id`,
     [facilitationId, stepId ?? null],
   );
 
 export const getContribution = (q: Queryable, id: string): Promise<Contribution | undefined> =>
-  one<Contribution>(q, 'SELECT * FROM facilitation_contributions WHERE id = $1', [id]);
+  one<Contribution>(q, 'SELECT * FROM plg_omadia_agent_facilitator_contributions WHERE id = $1', [id]);
 
 /** The live contribution a message is the source of, if any. */
 export const findLiveBySourceMessage = (
@@ -260,7 +260,7 @@ export const findLiveBySourceMessage = (
 ): Promise<Contribution | undefined> =>
   one<Contribution>(
     q,
-    `SELECT * FROM facilitation_contributions
+    `SELECT * FROM plg_omadia_agent_facilitator_contributions
       WHERE facilitation_id = $1 AND source_message_id = $2 AND status IN ('valid', 'unconfirmed', 'ambiguous')`,
     [facilitationId, messageId],
   );
@@ -269,19 +269,19 @@ export const patchContribution = (
   q: Queryable,
   id: string,
   patch: Partial<Contribution>,
-): Promise<Contribution | undefined> => update<Contribution>(q, 'facilitation_contributions', { id }, { ...patch });
+): Promise<Contribution | undefined> => update<Contribution>(q, 'plg_omadia_agent_facilitator_contributions', { id }, { ...patch });
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
 export const appendEvent = (
   q: Queryable,
   values: Pick<ProtocolEvent, 'facilitationId' | 'kind' | 'actor' | 'occurredAt'> & { payload?: Record<string, unknown> },
-): Promise<ProtocolEvent> => insert<ProtocolEvent>(q, 'facilitation_events', { payload: {}, ...values });
+): Promise<ProtocolEvent> => insert<ProtocolEvent>(q, 'plg_omadia_agent_facilitator_events', { payload: {}, ...values });
 
 export const listEvents = (q: Queryable, facilitationId: string, kinds?: readonly string[]): Promise<ProtocolEvent[]> =>
   rows<ProtocolEvent>(
     q,
-    `SELECT * FROM facilitation_events
+    `SELECT * FROM plg_omadia_agent_facilitator_events
       WHERE facilitation_id = $1 AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
       ORDER BY id`,
     [facilitationId, kinds ? `{${kinds.join(',')}}` : null],
@@ -291,52 +291,52 @@ export const listEvents = (q: Queryable, facilitationId: string, kinds?: readonl
 
 /** Claim an event for processing. Undefined when it was processed before. */
 export const claimInbound = (q: Queryable, values: InboundRow): Promise<InboundRow | undefined> =>
-  insertIfAbsent<InboundRow>(q, 'facilitation_inbound', { ...values }, '(facilitation_id, event_id)');
+  insertIfAbsent<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { ...values }, '(facilitation_id, event_id)');
 
 export const setInboundOutcome = (q: Queryable, facilitationId: string, eventId: string, outcome: string): Promise<unknown> =>
-  update<InboundRow>(q, 'facilitation_inbound', { facilitationId, eventId }, { outcome });
+  update<InboundRow>(q, 'plg_omadia_agent_facilitator_inbound', { facilitationId, eventId }, { outcome });
 
 // ── the rest: plain rows ────────────────────────────────────────────────────
 
 export const listSessions = (q: Queryable, facilitationId: string): Promise<Session[]> =>
-  rows<Session>(q, 'SELECT * FROM facilitation_sessions WHERE facilitation_id = $1 ORDER BY created_at, id', [
+  rows<Session>(q, 'SELECT * FROM plg_omadia_agent_facilitator_sessions WHERE facilitation_id = $1 ORDER BY created_at, id', [
     facilitationId,
   ]);
 
 export const listStakeholders = (q: Queryable, facilitationId: string): Promise<Stakeholder[]> =>
-  rows<Stakeholder>(q, 'SELECT * FROM facilitation_stakeholders WHERE facilitation_id = $1 ORDER BY created_at, id', [
+  rows<Stakeholder>(q, 'SELECT * FROM plg_omadia_agent_facilitator_stakeholders WHERE facilitation_id = $1 ORDER BY created_at, id', [
     facilitationId,
   ]);
 
 export const listClusters = (q: Queryable, facilitationId: string): Promise<Cluster[]> =>
-  rows<Cluster>(q, 'SELECT * FROM facilitation_clusters WHERE facilitation_id = $1 ORDER BY seq', [
+  rows<Cluster>(q, 'SELECT * FROM plg_omadia_agent_facilitator_clusters WHERE facilitation_id = $1 ORDER BY seq', [
     facilitationId,
   ]);
 
 export const listDecisions = (q: Queryable, facilitationId: string): Promise<Decision[]> =>
-  rows<Decision>(q, 'SELECT * FROM facilitation_decisions WHERE facilitation_id = $1 ORDER BY decided_at, id', [
+  rows<Decision>(q, 'SELECT * FROM plg_omadia_agent_facilitator_decisions WHERE facilitation_id = $1 ORDER BY decided_at, id', [
     facilitationId,
   ]);
 
 export const listActionItems = (q: Queryable, facilitationId: string): Promise<ActionItem[]> =>
-  rows<ActionItem>(q, 'SELECT * FROM facilitation_action_items WHERE facilitation_id = $1 ORDER BY number', [
+  rows<ActionItem>(q, 'SELECT * FROM plg_omadia_agent_facilitator_action_items WHERE facilitation_id = $1 ORDER BY number', [
     facilitationId,
   ]);
 
 export const openProposal = (q: Queryable, facilitationId: string): Promise<Proposal | undefined> =>
-  one<Proposal>(q, `SELECT * FROM facilitation_proposals WHERE facilitation_id = $1 AND status = 'open'`, [
+  one<Proposal>(q, `SELECT * FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1 AND status = 'open'`, [
     facilitationId,
   ]);
 
 export const listProposals = (q: Queryable, facilitationId: string): Promise<Proposal[]> =>
-  rows<Proposal>(q, 'SELECT * FROM facilitation_proposals WHERE facilitation_id = $1 ORDER BY opened_at, id', [
+  rows<Proposal>(q, 'SELECT * FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1 ORDER BY opened_at, id', [
     facilitationId,
   ]);
 
 export const pendingAcks = (q: Queryable, facilitationId: string, principal?: string): Promise<Ack[]> =>
   rows<Ack>(
     q,
-    `SELECT * FROM facilitation_acks
+    `SELECT * FROM plg_omadia_agent_facilitator_acks
       WHERE facilitation_id = $1 AND status = 'pending' AND ($2::text IS NULL OR principal = $2)
       ORDER BY created_at, id`,
     [facilitationId, principal ?? null],

@@ -118,7 +118,7 @@ async function promptNominees(w: Work, input: BallotInput, contribution: Contrib
   const own = [...input.ballot.nominations.filter((n) => n.nominee === input.author.principalId).map((n) => n.item), ...input.ballot.declines];
   for (const ack of await store.pendingAcks(w.tx, w.f.id, input.author.principalId)) {
     if (ack.kind === 'nomination' && own.includes(String(ack.detail['item']))) {
-      await update(w.tx, 'facilitation_acks', { id: ack.id }, { status: 'cancelled', resolvedAt: w.now });
+      await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'cancelled', resolvedAt: w.now });
     }
   }
   for (const nomination of input.ballot.nominations) {
@@ -126,7 +126,7 @@ async function promptNominees(w: Work, input: BallotInput, contribution: Contrib
     const nominee = participants.find((p) => p.principalId === nomination.nominee);
     if (!nominee) continue;
     const item = optionLabel(options, nomination.item);
-    const ack = await insert<Ack>(w.tx, 'facilitation_acks', {
+    const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', {
       facilitationId: w.f.id,
       principal: nominee.principalId,
       kind: 'nomination',
@@ -185,7 +185,7 @@ async function countBallot(w: Work, input: BallotInput, contribution: Contributi
 export type Trigger = 'contribution' | 'deadline';
 
 async function decide(w: Work, step: Step, statement: string, result: Record<string, unknown>): Promise<Decision> {
-  const decision = await insert<Decision>(w.tx, 'facilitation_decisions', {
+  const decision = await insert<Decision>(w.tx, 'plg_omadia_agent_facilitator_decisions', {
     facilitationId: w.f.id,
     stepId: step.id,
     statement,
@@ -230,8 +230,8 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
   });
   await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), atDeadline: ctx.atDeadline } });
   // Nothing time-based survives the conclusion: no reminder after completion.
-  await w.tx.query(`UPDATE facilitation_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
-  await w.tx.query(`UPDATE facilitation_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
   w.post({ purpose: 'result', key: 'group', to: 'group', deliveryClass: 'essential', text });
   await w.event('concluded', 'engine', { atDeadline: ctx.atDeadline });
 }
@@ -250,7 +250,7 @@ export async function closeWhenResultDelivered(engine: EngineCore, client: PoolC
   const f = await store.getFacilitation(client, facilitationId);
   if (!f) return;
   if (f.phase === 'concluding') {
-    const sent = await client.query(`SELECT 1 FROM facilitation_outbox WHERE facilitation_id = $1 AND purpose = 'result' AND status = 'sent' LIMIT 1`, [f.id]);
+    const sent = await client.query(`SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'result' AND status = 'sent' LIMIT 1`, [f.id]);
     if (sent.rows.length === 0) return;
     await engine.workOn(client, f.id, async (w) => {
       await w.patch({ phase: 'closed', closedAt: w.now, closeReason: 'result' });
@@ -458,7 +458,7 @@ export function installDecisionMethods(): void {
     const t = texts(w.f.language);
     const item = String(ack.detail['item']);
     const step = await store.openStepOf(w.tx, w.f.id);
-    await update(w.tx, 'facilitation_acks', { id: ack.id }, { status: confirmed ? 'confirmed' : 'declined', resolvedAt: w.now, resolvedByMessageId: record.messageId });
+    await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: confirmed ? 'confirmed' : 'declined', resolvedAt: w.now, resolvedByMessageId: record.messageId });
     if (!step || step.method !== 'assignment') return;
     const label = optionLabel(roundOptions(step), item);
     await recordContribution(w, {

@@ -34,9 +34,9 @@ export function registerJobHandler(kind: string, handler: JobHandler): void {
 export async function leaseDueJobs(engine: EngineCore, now: Date): Promise<Job[]> {
   return rows<Job>(
     engine.pool(),
-    `UPDATE facilitation_jobs SET lease_owner = $1, lease_until = $2
+    `UPDATE plg_omadia_agent_facilitator_jobs SET lease_owner = $1, lease_until = $2
       WHERE id IN (
-        SELECT id FROM facilitation_jobs
+        SELECT id FROM plg_omadia_agent_facilitator_jobs
          WHERE status = 'pending' AND due_at <= $3 AND (lease_until IS NULL OR lease_until < $3)
          ORDER BY due_at, created_at
          LIMIT ${String(BATCH)}
@@ -53,12 +53,12 @@ async function runJob(engine: EngineCore, job: Job): Promise<void> {
     await engine.work(job.facilitationId, async (w) => {
       // Under the lock: is it still mine to run? It may have been cancelled
       // by the vote that just concluded the facilitation.
-      const current = (await rows<Job>(w.tx, 'SELECT * FROM facilitation_jobs WHERE id = $1 FOR UPDATE', [job.id]))[0];
+      const current = (await rows<Job>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE id = $1 FOR UPDATE', [job.id]))[0];
       if (!current || current.status !== 'pending' || current.leaseOwner !== engine.instanceId) return;
       const handler = handlers.get(current.kind);
       if (!handler) throw new Error(`no handler for job kind '${current.kind}'`);
       await handler(w, current);
-      await update(w.tx, 'facilitation_jobs', { id: job.id }, { status: 'done', finishedAt: w.now, leaseOwner: null, leaseUntil: null });
+      await update(w.tx, 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { status: 'done', finishedAt: w.now, leaseOwner: null, leaseUntil: null });
     });
   } catch (err) {
     await jobFailed(engine, job, err);
@@ -72,10 +72,10 @@ async function jobFailed(engine: EngineCore, job: Job, err: unknown): Promise<vo
   const attempts = job.attempts + 1;
   engine.log(`facilitation ${job.facilitationId}: job ${job.kind} failed (attempt ${String(attempts)}): ${message}`);
   if (attempts < MAX_JOB_ATTEMPTS) {
-    await update(engine.pool(), 'facilitation_jobs', { id: job.id }, { attempts, lastError: message, leaseOwner: null, leaseUntil: null });
+    await update(engine.pool(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { attempts, lastError: message, leaseOwner: null, leaseUntil: null });
     return;
   }
-  await update(engine.pool(), 'facilitation_jobs', { id: job.id }, { status: 'failed', attempts, lastError: message, finishedAt: engine.now(), leaseOwner: null, leaseUntil: null });
+  await update(engine.pool(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { status: 'failed', attempts, lastError: message, finishedAt: engine.now(), leaseOwner: null, leaseUntil: null });
   try {
     await engine.work(job.facilitationId, async (w) => {
       if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
@@ -89,7 +89,7 @@ async function jobFailed(engine: EngineCore, job: Job, err: unknown): Promise<vo
 /** Essential messages waiting for another attempt. */
 async function retryDeliveries(engine: EngineCore, now: Date): Promise<void> {
   const due = await engine.pool().query<{ facilitation_id: string }>(
-    `SELECT DISTINCT facilitation_id FROM facilitation_outbox
+    `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_outbox
       WHERE status = 'sending' OR (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= $1))`,
     [now],
   );
@@ -117,7 +117,7 @@ export async function tick(engine: EngineCore): Promise<{ jobs: number }> {
  *  facilitation opens and when its deadline changes. */
 export async function scheduleDeadlineJobs(w: Work): Promise<void> {
   await w.tx.query(
-    `UPDATE facilitation_jobs SET status = 'cancelled', finished_at = $2
+    `UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2
       WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('reminder', 'deadline')`,
     [w.f.id, w.now],
   );
@@ -132,7 +132,7 @@ export async function scheduleDeadlineJobs(w: Work): Promise<void> {
   await scheduleJob(w, 'deadline', stamp, deadline, {});
   // A deadline beyond the maximum duration takes the lifetime with it.
   await w.tx.query(
-    `UPDATE facilitation_jobs SET due_at = greatest(due_at, $2::timestamptz + interval '1 hour')
+    `UPDATE plg_omadia_agent_facilitator_jobs SET due_at = greatest(due_at, $2::timestamptz + interval '1 hour')
       WHERE facilitation_id = $1 AND kind = 'lifetime' AND status = 'pending'`,
     [w.f.id, deadline],
   );
