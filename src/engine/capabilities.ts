@@ -26,7 +26,7 @@ import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
 import { scheduleJob } from './jobs.js';
 import { openProposal, registerProposalKind } from './proposals.js';
-import { buildProtocol, closingSummary } from './protocol.js';
+import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { withTimeout } from './outbox.js';
 import { registerExternalJob, registerJobHandler } from './scheduler.js';
 import type { ExternalJob } from './scheduler.js';
@@ -78,8 +78,15 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
   const grant = await grantOf({ tx: pool, f });
   const service: FacilitationFollowupService | undefined = engine.deps.kernel.followup();
 
+  // The protocol is read by the group: every line is in its language.
+  const log = texts(f.language).capabilityLog;
+  const named = (capability: string): string => log.names[capability] ?? capability;
+  const reasonOf = (code: string, detail?: string): string => `${(texts(f.language).followupReasons as Record<string, string>)[code] ?? code}${detail ? `: ${detail}` : ''}`;
+
+  const when = (d: Date): string => formatWhen(d, f.timezone, f.language);
+
   const refuse = async <T>(capability: string, code: ScopedCode, detail?: string): Promise<ScopedOutcome<T>> => {
-    await recordEvent(engine, f.id, 'capability_refused', 'engine', { capability, code, summary: `${capability}: refused (${code}${detail ? `: ${detail}` : ''})` });
+    await recordEvent(engine, f.id, 'capability_refused', 'engine', { capability, code, summary: log.refused(named(capability), reasonOf(code, detail)) });
     return { ok: false, code, ...(detail ? { detail } : {}) };
   };
 
@@ -94,12 +101,12 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     } catch (err) {
       // No answer: it may or may not have happened. Never repeated.
       const detail = err instanceof Error ? err.message : String(err);
-      await recordEvent(engine, f.id, 'capability_refused', 'integration', { capability, code: 'unknown_outcome', summary: `${capability}: outcome unknown (${detail})` });
+      await recordEvent(engine, f.id, 'capability_refused', 'integration', { capability, code: 'unknown_outcome', summary: log.outcomeUnknown(named(capability), detail) });
       return { ok: false, code: 'unknown_outcome', detail };
     }
     if (result.outcome === 'refused') {
       const refusal = result as FollowupRefusal;
-      await recordEvent(engine, f.id, 'capability_refused', 'integration', { capability, code: refusal.code, summary: `${capability}: refused by the integration (${refusal.code}: ${refusal.message})` });
+      await recordEvent(engine, f.id, 'capability_refused', 'integration', { capability, code: refusal.code, summary: log.refusedByIntegration(named(capability), `${refusal.code}: ${refusal.message}`) });
       return { ok: false, code: refusal.code, detail: refusal.message };
     }
     await recordEvent(engine, f.id, 'capability_used', 'engine', { capability, summary });
@@ -110,15 +117,15 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     grant,
     /** Busy intervals only: no subject, body, location or attendees. */
     freeBusy: (attendees: readonly string[], from: Date, to: Date) =>
-      call('free/busy', attendees, `free/busy read for ${String(attendees.length)} people, ${from.toISOString()} to ${to.toISOString()}`, (svc) =>
+      call('free/busy', attendees, log.freeBusy(attendees.length, when(from), when(to)), (svc) =>
         svc.freeBusy(grant, { attendees: attendees.map(lower), from: from.toISOString(), to: to.toISOString() }),
       ),
     createInvitation: (request: { attendees: readonly string[]; subject: string; start: Date; end: Date; body: string; online: boolean }) =>
-      call('invitation', request.attendees, `invitation "${request.subject}" for ${request.start.toISOString()} sent to ${String(request.attendees.length)} people`, (svc) =>
+      call('invitation', request.attendees, log.invitation(request.subject, when(request.start), request.attendees.length), (svc) =>
         svc.createInvitation(grant, { ...request, attendees: request.attendees.map(lower), start: request.start.toISOString(), end: request.end.toISOString() }),
       ),
     sendMail: (recipients: readonly string[], subject: string, body: string) =>
-      call('protocol mail', recipients, `protocol mailed to ${String(recipients.length)} addresses`, (svc) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body })),
+      call('protocol mail', recipients, log.mailed(recipients.length), (svc) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body })),
   };
 }
 
@@ -305,10 +312,10 @@ export async function proposeFollowupMeeting(w: Work, plan: FollowupMeetingPlan)
   });
 }
 
-async function revoke(w: Work, reason: string): Promise<void> {
+async function revoke(w: Work, reason: 'followup_ended' | 'period_ended'): Promise<void> {
   if (w.f.settings.followupGrant !== 'active') return;
   await setGrant(w, 'revoked');
-  await w.event('grant_revoked', 'engine', { summary: `grant revoked: ${reason}` });
+  await w.event('grant_revoked', 'engine', { reason, summary: texts(w.f.language).capabilityLog.grantRevoked(reason) });
 }
 
 export function installCapabilities(): void {
@@ -346,15 +353,18 @@ export function installCapabilities(): void {
     const grant = await grantOf(w);
     // A grant that reaches nobody is not a use of anything.
     if (grant.allowed.length > 0) {
-      await w.event('grant_issued', 'engine', { summary: `grant issued for ${String(grant.allowed.length)} addresses (participants and confirmed stakeholders)` });
+      await w.event('grant_issued', 'engine', { addresses: grant.allowed.length, summary: t.capabilityLog.grantIssued(grant.allowed.length) });
     }
 
     // The initiator already received the protocol with the report.
     const viaChannel = participants.filter((p) => p.principalId !== w.f.initiatorParticipant);
     for (const person of viaChannel) {
-      w.post({ purpose: 'protocol', key: person.principalId, to: { principalId: person.principalId }, deliveryClass: 'essential', text: t.protocolDirect(person.displayName, protocol) });
+      sendWithProtocol(w, { principalId: person.principalId }, { purpose: 'protocol', key: person.principalId, text: t.protocolDirect(person.displayName, protocol) }, protocol);
     }
-    await w.event('capability_used', 'engine', { capability: 'protocol dispatch', summary: `protocol sent privately to ${String(viaChannel.length)} participants` });
+    // A dispatch to nobody is not a use of anything.
+    if (viaChannel.length > 0) {
+      await w.event('capability_used', 'engine', { capability: 'protocol dispatch', participants: viaChannel.length, summary: t.capabilityLog.protocolSent(viaChannel.length) });
+    }
 
     const mailTo = uniqueMail([...participants.map((p) => p.email), ...stakeholders.filter((s) => s.role === 'receives_protocol').map((s) => s.address)]);
     if (w.config.protocolMailEnabled && mailTo.length > 0) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
@@ -365,6 +375,6 @@ export function installCapabilities(): void {
   });
   registerExternalJob('protocol_mail', protocolMail);
   registerExternalJob('followup_meeting', followupMeeting);
-  onFollowupEnded((w) => revoke(w, 'the follow-up ended'));
-  registerJobHandler('grant_revoke', (w) => revoke(w, 'the follow-up period ended'));
+  onFollowupEnded((w) => revoke(w, 'followup_ended'));
+  registerJobHandler('grant_revoke', (w) => revoke(w, 'period_ended'));
 }

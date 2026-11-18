@@ -6,6 +6,7 @@ import * as store from '../db/store.js';
 import { principalKey } from '../kernel.js';
 import type { ConversationMembershipEvent } from '../kernel.js';
 import { texts } from '../texts/index.js';
+import { nameOrPlaceholder } from './names.js';
 import type { EngineCore, Work } from './core.js';
 
 export type MembershipHook = (w: Work) => Promise<void>;
@@ -33,7 +34,7 @@ async function applyMembership(w: Work, event: ConversationMembershipEvent): Pro
     const existing = await store.getParticipant(w.tx, w.f.id, member.id);
     if (event.kind === 'members_added') {
       if (existing?.status === 'active') continue;
-      const name = member.displayName ?? existing?.displayName ?? member.id;
+      const name = nameOrPlaceholder(member.displayName ?? existing?.displayName, member.id, w.f.language);
       if (existing) {
         await store.patchParticipant(w.tx, w.f.id, member.id, { status: 'active', leftAt: null, changedAt: w.now, changedByEvent: key });
       } else {

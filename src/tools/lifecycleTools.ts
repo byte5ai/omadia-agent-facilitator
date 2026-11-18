@@ -70,7 +70,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_start',
         description:
-          'Call this FIRST, in the same turn in which a person here asks for a facilitation, with whatever the request already says, BEFORE you describe a setup or ask anything. You keep no memory between messages: a setup you only describe in the chat is lost with the next message, a setup stored here is not. Sets up a facilitation in THIS group conversation. That person becomes the initiator (say so in the group). Creates it in the phase "configuring": nothing is posted and nothing is recorded until it is opened. Calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open; or pass open: true when the request already fixed everything. Refuses when the facilitator has no identity of its own here or cannot read every message.',
+          'Call this FIRST, in the same turn in which a person here asks for a facilitation, with whatever the request already says, BEFORE you describe a setup or ask anything. You keep no memory between messages: a setup you only describe in the chat is lost with the next message, a setup stored here is not. Sets up a facilitation in THIS group conversation. That person becomes the initiator (say so in the group). Creates it in the phase "configuring": nothing is posted and nothing is recorded until it is opened. Calling it again adjusts the setup. Agree goal, definition of done, format and deadline with the group, then call facilitation_open; or pass open: true when the request already fixed everything. A request that is just a vote (it names what to choose between) is set up with method, options and open: true and NO format: it gets one deciding step that is open right after the opening message, with nothing for the group to confirm first. Refuses when the facilitator has no identity of its own here or cannot read every message.',
         properties: {
           goal: { type: 'string', description: 'What the group wants to reach.' },
           definitionOfDone: { type: 'string', description: 'When the facilitation is done, in the words agreed with the group. Leave it out if it is not agreed yet: a plain one is written from the goal, shown to the group at the opening, and you can call this tool again with the agreed wording.' },
@@ -81,10 +81,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           options: { type: 'array', items: { type: 'string' }, description: 'The options to decide between, or the items to assign. The engine labels them A, B, C.' },
           points: { type: 'array', items: { type: 'number' }, description: 'Ranked vote: points per rank, first rank first. Default 3, 2, 1.' },
           statement: { type: 'string', description: 'Consent: the proposal put to the group.' },
-          format: { type: 'string', enum: [...FORMAT_IDS], description: 'An agenda template: decision, prioritisation, assignment, ideas, retrospective, alignment. Each is an agenda the group can adjust. Without it the facilitation is one single step.' },
+          format: { type: 'string', enum: [...FORMAT_IDS], description: 'An agenda template with several steps: decision, prioritisation, assignment, ideas, retrospective, alignment. Only when the group has to collect or discuss something BEFORE it can decide. Not for a request that is just a vote: with method and options given, decision, prioritisation and assignment are reduced to one deciding step anyway. Without a format the facilitation is one single step.' },
           agenda: {
             type: 'array',
-            description: 'An agenda of your own instead of the template, when the group adjusted it.',
+            description: 'An agenda of your own instead of the template, when the group adjusted it or explicitly asked for steps around a vote (e.g. discuss first, then vote).',
             items: {
               type: 'object',
               properties: {

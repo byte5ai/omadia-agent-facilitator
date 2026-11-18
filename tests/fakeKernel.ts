@@ -183,6 +183,11 @@ export class FakeKernel {
   private seq = 0;
   private readonly members = new Map<string, FakeUser[]>();
   private readonly partialRosters = new Set<string>();
+  /** Conversations the channel cannot list the members of (people still
+   *  write there under their names). */
+  private readonly noRosters = new Set<string>();
+  /** A kernel that states the caller's display name with a tool call. */
+  statesCallerName = false;
   private readonly listeners = new Map<string, Set<(record: ConversationMessageRecord) => void | Promise<void>>>();
   private readonly membershipListeners = new Set<(event: ConversationMembershipEvent) => void>();
   private readonly capabilityListeners = new Map<string, Set<(s: SessionCapabilitySnapshot) => void | Promise<void>>>();
@@ -197,9 +202,10 @@ export class FakeKernel {
 
   // ── the simulated channel ────────────────────────────────────────────────
 
-  conversation(id: string, members: FakeUser[], opts: { partialRoster?: boolean } = {}): string {
+  conversation(id: string, members: FakeUser[], opts: { partialRoster?: boolean; noRoster?: boolean } = {}): string {
     this.members.set(id, [...members]);
     if (opts.partialRoster) this.partialRosters.add(id);
+    if (opts.noRoster) this.noRosters.add(id);
     return id;
   }
 
@@ -347,7 +353,15 @@ export class FakeKernel {
 
   /** The tool call context the kernel states for a turn in a conversation. */
   context(agentSlug: string, conversationId: string, callerId: string, inboundEventId?: string) {
-    return { agentSlug, channelType: this.channelType, conversationId, callerPrincipalId: `user:${callerId.toLowerCase()}`, callerUserRef: { kind: 'teams-aad', id: callerId }, ...(inboundEventId ? { inboundEventId } : {}) };
+    const name = this.statesCallerName ? this.members.get(conversationId)?.find((m) => m.id === callerId)?.displayName : undefined;
+    return {
+      agentSlug,
+      channelType: this.channelType,
+      conversationId,
+      callerPrincipalId: `user:${callerId.toLowerCase()}`,
+      callerUserRef: { kind: 'teams-aad', id: callerId, ...(name ? { displayName: name } : {}) },
+      ...(inboundEventId ? { inboundEventId } : {}),
+    };
   }
 
   groupPosts(conversationId: string, as?: string): Post[] {
@@ -516,7 +530,7 @@ export class FakeKernel {
   private readonly rostersService: ConversationRostersService = {
     getRoster: async (_channelType, conversationId): Promise<ConversationRoster | undefined> => {
       const members = this.members.get(conversationId);
-      if (!members) return undefined;
+      if (!members || this.noRosters.has(conversationId)) return undefined;
       return {
         conversationType: 'group',
         partial: this.partialRosters.has(conversationId),

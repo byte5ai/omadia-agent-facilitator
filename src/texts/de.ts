@@ -21,6 +21,9 @@ export const de: Texts = {
   stopped: (name) => `${name} hat um Stopp gebeten. Die Moderation endet hier ohne Ergebnis. Es wird nichts weiter gesendet.`,
   aborted: (reason) => `Diese Moderation endet ohne Ergebnis. Grund: ${reason}`,
 
+  unnamedPerson: 'Teilnehmer:in ohne Namen',
+  someone: 'jemand aus dieser Runde',
+
   joined: (name, goal) =>
     `Willkommen, ${name}. Diese Unterhaltung wird moderiert. Ziel: ${goal}. Du zählst ab jetzt als Teilnehmende:r; frag nach dem "Status", um zu sehen, wo wir stehen.`,
   left: (name) => `${name} hat die Unterhaltung verlassen. Die bisherigen Beiträge bleiben gezählt.`,
@@ -221,13 +224,15 @@ export const de: Texts = {
   handshakeFull: (h) =>
     [
       `Hallo, ich bin ${h.facilitator} und moderiere diese Unterhaltung ab jetzt. Ich bin neutral: Ich strukturiere den Weg, ihr entscheidet. Ich stimme nie mit ab und behandle jeden Beitrag gleich.`,
-      `Gestartet von: ${h.initiator}`,
+      `Gestartet von: ${h.initiator ?? 'der Person, die mich gerade darum gebeten hat'}`,
       `Ziel: ${h.goal}`,
       `Fertig, wenn (Version 1): ${h.definitionOfDone}`,
       `Format: ${h.format}`,
       ...(h.agenda.length > 0 ? ['Agenda:', ...h.agenda] : []),
       ...h.rules,
-      `Teilnehmende: ${h.participants.join(', ')}`,
+      h.participants.length === 0
+        ? 'Teilnehmende: Die Mitgliederliste dieser Unterhaltung konnte ich nicht abrufen. Wer hier schreibt, nimmt teil.'
+        : `Teilnehmende: ${h.participants.join(', ')}${h.rosterOpen ? ' (die Mitgliederliste konnte ich nicht vollständig abrufen; wer hier schreibt, nimmt teil)' : ''}`,
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: keine vereinbart',
       ...(h.reminders ? [`Erinnerungen: ${h.reminders} vor der Deadline, nur solange Beiträge offen sind; in der Gruppe ohne Namen und privat an die Betroffenen, wo ich sie erreiche.`] : []),
       h.followUp
@@ -236,7 +241,9 @@ export const de: Texts = {
       `Änderungen: Jede:r kann vorschlagen, die Definition of Done, die Methode oder die Deadline zu ändern. Eine Änderung gilt, wenn innerhalb von ${String(h.changeWindowHours)} Stunden niemand widerspricht (nie über die Deadline hinaus), und ich kündige sie mit neuer Version an.`,
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
-      `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt.`,
+      h.initiator
+        ? `Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an ${h.initiator}. ${h.initiator} erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.`
+        : 'Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an die Person, die diese Moderation gestartet hat. Sie erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.',
       'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
     ].join('\n'),
   reminderTimes: (hours) => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} Min.` : `${String(h)} Std.`)).join(', '),
@@ -255,7 +262,7 @@ export const de: Texts = {
 
   initiatorReport: (name, outcome, protocol) =>
     `Hallo ${name}, du hast diese Moderation gestartet, deshalb hier der Bericht. Er enthält nichts, was die Gruppe nicht erfahren hat.\n\n${outcome}\n\n${protocol}`,
-  initiatorUnreachable: (name) => `Ich konnte den Bericht nicht privat an ${name} senden. Es steht alles hier in der Gruppe.`,
+  protocolInGroup: (protocol) => `Den Bericht mit dem Protokoll konnte ich nicht allen privat senden, deshalb steht er hier:\n\n${protocol}`,
 
   change: {
     definition_of_done: (text, version) => `die Definition of Done ändern in (Version ${String(version)}): ${text}`,
@@ -351,6 +358,18 @@ export const de: Texts = {
   proposeStakeholder: (name, role) => `${name} als Stakeholder aufnehmen, der bzw. die ${role}`,
   proposeFollowupMeeting: (subject, minutes, from, to) =>
     `nach dem Abschluss suche ich eine gemeinsame freie Zeit und verschicke die Einladung für "${subject}" (${String(minutes)} Minuten, zwischen ${from} und ${to}). Dafür lese ich nur, wann jemand belegt ist, nie, was die Termine sind`,
+  capabilityLog: {
+    names: { 'free/busy': 'Verfügbarkeiten', invitation: 'Einladung', 'protocol mail': 'Protokoll per Mail' },
+    refused: (capability, reason) => `${capability}: abgelehnt (${reason})`,
+    refusedByIntegration: (capability, reason) => `${capability}: von der Integration abgelehnt (${reason})`,
+    outcomeUnknown: (capability, detail) => `${capability}: Ausgang unbekannt (${detail})`,
+    freeBusy: (people, from, to) => `Verfügbarkeiten von ${String(people)} Personen gelesen, ${from} bis ${to}`,
+    invitation: (subject, start, people) => `Einladung "${subject}" für ${start} an ${String(people)} Personen gesendet`,
+    mailed: (addresses) => `Protokoll per Mail an ${String(addresses)} ${addresses === 1 ? 'Adresse' : 'Adressen'} gesendet`,
+    grantIssued: (addresses) => `Freigabe für ${String(addresses)} ${addresses === 1 ? 'Adresse' : 'Adressen'} erteilt (Teilnehmende und bestätigte Stakeholder)`,
+    grantRevoked: (reason) => `Freigabe beendet: ${reason === 'followup_ended' ? 'Die Nachverfolgung ist abgeschlossen' : 'Die Zeit für die Nachverfolgung ist abgelaufen'}`,
+    protocolSent: (participants) => `Protokoll privat an ${String(participants)} ${participants === 1 ? 'Teilnehmer:in' : 'Teilnehmende'} gesendet`,
+  },
   protocolDirect: (name, protocol) => `Hallo ${name}, hier ist das Protokoll der Moderation, an der du teilgenommen hast.\n\n${protocol}`,
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
   protocolSent: (channel, mail) =>

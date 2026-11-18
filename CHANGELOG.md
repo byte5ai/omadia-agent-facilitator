@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.0.2
+
+What the first real facilitation showed (Teams meeting chat, 2026-11-18).
+
+### Fixed
+
+- People are named by their name, never by an id. The handshake named the
+  initiator as `user:<guid>` and printed an empty participant line, because
+  the channel gave no member list for the chat. Every outgoing text now goes
+  out with the name the facilitation knows for a principal id, or a neutral
+  word, and the text guard refuses an id that is still there. Without a
+  member list the handshake says so ("whoever writes here takes part") and
+  describes the initiator instead of printing a key. A member the channel
+  lists without a name gets the name of their first message. A caller name
+  stated by the kernel with the tool call (`callerUserRef.displayName`) is
+  used when it is there.
+- A request that is just a vote gets one deciding step, open right after the
+  handshake. A single ranked vote had become the five-step decision agenda
+  with four confirmations before anybody could vote. A complete vote (method
+  and what to choose from) is one step, whatever of `decision`,
+  `prioritisation` or `assignment` was named with it; more steps around a
+  vote need an `agenda`. The tool descriptions and the playbook say so.
+- The protocol speaks of capabilities in the language of the group: the
+  German protocol carried "protocol sent privately to 0 participants". Times
+  are in the group's timezone, reasons are words instead of codes, and a
+  dispatch to nobody is not recorded.
+- A report that cannot arrive privately (`app_not_installed` is the normal
+  case for a facilitator's app) puts the protocol into the group, once, with
+  one short line and without a name, instead of pointing at a private message
+  that cannot come. The same holds for a participant's protocol. Somebody who
+  could not be reached before is not written to again, and the handshake says
+  what happens in that case.
+
+### Not changed here
+
+- The AI label on the engine's own posts needs a flag on the kernel's send
+  contract; the plugin adds no disclosure text of its own.
+
 ## 1.0.1
 
 1.0.0 was withdrawn from the Hub; install 1.0.1 instead. Nothing changed in

@@ -127,7 +127,7 @@ test('at the close the protocol goes to participants and confirmed stakeholders,
   assert.match(protocol, /Use of scoped capabilities:\n- .*grant issued for 5 addresses/);
   assert.match(protocol, /protocol mailed to 4 addresses/);
   assert.match(protocol, /free\/busy read for 4 people/);
-  assert.match(protocol, /invitation "Offsite follow-up" for 2026-11-19T10:30:00\.000Z sent to 4 people/);
+  assert.match(protocol, /invitation "Offsite follow-up" for Thu, 19\/11\/2026, 11:30 \(Europe\/Berlin\) sent to 4 people/);
 });
 
 test('the facilitator cannot reach anybody the group did not confirm, and the integration is not even called', { skip: PG_SKIP }, async () => {

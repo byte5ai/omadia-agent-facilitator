@@ -113,7 +113,44 @@ test('an abort is reported to the group and to the initiator; a report that cann
   h.kernel.dmBlocked.set('user:anna', 'app_not_installed');
   await say(blocked, 'cara', 'stop');
   h.kernel.dmBlocked.delete('user:anna');
-  assert.equal(last(blocked), 'I could not send the report to Anna privately. It is all here in the group.');
+  // Said once and briefly, and what the initiator is owed stands in the group.
+  assert.match(last(blocked), /^I could not send the report with the protocol to everybody privately, so here it is:\n\nProtocol: Pick a venue\n/);
+  assert.match(last(blocked), /Outcome: ended without a result/);
+});
+
+// First live run, item 5: a facilitator's app is rarely installed personally,
+// so a report that cannot arrive privately is the normal case.
+test('a report that cannot arrive privately: the protocol stands in the group, once, and nobody is pointed at a private message', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-report-group', FOUR);
+  await startActive(h, conv, VOTE);
+  for (const who of ['anna', 'bert']) h.kernel.dmBlocked.set(`user:${who}`, 'app_not_installed');
+  const dmsBefore = h.kernel.dms.length;
+  try {
+    for (const who of ['anna', 'bert', 'cara', 'dave']) await say(conv, who, 'A');
+    await h.tick();
+  } finally {
+    h.kernel.dmBlocked.clear();
+  }
+  const after = posts(conv);
+  const result = after.findIndex((p) => /^Result for "Pick a venue"/.test(p));
+  const tail = after.slice(result + 1);
+  assert.equal(tail.length, 1, tail.join('\n---\n'));
+  assert.match(tail[0] ?? '', /^I could not send the report with the protocol to everybody privately, so here it is:\n\nProtocol: Pick a venue\nFacilitator: Mira\nStarted by: Anna/);
+  assert.doesNotMatch(tail[0] ?? '', /It is all here in the group/);
+  // Whoever can be reached still gets it privately.
+  assert.deepEqual(h.kernel.dms.slice(dmsBefore).map((d) => d.principal).sort(), ['user:cara', 'user:dave']);
+});
+
+test('an initiator who could not be reached before is not written to again: the protocol goes to the group at once', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tr-report-known', [ANNA, BERT]);
+  const f = await startActive(h, conv, VOTE);
+  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"unreachable": ["user:anna"]}'::jsonb WHERE id = $1`, [f.id]);
+  const dmsBefore = h.kernel.dms.length;
+  for (const who of ['anna', 'bert']) await say(conv, who, 'A');
+  assert.deepEqual(h.kernel.dms.slice(dmsBefore).map((d) => d.principal), ['user:bert']);
+  assert.match(last(conv), /^I could not send the report with the protocol to everybody privately, so here it is:\n\nProtocol: Pick a venue\n/);
+  const failed = await rows<OutboxRow>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND status = 'failed'`, [f.id]);
+  assert.equal(failed.length, 0, 'nothing was sent that could not arrive');
 });
 
 test('definition of done changes without a restart: proposal, consent window, an objection blocks, success is announced with its version and survives a restart', { skip: PG_SKIP }, async () => {

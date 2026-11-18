@@ -17,6 +17,7 @@ import { texts } from '../texts/index.js';
 import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { abortInWork } from './lifecycle.js';
+import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -223,7 +224,7 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
     author = await store.addParticipant(w.tx, {
       facilitationId: w.f.id,
       principalId: key,
-      displayName: record.author.displayName ?? record.author.id,
+      displayName: nameOrPlaceholder(record.author.displayName, key, w.f.language),
       canonicalPrincipal: key,
       source: 'joined',
       joinedAt: w.now,
@@ -236,6 +237,11 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
     }
   }
   if (!author) return undefined;
+  // A message carries its author's name: somebody known only by an id so far
+  // is called by it from now on.
+  if (isPlaceholderName(author.displayName, key) && record.author.displayName && !isPlaceholderName(record.author.displayName, key)) {
+    author = (await store.patchParticipant(w.tx, w.f.id, key, { displayName: record.author.displayName.trim() })) ?? author;
+  }
   if (!w.f.initiatorParticipant && key === w.f.initiatorPrincipal) await w.patch({ initiatorParticipant: key });
   return author.status === 'active' ? author : undefined;
 }

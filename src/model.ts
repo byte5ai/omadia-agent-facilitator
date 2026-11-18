@@ -71,6 +71,9 @@ export interface FacilitationSettings {
   confirmWindowMinutes: number;
   /** The facilitator's display name, from the kernel's profile at start. */
   facilitatorName?: string;
+  /** The initiator's name as the kernel stated it with the starting call,
+   *  for as long as they are not a participant with a name. */
+  initiatorName?: string;
   /** The channel could not list every member: whoever writes joins. */
   openRoster?: boolean;
   /** The group was told that not everybody can be reached privately. */

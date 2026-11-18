@@ -6,7 +6,9 @@ import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import type { Facilitation, ProtocolEvent } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import type { Work } from './core.js';
 import { facilitatorName } from './lifecycle.js';
+import { initiatorName } from './names.js';
 
 const CHANGE_EVENTS = ['proposal_accepted', 'proposal_rejected', 'runoff', 'proposal_amended'];
 const CAPABILITY_EVENTS = ['capability_used', 'capability_refused', 'grant_issued', 'grant_revoked'];
@@ -15,7 +17,7 @@ const CAPABILITY_EVENTS = ['capability_used', 'capability_refused', 'grant_issue
 export async function closingSummary(w: { tx: Queryable; f: Facilitation }): Promise<{ decisions: string[]; actions: string[]; open: string[] }> {
   const t = texts(w.f.language);
   const participants = await store.listParticipants(w.tx, w.f.id);
-  const name = (id: string): string => participants.find((p) => p.principalId === id)?.displayName ?? id;
+  const name = (id: string): string => participants.find((p) => p.principalId === id)?.displayName ?? t.unnamedPerson;
   const decisions = (await store.listDecisions(w.tx, w.f.id)).map((d) => d.statement);
   const actions = (await store.listActionItems(w.tx, w.f.id))
     .filter((a) => a.status !== 'declined')
@@ -38,7 +40,7 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
   };
   const when = (d: Date): string => formatWhen(d, f.timezone, f.language);
   const participants = await store.listParticipants(q, f.id);
-  const name = (id: string | null): string => participants.find((x) => x.principalId === id)?.displayName ?? id ?? '?';
+  const name = (id: string | null): string => participants.find((x) => x.principalId === id)?.displayName ?? t.unnamedPerson;
   const steps = await store.listSteps(q, f.id);
   const dods = (await store.listDodVersions(q, f.id)).filter((d) => d.consentState === 'initial' || d.consentState === 'accepted').filter(before);
   const decisions = (await store.listDecisions(q, f.id)).filter(before);
@@ -64,7 +66,7 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
   return [
     p.title(f.goal),
     `${p.facilitator}: ${facilitatorName(f)}`,
-    `${p.initiator}: ${name(f.initiatorParticipant ?? f.initiatorPrincipal)}`,
+    `${p.initiator}: ${initiatorName(f, participants) ?? t.unnamedPerson}`,
     `${p.participants}: ${participants.map((x) => (x.status === 'left' ? `${x.displayName} (${p.left})` : x.displayName)).join(', ')}`,
     ...section(p.definitionOfDone, dods.map((d) => `${p.version} ${String(d.version)}: ${d.text}`)),
     ...section(p.agenda, steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes))),
@@ -85,4 +87,22 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     '',
     `${p.outcome}: ${t.phase[f.phase]}${f.closeReason && f.phase === 'aborted' ? ` (${f.closeReason})` : ''}`,
   ].join('\n');
+}
+
+/**
+ * Send somebody what they are owed with the protocol, privately.
+ *
+ * A facilitator can write privately only to people who have its app, so a
+ * private message that cannot arrive is the normal case, not an error. Then
+ * the protocol stands in the group, once, with one short line: nobody is
+ * pointed at a private message that will not come, and nobody is named.
+ */
+export function sendWithProtocol(w: Work, to: { principalId: string }, message: { purpose: string; key: string; text: string }, protocol: string): void {
+  const inGroup = { purpose: 'protocol_in_group', key: 'once', deliveryClass: 'essential' as const, text: texts(w.f.language).protocolInGroup(protocol) };
+  // Who could not be reached before is not tried again.
+  if ((w.f.settings.unreachable ?? []).includes(to.principalId)) {
+    w.post({ purpose: inGroup.purpose, key: inGroup.key, to: 'group', deliveryClass: 'essential', text: inGroup.text });
+    return;
+  }
+  w.post({ ...message, to, deliveryClass: 'essential', fallback: inGroup });
 }

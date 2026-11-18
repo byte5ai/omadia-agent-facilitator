@@ -3,16 +3,20 @@
 // Whatever goes to a chat or a private message passes through here, whether
 // the engine wrote it, a model did, or it quotes what a person said. It
 // refuses what must never be shown to a group: fragments of tool calls, raw
-// JSON, placeholder tokens of the privacy shield that were not restored, and
+// JSON, placeholder tokens of the privacy shield that were not restored, the
+// kernel's id of a person in place of their name, and
 // anything carrying the "say nothing" marker.
 
-export type GuardReason = 'empty' | 'silent' | 'tool_fragment' | 'placeholder';
+export type GuardReason = 'empty' | 'silent' | 'tool_fragment' | 'placeholder' | 'principal_id';
 export type GuardVerdict = { ok: true; text: string } | { ok: false; reason: GuardReason };
 
 const SILENT = /\[\s*silent\s*\]|\bno_reply\b/i;
 // Tokens the privacy shield puts in place of personal data, e.g.
 // PLATZHALTER-PERSON-3. One that reaches an answer was not restored.
 const PLACEHOLDER = /\b(?:PLATZHALTER|PLACEHOLDER)-[A-Z0-9_]+-\d+\b/;
+// The kernel's key of a person. The engine replaces it by the name before a
+// text gets here (names.ts); one that is still there is not sent.
+export const PRINCIPAL_ID = /\buser:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 const TOOL_MARKUP = /<\/?(?:function_calls|invoke|parameter|tool_use|tool_result|tool_call)\b[^>]*>/i;
 const TOOL_JSON = /"type"\s*:\s*"tool_(?:use|result|call)"|"tool_calls"\s*:|"(?:name|tool)"\s*:\s*"[^"]*"\s*,\s*"(?:input|arguments|parameters)"\s*:/;
 const FENCED_JSON = /```(?:json)?\s*[\[{][\s\S]*```/i;
@@ -34,6 +38,7 @@ export function guardOutgoing(raw: string): GuardVerdict {
   if (text === '') return { ok: false, reason: 'empty' };
   if (SILENT.test(text)) return { ok: false, reason: 'silent' };
   if (PLACEHOLDER.test(text)) return { ok: false, reason: 'placeholder' };
+  if (PRINCIPAL_ID.test(text)) return { ok: false, reason: 'principal_id' };
   if (isJson(text) || TOOL_MARKUP.test(text) || TOOL_JSON.test(text) || FENCED_JSON.test(text)) return { ok: false, reason: 'tool_fragment' };
   return { ok: true, text };
 }

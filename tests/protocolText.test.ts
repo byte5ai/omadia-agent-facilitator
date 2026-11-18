@@ -111,3 +111,30 @@ test('a channel that declares private messages without a way to send them is not
     h.kernel.absent.delete('targetedSend');
   }
 });
+
+// First live run, item 3: the German protocol in the facilitations view
+// carried "protocol sent privately to 0 participants".
+test('what the protocol says about capabilities is in the language of the group, and nothing is said about a dispatch to nobody', { skip: PG_SKIP }, async () => {
+  const { buildProtocol } = await import('../src/engine/protocol.js');
+  const ENGLISH = /\b(protocol|sent|privately|participants?|grant|issued|revoked|addresses|refused|mailed)\b/i;
+
+  // One person: the initiator has the protocol with the report, nobody else gets one.
+  const alone = h.kernel.conversation('pt-de-alone', [NO_MAIL[0] as FakeUser]);
+  await h.tool('facilitation_start', { goal: 'Ort wählen', language: 'de', ...VOTE, open: true }, { conversation: alone, caller: 'nora' });
+  await say(alone, 'nora', 'A');
+  const single = sectionOf(await buildProtocol(h.db.pool, await h.facilitation(alone)), 'Nutzung der zweckgebundenen Fähigkeiten');
+  assert.deepEqual(single, ['- keine']);
+
+  const conv = h.kernel.conversation('pt-de-two', FOUR.slice(0, 2));
+  await h.tool('facilitation_start', { goal: 'Ort wählen', language: 'de', ...VOTE, open: true }, { conversation: conv });
+  await say(conv, 'anna', 'A');
+  await say(conv, 'bert', 'A');
+  await h.tick();
+  h.clock.advance(40 * 24 * 60 * 60 * 1000);
+  await h.tick();
+  const lines = sectionOf(await buildProtocol(h.db.pool, await h.facilitation(conv)), 'Nutzung der zweckgebundenen Fähigkeiten');
+  assert.ok(lines.some((l) => /Freigabe für 2 Adressen erteilt/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /Protokoll privat an 1 Teilnehmer:in gesendet/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /Freigabe beendet: Die Zeit für die Nachverfolgung ist abgelaufen/.test(l)), lines.join('\n'));
+  for (const line of lines) assert.doesNotMatch(line, ENGLISH);
+});

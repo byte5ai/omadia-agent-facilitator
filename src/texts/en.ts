@@ -35,6 +35,11 @@ export const en = {
     `${name} asked to stop. The facilitation ends here without a result. Nothing further will be sent.`,
   aborted: (reason: string): string => `This facilitation ends without a result. Reason: ${reason}`,
 
+  /** A participant the channel gave no name for (until a message carries one). */
+  unnamedPerson: 'a participant without a name',
+  /** In place of an id nobody here has a name for. */
+  someone: 'someone here',
+
   joined: (name: string, goal: string): string =>
     `Welcome, ${name}. This conversation is being facilitated. Goal: ${goal}. You count as a participant from now on; ask "status" for where we are.`,
   left: (name: string): string => `${name} has left the conversation. Their contributions so far stay counted.`,
@@ -239,13 +244,16 @@ export const en = {
   },
   handshakeFull: (h: {
     facilitator: string;
-    initiator: string;
+    /** Absent: nobody has stated the name of the person who asked yet. */
+    initiator?: string;
     goal: string;
     definitionOfDone: string;
     format: string;
     agenda: string[];
     rules: string[];
     participants: string[];
+    /** The channel could not list the members (or not all of them). */
+    rosterOpen: boolean;
     deadline?: string;
     reminders?: string;
     followUp: boolean;
@@ -255,13 +263,15 @@ export const en = {
   }): string =>
     [
       `Hello, I am ${h.facilitator} and I facilitate this conversation from now on. I am neutral: I structure the way, you decide. I never vote and I treat every contribution the same.`,
-      `Started by: ${h.initiator}`,
+      `Started by: ${h.initiator ?? 'the person who asked me just now'}`,
       `Goal: ${h.goal}`,
       `Done when (version 1): ${h.definitionOfDone}`,
       `Format: ${h.format}`,
       ...(h.agenda.length > 0 ? ['Agenda:', ...h.agenda] : []),
       ...h.rules,
-      `Participants: ${h.participants.join(', ')}`,
+      h.participants.length === 0
+        ? 'Participants: I could not get the member list of this conversation. Whoever writes here takes part.'
+        : `Participants: ${h.participants.join(', ')}${h.rosterOpen ? ' (I could not get the complete member list; whoever writes here takes part)' : ''}`,
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
       ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
       h.followUp
@@ -270,7 +280,9 @@ export const en = {
       `Changes: anyone can propose to change the definition of done, the method or the deadline. A change holds when nobody objects within ${String(h.changeWindowHours)} hours (never past the deadline), and I announce it with its new version.`,
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
-      `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about.`,
+      h.initiator
+        ? `Report: the result goes to this group first, then to ${h.initiator} with the protocol. ${h.initiator} receives nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.`
+        : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.',
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
   reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),
@@ -301,7 +313,8 @@ export const en = {
 
   initiatorReport: (name: string, outcome: string, protocol: string): string =>
     `Hello ${name}, you started this facilitation, so here is the report. It contains nothing the group was not told.\n\n${outcome}\n\n${protocol}`,
-  initiatorUnreachable: (name: string): string => `I could not send the report to ${name} privately. It is all here in the group.`,
+  /** A report or protocol could not arrive privately: said once, with what is owed. */
+  protocolInGroup: (protocol: string): string => `I could not send the report with the protocol to everybody privately, so here it is:\n\n${protocol}`,
 
   change: {
     definition_of_done: (text: string, version: number): string => `change the definition of done to (version ${String(version)}): ${text}`,
@@ -400,6 +413,19 @@ export const en = {
   proposeStakeholder: (name: string, role: string): string => `add ${name} as a stakeholder who ${role}`,
   proposeFollowupMeeting: (subject: string, minutes: number, from: string, to: string): string =>
     `after the close I look for a common free time and send the invitation for "${subject}" (${String(minutes)} minutes, between ${from} and ${to}). For that I read only when people are busy, never what their appointments are`,
+  /** What the protocol says about the use of scoped capabilities. */
+  capabilityLog: {
+    names: { 'free/busy': 'free/busy', invitation: 'invitation', 'protocol mail': 'protocol mail' } as Record<string, string>,
+    refused: (capability: string, reason: string): string => `${capability}: refused (${reason})`,
+    refusedByIntegration: (capability: string, reason: string): string => `${capability}: refused by the integration (${reason})`,
+    outcomeUnknown: (capability: string, detail: string): string => `${capability}: outcome unknown (${detail})`,
+    freeBusy: (people: number, from: string, to: string): string => `free/busy read for ${String(people)} people, ${from} to ${to}`,
+    invitation: (subject: string, start: string, people: number): string => `invitation "${subject}" for ${start} sent to ${String(people)} people`,
+    mailed: (addresses: number): string => `protocol mailed to ${String(addresses)} addresses`,
+    grantIssued: (addresses: number): string => `grant issued for ${String(addresses)} addresses (participants and confirmed stakeholders)`,
+    grantRevoked: (reason: 'followup_ended' | 'period_ended'): string => `grant revoked: ${reason === 'followup_ended' ? 'the follow-up ended' : 'the follow-up period ended'}`,
+    protocolSent: (participants: number): string => `protocol sent privately to ${String(participants)} participant${participants === 1 ? '' : 's'}`,
+  },
   protocolDirect: (name: string, protocol: string): string => `Hello ${name}, here is the protocol of the facilitation you took part in.\n\n${protocol}`,
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
   protocolSent: (channel: number, mail: number): string =>

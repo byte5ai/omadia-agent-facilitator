@@ -339,7 +339,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   const outcome = await evaluateStep(w, step, deadlineReached);
   const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
   const votesMissing = deadlineReached && participants.some((p) => p.status === 'active' && !cast.has(p.principalId));
-  const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, id ?? '?');
+  const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, texts(w.f.language).unnamedPerson);
 
   switch (outcome.state) {
     case 'waiting':
@@ -482,7 +482,7 @@ export async function withoutTakenItems(w: Work, step: Step, author: Participant
       to: 'group',
       deliveryClass: 'droppable',
       versionBound: false,
-      text: t.itemTaken(author.displayName, optionLabel(roundOptions(step), n.item), displayNameOf(participants, holder.nominee ?? null, holder.nominee ?? '')),
+      text: t.itemTaken(author.displayName, optionLabel(roundOptions(step), n.item), displayNameOf(participants, holder.nominee ?? null, t.unnamedPerson)),
     });
     return false;
   });
