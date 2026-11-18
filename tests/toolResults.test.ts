@@ -57,7 +57,15 @@ test('open: true on a setup that cannot be posted does not claim that it is open
 
 async function decisionAgenda(conv: string): Promise<void> {
   h.kernel.conversation(conv, FOUR);
-  await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', format: 'decision', method: 'single', options: ['Harbour', 'Garden', 'Old Town'], open: true }, { conversation: conv });
+  // The steps around the vote are asked for: a vote alone would be one step.
+  const agenda = [
+    { kind: 'open', title: 'Opening' },
+    { kind: 'collect', title: 'Collect options and positions' },
+    { kind: 'discuss', title: 'Discuss' },
+    { kind: 'decide', title: 'Pick a venue', method: 'single', options: ['Harbour', 'Garden', 'Old Town'] },
+    { kind: 'close', title: 'Close' },
+  ];
+  await h.tool('facilitation_start', { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen', format: 'decision', agenda, open: true }, { conversation: conv });
 }
 const proposals = async (conv: string): Promise<number> =>
   (await h.db.pool.query('SELECT 1 FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1', [(await h.facilitation(conv)).id])).rows.length;

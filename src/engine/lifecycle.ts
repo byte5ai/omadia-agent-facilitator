@@ -100,8 +100,21 @@ export interface AgendaStepInput {
   decision?: DecisionSetup;
 }
 
+/** Templates whose steps before the vote only find what is voted on. With the
+ *  vote already complete there is nothing for them to do. */
+const VOTE_ONLY_FORMATS: ReadonlySet<FormatId> = new Set<FormatId>(['decision', 'prioritisation', 'assignment']);
+
+/** A vote the group can cast at once: the method and what to choose from. */
+const isCompleteVote = (d: DecisionSetup | undefined): d is DecisionSetup =>
+  d !== undefined && (d.method === 'consent' || d.options.length >= (d.method === 'assignment' ? 1 : 2));
+
 /** The agenda a setup asks for: its own steps, the template of its format,
- *  or one single step. */
+ *  or one single step.
+ *
+ *  A request that is just a vote gets the shortest process: one deciding
+ *  step, whatever template was named with it. Which one it is does not depend
+ *  on a model's choice of format. More steps around a complete vote need an
+ *  agenda of their own. */
 export function agendaFor(
   input: Pick<ConfigureInput, 'goal' | 'decision' | 'format' | 'agenda' | 'language'>,
   config: { rankedPoints: readonly number[]; language: 'de' | 'en' },
@@ -113,7 +126,8 @@ export function agendaFor(
       ...(s.timeboxMinutes ? { timeboxMinutes: s.timeboxMinutes } : {}),
     }));
   }
-  if (input.format && input.format !== 'custom') {
+  const justAVote = isCompleteVote(input.decision) && (!input.format || VOTE_ONLY_FORMATS.has(input.format));
+  if (input.format && input.format !== 'custom' && !justAVote) {
     let applied = false;
     return FORMATS[input.format].map((template) => {
       const title = template.title[language];
