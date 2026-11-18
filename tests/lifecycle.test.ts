@@ -224,3 +224,17 @@ test('review: a bot that is added to the conversation never becomes a participan
   await h.settle();
   assert.equal((await h.facilitation(conv)).phase, 'closed', 'nobody waits for a bot to vote');
 });
+
+test('review: the scheduler tick does not wait for a facilitator turn that is still running', { skip: PG_SKIP, timeout: 20_000 }, async () => {
+  const conv = h.kernel.conversation('lc-slow-turn', [ANNA, BERT]);
+  await startActive(h, conv);
+  let finish: (text: string) => void = () => undefined;
+  h.kernel.onTurn = () => new Promise<string>((resolve) => (finish = resolve));
+  await h.kernel.say(conv, 'anna', 'a long question for the model');
+  const started = Date.now();
+  await h.engine.tick();
+  assert.ok(Date.now() - started < 2000, 'the tick came back while the model was still thinking');
+  finish('[silent]');
+  await h.settle();
+  h.kernel.onTurn = () => '[silent]';
+});

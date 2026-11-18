@@ -228,7 +228,11 @@ export class FacilitationEngine {
   }
 
   /** One scheduler pass: due jobs, delivery retries, and a catch-up read of
-   *  every moderated conversation in case a live delivery was lost. */
+   *  every moderated conversation in case a live delivery was lost.
+   *
+   *  It does not wait for facilitator turns: a model that takes its time must
+   *  not hold the tick (the kernel gives it a fixed time), and a turn that
+   *  was started by the catch-up finishes on its own. */
   async tick(): Promise<void> {
     if (this.stopped || !this.available()) return;
     await this.track(
@@ -243,7 +247,6 @@ export class FacilitationEngine {
         }
       })(),
     );
-    await this.idle();
   }
 
   /** A facilitation that is concluding is looked at on every tick: the close
