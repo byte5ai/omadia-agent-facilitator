@@ -194,3 +194,25 @@ test('several things waiting for one person: a bare "yes" asks which, a reply se
   await h.settle();
   assert.deepEqual((await contributionsOf(conv)).map((c) => c.status), ['unconfirmed', 'valid']);
 });
+
+test('review 9: after the conclusion an edit or a deletion changes nothing that was counted; it is only recorded', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('co-frozen', [ANNA, BERT]);
+  await startActive(h, conv, { method: 'single', options: ['Thai', 'Pizza'] });
+  const a = await h.kernel.say(conv, 'anna', 'A');
+  const b = await h.kernel.say(conv, 'bert', 'A');
+  await h.settle();
+  // Follow-up keeps the conversation readable after the close in real life; here the
+  // late events are delivered directly.
+  const f = await h.facilitation(conv);
+  assert.equal(f.phase, 'closed');
+  const before = (await store.listContributions(h.db.pool, f.id)).map((c) => [c.id, c.status, c.sourceRevision]);
+  const posts = h.kernel.groupPosts(conv).length;
+  const { handleInbound } = await import('../src/engine/inbound.js');
+  const late = (kind: 'edited' | 'deleted', source: typeof a, eventId: string) => ({ ...source, eventId, kind, revision: 1, ...(kind === 'edited' ? { text: 'B' } : {}), occurredAt: h.clock.now().toISOString() });
+  await h.engine.core.work(f.id, (w) => handleInbound(w, late('edited', a, 'late-edit')));
+  await h.engine.core.work(f.id, (w) => handleInbound(w, late('deleted', b, 'late-delete')));
+  assert.deepEqual((await store.listContributions(h.db.pool, f.id)).map((c) => [c.id, c.status, c.sourceRevision]), before, 'frozen');
+  assert.equal(h.kernel.groupPosts(conv).length, posts, 'and nothing is said about it');
+  const events = (await store.listEvents(h.db.pool, f.id, ['late_change'])).map((e) => e.payload['kind']);
+  assert.deepEqual(events, ['edited', 'deleted']);
+});

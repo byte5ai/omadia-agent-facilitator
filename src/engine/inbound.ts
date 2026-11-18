@@ -166,6 +166,15 @@ const acknowledgements: InboundHandler = async ({ w, record, author, command }) 
 /** Edits and deletions of a message that carried a contribution. */
 const revisions: InboundHandler = async (ctx) => {
   const { w, record, author } = ctx;
+  if (record.kind !== 'edited' && record.kind !== 'deleted') return undefined;
+  // Contributions are frozen once the facilitation concludes: what was
+  // counted stays what was counted. A later edit or deletion is put on
+  // record and changes nothing.
+  if (w.f.phase !== 'active' && w.f.phase !== 'configuring') {
+    const carried = await store.findLiveBySourceMessage(w.tx, w.f.id, record.messageId);
+    await w.event('late_change', principalKey(record.author), { kind: record.kind, messageId: record.messageId, revision: record.revision, contributionId: carried?.id ?? null });
+    return { outcome: `late_${record.kind}` };
+  }
   if (record.kind === 'deleted') {
     const withdrawn = await withdrawByMessage(w, record.messageId, author);
     return { outcome: withdrawn ? 'withdrawn' : 'deleted_without_contribution' };
