@@ -65,6 +65,7 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
       ? { noReminders: f.reminderPolicy.asked === true && f.reminderPolicy.offsetsHours.length === 0 ? null : Math.max(1, Math.round((f.deadline.getTime() - w.now.getTime()) / MINUTE_MS)) }
       : {}),
     followUp: f.followupPolicy.actionItems,
+    protocolMail: f.followupPolicy.protocolMail === true || w.config.protocolMailEnabled,
     changeWindowHours: f.settings.changeWindowHours,
     ...(perception ? { perception } : {}),
     notes,

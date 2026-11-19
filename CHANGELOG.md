@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.1.1
+
+Defects from the live runs on 1.0.5 (D25, D26, and the open part of D23).
+
+### Fixed
+
+- **The protocol by mail (D25).** A request for it had no effect: the mail
+  was sent only when an operator had switched `protocol_mail_enabled` on for
+  the whole instance, and no tool could ask for it. `facilitation_start` now
+  takes `protocolByMail`; the handshake says that the protocol also goes by
+  mail to the addresses the channel knows, and at the close it goes through
+  `facilitation.followup.sendMail`. The outcome is on record per recipient
+  (`protocol_mail` event: sent, not_sent, unknown). Without a mail
+  integration the facilitator is told at the start and nothing is promised;
+  "sent by mail" is said only for a mail the integration confirmed.
+- **Meetings (D26).** A meeting that starts in a moderated chat opens a
+  session with a capability snapshot read at that moment, whether or not it
+  was scheduled through the facilitator, and the facilitator says what it
+  perceives there. Its end closes the session and reads the chat's
+  capabilities again. A vote opened while the meeting runs uses what the
+  meeting offers (a card where the channel has cards, a poll where the session
+  has polls). Nothing waits for participants to join. When a facilitation
+  closes or aborts, its running sessions end and its scheduled ones are
+  cancelled; before, they stayed "running".
+
+### Tests
+
+- A reminder directly followed by a mention, and messages arriving while the
+  reminder runs, on the lease lock of 1.0.5 (D23).
+
+### Not covered
+
+- A facilitation that starts while a meeting is already running does not
+  learn of it: the kernel reports a start, not a state.
+
 ## 1.1.0
 
 ### Added

@@ -131,7 +131,7 @@ All fields are optional; defaults in brackets.
 | `session_agenda_lead_minutes` [60] | agenda before a meeting |
 | `media_consent_explicit` [false] | speech of a call needs a yes from every participant |
 | `followup_grant_days` [14] | how long the scoped grant lasts without action items |
-| `protocol_mail_enabled` [false] | also mail the protocol through the follow-up integration |
+| `protocol_mail_enabled` [false] | mail the protocol of EVERY facilitation through the follow-up integration. Without it a facilitation mails its protocol only when the request asked for it (`protocolByMail` at the start) |
 
 ### Privacy mode
 

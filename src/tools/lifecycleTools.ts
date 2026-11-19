@@ -99,6 +99,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           },
           reminderMinutesBefore: { type: 'array', items: { type: 'number' }, description: 'When the request asks for reminders of its own: minutes before the deadline, e.g. [5] or [1440, 120]; an empty list when it wants none. Leave it out otherwise: reminders then follow from the time to the deadline, and the opening message says which.' },
           participants: { type: 'array', items: { type: 'string' }, description: 'The names of the participants, when the request names them ("only Anna and Bert", "just me"). They are the list then: it closes when all of them have contributed, and nobody else is counted. The person who asked always takes part and need not be listed. Leave it out when the request names nobody: then the members of the conversation take part. Where the channel cannot list the members, a vote needs either this list or a deadline.' },
+          protocolByMail: { type: 'boolean', description: 'The request asks that the protocol also goes to the participants by mail after the close. It is mailed to the addresses the channel knows; nobody is asked for one. Only set it when somebody asked for it.' },
           followUp: { type: 'boolean', description: 'The group agreed that owners are reminded of their action items before the due date.' },
           followUpStatusAt: { type: 'string', description: 'ISO 8601 with offset: when the status of the action items is posted to the group.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
@@ -152,6 +153,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(participants ? { participants } : {}),
           ...(args['reminderMinutesBefore'] !== undefined && args['reminderMinutesBefore'] !== null ? { reminderMinutesBefore: args['reminderMinutesBefore'] } : {}),
           ...(typeof args['followUp'] === 'boolean' ? { followUp: args['followUp'] } : {}),
+          ...(typeof args['protocolByMail'] === 'boolean' ? { protocolByMail: args['protocolByMail'] } : {}),
           ...(statusAt ? { followUpStatusAt: statusAt } : {}),
           ...(method ? { decision: { method, options: stringList(args, 'options') ?? [], ...(points ? { points } : {}), ...(statement ? { statement } : {}) } } : {}),
         });

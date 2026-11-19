@@ -68,6 +68,8 @@ export interface ConfigureInput extends ConversationRef {
   agenda?: AgendaStepInput[];
   /** Action items are followed up after the close. */
   followUp?: boolean;
+  /** The request asks that the closing protocol also goes out by mail. */
+  protocolByMail?: boolean;
   /** ISO time at which the status of the action items is posted. */
   followUpStatusAt?: string;
 }
@@ -310,6 +312,12 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     if (!statusAt) throw new Refusal('bad_input', 'followUpStatusAt must be an ISO 8601 date-time with an offset.');
   }
 
+  // Mail goes through the follow-up integration. Without one nothing is
+  // promised: the facilitator is told to say so.
+  const mailAsked = input.protocolByMail === true;
+  const protocolMail = mailAsked && kernel.followup() !== undefined;
+  if (mailAsked && !protocolMail) notes.push('Sending the protocol by mail is not available on this instance (no mail integration is installed). The protocol goes to the participants privately, or into this group where that is not possible.');
+
   const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
   // Reminders somebody asked for are kept as asked; the others follow from
   // the time to the deadline, so that none is announced that cannot happen.
@@ -374,8 +382,8 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         ...(forced ? { closeRule: forced } : roll && existing.settings.openRoster === true ? { closeRule: 'all_contributed' as const } : {}),
         ...(roll ? { settings } : {}),
         ...(askedHours ? { reminderPolicy: { offsetsHours: askedHours, asked: true } } : derivedHours && existing.reminderPolicy.asked !== true ? { reminderPolicy: { offsetsHours: derivedHours } } : {}),
-        ...(input.followUp !== undefined || statusAt
-          ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) } }
+        ...(input.followUp !== undefined || statusAt || input.protocolByMail !== undefined
+          ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}), ...(input.protocolByMail !== undefined ? { protocolMail } : {}) } }
           : {}),
       });
     });
@@ -463,7 +471,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         timezone: input.timezone ?? config.timezone,
         closeRule,
         reminderPolicy: askedHours ? { offsetsHours: askedHours, asked: true } : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a) },
-        followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) },
+        followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}), ...(protocolMail ? { protocolMail: true } : {}) },
         settings: {
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,

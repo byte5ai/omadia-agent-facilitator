@@ -166,7 +166,10 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
   const snapshot: SessionCapabilitySnapshot = real(w.engine, prefetched ?? { ...baselineSnapshot(w.f.channelType, w.f.conversationId, w.now), ...(chat ? { inputs: chat.inputs, outputs: chat.outputs } : {}) });
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
   const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
-  await sendAgenda(w, session);
+  // A meeting the group scheduled here has an agenda to send; one that simply
+  // started has not.
+  const adHoc = session.title === null && session.scheduledStart === null;
+  if (!adHoc) await sendAgenda(w, session);
   w.bump();
   await w.event('session_started', 'engine', { sessionId: session.id });
   // The facilitator says what it perceives in THIS session, so nobody assumes more.
@@ -176,7 +179,9 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
     to: 'group',
     deliveryClass: 'essential',
     requiredPhases: ['configuring', 'active'],
-    text: t.sessionStarted(session.title ?? w.f.goal, session.scheduledEnd ? formatWhen(session.scheduledEnd, w.f.timezone, w.f.language) : undefined, perceptionStatement(perceived, t)),
+    text: adHoc
+      ? t.meetingStarted(perceptionStatement(perceived, t))
+      : t.sessionStarted(session.title ?? w.f.goal, session.scheduledEnd ? formatWhen(session.scheduledEnd, w.f.timezone, w.f.language) : undefined, perceptionStatement(perceived, t)),
   });
   if (snapshot.inputs.includes('transcribed_speech')) await askMediaConsent(w, started);
   return started;
@@ -187,7 +192,50 @@ export async function endSession(w: Work, session: Session): Promise<void> {
   await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'ended', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
   w.bump();
   await w.event('session_ended', 'engine', { sessionId: session.id });
-  w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).sessionEnded(session.title ?? w.f.goal) });
+  const t = texts(w.f.language);
+  w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: session.title === null && session.scheduledStart === null ? t.meetingEnded() : t.sessionEnded(session.title ?? w.f.goal) });
+}
+
+/**
+ * A meeting started in the conversation (D26). One the group scheduled here is
+ * started; one nobody scheduled gets its session now, with what the meeting
+ * offers. Nothing waits for participants to join: a channel need not say who
+ * does.
+ */
+export async function meetingStarted(w: Work, sessionRef: string, snapshot: SessionCapabilitySnapshot | undefined): Promise<void> {
+  if (w.f.phase !== 'configuring' && w.f.phase !== 'active') return;
+  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
+  if (live.some((s) => s.meetingRef === sessionRef && s.status !== 'scheduled')) return;
+  const scheduled = live.find((s) => s.meetingRef === sessionRef) ?? live.find((s) => s.status === 'scheduled' && s.meetingRef === null);
+  if (scheduled) {
+    await startSession(w, scheduled, snapshot);
+    return;
+  }
+  // Another meeting is on record as running: only one is, at a time.
+  if (live.some((s) => s.status === 'running')) return;
+  const session = await insert<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', {
+    facilitationId: w.f.id,
+    kind: 'live',
+    meetingRef: sessionRef,
+    modality: snapshot && snapshot.modality !== 'chat' ? snapshot.modality : 'online',
+    createdAt: w.now,
+  });
+  await startSession(w, session, snapshot);
+}
+
+/** The meeting is over: its session ends and the chat is what counts again. */
+export async function meetingEnded(w: Work, sessionRef: string, chat: SessionCapabilitySnapshot | undefined): Promise<void> {
+  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.status === 'running');
+  const session = live.find((s) => s.meetingRef === sessionRef) ?? live[0];
+  if (!session) return;
+  await endSession(w, session);
+  if (chat) await applySnapshot(w, chat);
+}
+
+/** A facilitation that ended has no session that is going on (D26). */
+async function closeSessions(w: Work): Promise<void> {
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'cancelled' WHERE facilitation_id = $1 AND status = 'scheduled'`, [w.f.id]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'ended', ended_at = $2 WHERE facilitation_id = $1 AND status = 'running'`, [w.f.id, w.now]);
 }
 
 // ── media consent and speech ────────────────────────────────────────────────
@@ -383,6 +431,8 @@ export function installSessions(): void {
   onStepFinished(closeStepCards);
   onAborted(async (w) => closeAllCards(w));
   onClosed(closeAllCards);
+  onAborted(async (w) => closeSessions(w));
+  onClosed(closeSessions);
   onVoteOpened(postPoll);
   onConfigured(createChatSession);
 

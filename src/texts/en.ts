@@ -286,6 +286,8 @@ export const en = {
      *  deadline when that is why, `null` when the group wants none. */
     noReminders?: number | null;
     followUp: boolean;
+    /** The protocol also goes out by mail after the close. */
+    protocolMail: boolean;
     changeWindowHours: number;
     perception?: string;
     notes: string[];
@@ -309,6 +311,7 @@ export const en = {
       h.followUp
         ? 'Action items: I remind each owner before the due date and stop when everything is done or past due.'
         : 'Action items: no follow-up after the close, unless you ask for it.',
+      ...(h.protocolMail ? ['Protocol: after the close it also goes by mail to the participants whose address the channel knows.'] : []),
       `Changes: anyone can propose to change the definition of done, the method or the deadline. A change holds when nobody objects within ${String(h.changeWindowHours)} hours (never past the deadline), and I announce it with its new version.`,
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
@@ -430,6 +433,9 @@ export const en = {
     [`Agenda for "${title}" on ${when}:`, ...agenda, 'Topics and pre-reads you want to bring: write them here beforehand, one point per message.'].join('\n'),
   sessionStarted: (title: string, until: string | undefined, perception: string): string =>
     [`"${title}" starts now.${until ? ` We have until ${until}.` : ''}`, perception].join('\n'),
+  /** A meeting nobody scheduled through the facilitator started in the conversation. */
+  meetingStarted: (perception: string): string => ['A meeting is running in this conversation now.', perception].join('\n'),
+  meetingEnded: (): string => 'The meeting has ended. What is still open continues here in the chat.',
   sessionEnded: (title: string): string => `"${title}" has ended. What is still open continues here in the chat.`,
   timeNotice: (title: string, minutes: number): string => `Time check: ${String(minutes)} minutes left for "${title}".`,
   speakingOrder: (names: readonly string[], remoteFirst: boolean): string =>

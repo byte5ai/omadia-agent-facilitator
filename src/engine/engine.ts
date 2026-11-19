@@ -18,7 +18,7 @@ import { installGovernance, purgeExpired } from './governance.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
-import { applySnapshot, endSession, installSessions, prepareSessionStart, startSession } from './sessions.js';
+import { applySnapshot, fetchSnapshot, installSessions, meetingEnded, meetingStarted } from './sessions.js';
 import { processMembership } from './membership.js';
 import { reconcileAll, reconcileSubscription } from './subscription.js';
 import type { SubscriptionState } from './subscription.js';
@@ -172,19 +172,14 @@ export class FacilitationEngine {
         try {
           const live = (await store.listSubscribed(this.core.pool())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
           if (!live) return;
-          // The meeting's capabilities are asked before the unit of work.
-          const prefetched = event.kind === 'session_started' ? await prepareSessionStart(this.core, live.id) : undefined;
-          await this.core.work(live.id, async (w) => {
-            const sessions = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
-            const session = sessions.find((s) => s.meetingRef === event.sessionRef) ?? sessions.find((s) => s.status === 'scheduled' || s.status === 'running');
-            if (event.kind === 'participant_joined' || event.kind === 'participant_left') {
-              await w.event('session_presence', 'engine', { kind: event.kind, sessionRef: event.sessionRef, participants: event.participants ?? [] });
-              return;
-            }
-            if (!session) return;
-            if (event.kind === 'session_started') await startSession(w, session, prefetched);
-            else if (event.kind === 'session_ended') await endSession(w, session);
-          });
+          if (event.kind === 'participant_joined' || event.kind === 'participant_left') {
+            await this.core.work(live.id, (w) => w.event('session_presence', 'engine', { kind: event.kind, sessionRef: event.sessionRef, participants: event.participants ?? [] }));
+            return;
+          }
+          // What the meeting offers, and afterwards what the chat offers, is
+          // asked before the unit of work: at the start and at the end.
+          const snapshot = await fetchSnapshot(this.core, live, event.kind === 'session_started' ? event.sessionRef : undefined);
+          await this.core.work(live.id, (w) => (event.kind === 'session_started' ? meetingStarted(w, event.sessionRef, snapshot) : meetingEnded(w, event.sessionRef, snapshot)));
         } catch (err) {
           this.core.log(`session event failed: ${err instanceof Error ? err.message : String(err)}`);
         }
