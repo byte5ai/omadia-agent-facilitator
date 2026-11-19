@@ -173,6 +173,9 @@ export interface FakeProcessSubscription extends ProcessMessageScope {
 export type TurnAnswer = { outcome: 'refused'; code: string; message: string } | { outcome: 'failed'; message: string } | { outcome: 'completed'; text: string };
 
 export interface SayOptions {
+  /** The channel states that the message addresses the facilitator, however
+   *  the mention stands in the text (Teams: the display name, without "@"). */
+  addressed?: boolean;
   replyTo?: string;
   quoted?: boolean;
   forwarded?: boolean;
@@ -394,7 +397,7 @@ export class FakeKernel {
     const reference = partial.kind === 'card_answer' ? (this.bound.get(partial.cardAnswer?.cardId ?? '') ?? this.bound.get(partial.messageId)) : partial.kind === 'reaction' ? this.bound.get(partial.messageId) : partial.replyToMessageId ? this.bound.get(partial.replyToMessageId) : undefined;
     for (const sub of [...this.processSubscriptions]) {
       if (sub.ended || sub.mode === 'none' || sub.channelType !== this.channelType || sub.conversationId !== conversationId) continue;
-      const addressedToBot = this.addressed(partial.text, sub.agentSlug);
+      const addressedToBot = partial.addressedToBot === true || this.addressed(partial.text, sub.agentSlug);
       const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
       if (boundHere ? sub.processId !== reference : !(sub.mode === 'all' || addressedToBot)) continue;
       const record: ProcessConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${sub.agentSlug}`, processId: sub.processId, ...(addressedToBot ? { addressedToBot: true } : {}) };
@@ -425,6 +428,7 @@ export class FakeKernel {
         revision: 0,
         text,
         ...(opts.replyTo ? { replyToMessageId: opts.replyTo } : {}),
+        ...(opts.addressed ? { addressedToBot: true } : {}),
         ...(opts.quoted ? { quoted: true } : {}),
         ...(opts.forwarded ? { forwarded: true } : {}),
       },
@@ -978,7 +982,8 @@ export class FakeKernel {
   async mention(conversationId: string, userId: string, text: string, opts: SayOptions & { agent?: string; event?: 'known' | 'unnamed' | 'late' | 'none' } = {}): Promise<{ answeredBy: 'engine' | 'turn' | 'suppressed'; record: ConversationMessageRecord | undefined }> {
     const agentSlug = opts.agent ?? 'mira';
     const timing = opts.event ?? 'known';
-    const body = text.toLowerCase().includes(`@${agentSlug}`) ? text : `@${agentSlug} ${text}`;
+    // `addressed`: the text is as the channel wrote it (a real mention).
+    const body = opts.addressed === true || text.toLowerCase().includes(`@${agentSlug}`) ? text : `@${agentSlug} ${text}`;
     let record: ConversationMessageRecord | undefined;
     const store = async (): Promise<void> => {
       record = await this.say(conversationId, userId, body, opts);

@@ -21,6 +21,7 @@ import type { AddressedMessageRequest, ProcessConversationMessageRecord } from '
 import * as store from '../db/store.js';
 import type { Facilitation } from '../model.js';
 import { readDone } from './actionItems.js';
+import { namesOf } from './addressing.js';
 import type { EngineCore } from './core.js';
 import { normaliseCommand, processRecord } from './inbound.js';
 
@@ -30,10 +31,6 @@ export type AddressedDecision = { handled: false } | { handled: true; facilitati
 
 /** The follow-up this message is for, decided from the state alone. */
 async function meant(engine: EngineCore, request: AddressedMessageRequest): Promise<Facilitation | undefined> {
-  const command = normaliseCommand(request.text);
-  const status = STATUS.test(command);
-  const done = status ? undefined : readDone(command);
-  if (!status && !done) return undefined;
   const principal = `user:${request.principalId.toLowerCase()}`;
   const db = engine.db();
   const following: Facilitation[] = [];
@@ -41,6 +38,13 @@ async function meant(engine: EngineCore, request: AddressedMessageRequest): Prom
     const f = await store.getFacilitation(db, processId);
     if (f && f.facilitatorAgent === request.agentSlug && f.channelType === request.channelType && f.conversationId === request.conversationId && f.followupState === 'active') following.push(f);
   }
+  // The kernel's question is the statement that the message addresses the
+  // facilitator: the mention it starts with, as the channel wrote it (the
+  // display name, a part of it, a tag), is taken off before it is read.
+  const command = normaliseCommand(request.text, { names: [...new Set([...following.flatMap(namesOf), request.agentSlug])], addressed: true });
+  const status = STATUS.test(command);
+  const done = status ? undefined : readDone(command);
+  if (!status && !done) return undefined;
   // The most recent one first: that is the one the group has in mind.
   following.sort((a, b) => (b.closedAt?.getTime() ?? 0) - (a.closedAt?.getTime() ?? 0));
   let named: Facilitation | undefined;
