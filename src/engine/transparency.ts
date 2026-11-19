@@ -13,7 +13,8 @@ import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake } from './lifecycle.js';
-import { initiatorName } from './names.js';
+import { initiatorName, isPlaceholderName } from './names.js';
+import { expectedNames, listKnown } from './roll.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
@@ -49,8 +50,11 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
     format: t.formats[f.format],
     agenda: steps.length > 1 ? steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes)) : [],
     rules: deciding.flatMap((s) => rulesOf(f, s)),
-    participants: participants.map((p) => p.displayName),
+    // Somebody without a name yet is not listed as a placeholder.
+    participants: [...participants.filter((p) => !isPlaceholderName(p.displayName, p.principalId)).map((p) => p.displayName), ...expectedNames(f)],
     rosterOpen: f.settings.openRoster === true,
+    unmatched: [...expectedNames(f)],
+    atDeadlineOnly: !listKnown(f) && deciding.length > 0,
     ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
     ...(f.deadline && f.reminderPolicy.offsetsHours.length > 0 ? { reminders: t.reminderTimes(f.reminderPolicy.offsetsHours) } : {}),
     followUp: f.followupPolicy.actionItems,
@@ -113,6 +117,9 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
     }
     case 'close_rule': {
       if (change.closeRule === 'at_deadline' && !w.f.deadline) throw new Refusal('bad_input', 'Evaluating at the deadline needs a deadline.');
+      if (change.closeRule === 'all_contributed' && !listKnown(w.f)) {
+        throw new Refusal('participants_unknown', 'The channel cannot list who is in this conversation, so I cannot tell when everybody has voted. This facilitation is evaluated at its deadline. Nothing was put to the group.');
+      }
       return openProposal(w, { ...base, kind: 'change', summary: t.change.close_rule(change.closeRule), payload: { type: change.type, closeRule: change.closeRule } });
     }
     case 'method': {

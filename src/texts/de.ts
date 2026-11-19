@@ -95,6 +95,7 @@ export const de: Texts = {
 
   reminderGroup: (open, deadline) =>
     `Erinnerung: ${open === 1 ? 'Ein Beitrag ist' : `${String(open)} Beiträge sind`} noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Fragt nach dem "Status" für die Details.`,
+  reminderGroupOpen: (deadline) => `Erinnerung: Diese Abstimmung läuft${deadline ? ` noch bis ${deadline}` : ' noch'}. Wer noch nicht beigetragen hat, kann das jetzt tun.`,
   reminderDirect: (name, goal, deadline) =>
     `Hallo ${name}, dein Beitrag zu "${goal}" ist noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Bitte antworte in der Gruppe; hier kann ich keine Beiträge annehmen.`,
   directUnreachable: () =>
@@ -233,6 +234,8 @@ export const de: Texts = {
       h.participants.length === 0
         ? 'Teilnehmende: Die Mitgliederliste dieser Unterhaltung konnte ich nicht abrufen. Wer hier schreibt, nimmt teil.'
         : `Teilnehmende: ${h.participants.join(', ')}${h.rosterOpen ? ' (die Mitgliederliste konnte ich nicht vollständig abrufen; wer hier schreibt, nimmt teil)' : ''}`,
+      ...(h.unmatched.length > 0 ? [`Ich weiß noch nicht, wer von euch ${h.unmatched.join(', ')} ${h.unmatched.length === 1 ? 'ist' : 'sind'}: Schreibt bitte einmal kurz hier.`] : []),
+      ...(h.atDeadlineOnly ? ['Ich sehe nicht, wer alles zu dieser Unterhaltung gehört, und kann deshalb nicht erkennen, wann alle abgestimmt haben. Ich werte zur Deadline aus.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: keine vereinbart',
       ...(h.reminders ? [`Erinnerungen: ${h.reminders} vor der Deadline, nur solange Beiträge offen sind; in der Gruppe ohne Namen und privat an die Betroffenen, wo ich sie erreiche.`] : []),
       h.followUp

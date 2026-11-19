@@ -24,6 +24,7 @@ import { cancelJobs, scheduleJob } from './jobs.js';
 import { abortInWork, announceVote, displayNameOf, releaseConversation, releaseOnEnd, runAbortHooks } from './lifecycle.js';
 import { onMembershipChange } from './membership.js';
 import { closingSummary } from './protocol.js';
+import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
 const pointsOf = (step: Step): readonly number[] => {
@@ -82,8 +83,9 @@ export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step
     points: pointsOf(step),
     ballots: await castBallots(w, step),
     assignmentEvents: step.method === 'assignment' ? await assignmentEvents(w, step) : [],
-    activeParticipants: active.map((p) => p.principalId),
-    closeRule: w.f.closeRule,
+    // The named people nobody was matched to are waited for like anybody else.
+    activeParticipants: [...active.map((p) => p.principalId), ...expectedKeys(w.f)],
+    closeRule: effectiveCloseRule(w.f),
     deadlineReached,
     hasOpenProposal: (await store.openProposal(w.tx, w.f.id)) !== undefined,
   });
@@ -248,7 +250,7 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
     decisions: decisions.map((d) => d.statement),
     actions: summary.actions,
     open: summary.open,
-    ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length } } : {}),
+    ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length + expectedNames(w.f).length } } : {}),
   });
   await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), atDeadline: ctx.atDeadline } });
   // Nothing time-based survives the conclusion: no reminder after completion.
@@ -338,7 +340,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   const deadlineReached = trigger === 'deadline';
   const outcome = await evaluateStep(w, step, deadlineReached);
   const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
-  const votesMissing = deadlineReached && participants.some((p) => p.status === 'active' && !cast.has(p.principalId));
+  const votesMissing = deadlineReached && (expectedNames(w.f).length > 0 || participants.some((p) => p.status === 'active' && !cast.has(p.principalId)));
   const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, texts(w.f.language).unnamedPerson);
 
   switch (outcome.state) {

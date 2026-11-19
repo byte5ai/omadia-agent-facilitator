@@ -12,7 +12,7 @@ import { PG_SKIP } from './pg.js';
 
 const MARCEL: FakeUser = { id: '328d16de-4575-437b-94d2-1086a4904fd7', displayName: 'Marcel Wege' };
 const TESS: FakeUser = { id: '9f0c2a11-0b7e-4c1d-8a55-6d2e7b0a4c90', displayName: 'Teresita Biel' };
-const VOTE = { goal: 'Den Namen wählen', language: 'de', method: 'single', options: ['Alpha', 'Bravo'], open: true };
+const VOTE = { goal: 'Den Namen wählen', language: 'de', method: 'single', options: ['Alpha', 'Bravo'], deadline: '2026-11-18T12:00:00+00:00', open: true };
 
 let h: Harness;
 before(async () => {

@@ -97,6 +97,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
               required: ['kind', 'title'],
             },
           },
+          participants: { type: 'array', items: { type: 'string' }, description: 'The names of the participants, when the request names them ("only Anna and Bert", "just me"). They are the list then: it closes when all of them have contributed, and nobody else is counted. The person who asked always takes part and need not be listed. Leave it out when the request names nobody: then the members of the conversation take part. Where the channel cannot list the members, a vote needs either this list or a deadline.' },
           followUp: { type: 'boolean', description: 'The group agreed that owners are reminded of their action items before the due date.' },
           followUpStatusAt: { type: 'string', description: 'ISO 8601 with offset: when the status of the action items is posted to the group.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'], description: 'Evaluate when every participant has contributed (default) or at the deadline.' },
@@ -116,6 +117,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const format = oneOf(args, 'format', FORMAT_IDS);
         const statusAt = optionalString(args, 'followUpStatusAt');
         const definitionOfDone = optionalString(args, 'definitionOfDone');
+        const participants = stringList(args, 'participants');
         const agenda = Array.isArray(args['agenda'])
           ? args['agenda'].map((raw): AgendaStepInput => {
               const o = asObject(raw);
@@ -146,13 +148,15 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(closeRule ? { closeRule } : {}),
           ...(format ? { format } : {}),
           ...(agenda ? { agenda } : {}),
+          ...(participants ? { participants } : {}),
           ...(typeof args['followUp'] === 'boolean' ? { followUp: args['followUp'] } : {}),
           ...(statusAt ? { followUpStatusAt: statusAt } : {}),
           ...(method ? { decision: { method, options: stringList(args, 'options') ?? [], ...(points ? { points } : {}), ...(statement ? { statement } : {}) } } : {}),
         });
         engine.ensureAttached(ctx.agentSlug);
-        const people = result.participants.map((p) => p.displayName).join(', ') || 'not known yet';
+        const people = [...result.participants.map((p) => p.displayName), ...result.expected].join(', ') || 'not known yet';
         const notes = [
+          ...(result.expected.length > 0 ? [`Not matched to a person yet: ${result.expected.join(', ')}. The opening message asks them to write once; each counts from then on and is waited for until then.`] : []),
           ...result.notes.map((n) => `Tell the group: ${n}`),
           ...(result.defaultedDod !== undefined ? [`No definition of done was given, so this one is used: "${result.defaultedDod}". Say it to the group; if they want another wording, call facilitation_start again with it.`] : []),
         ];

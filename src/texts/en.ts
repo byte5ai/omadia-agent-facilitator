@@ -111,6 +111,9 @@ export const en = {
 
   reminderGroup: (open: number, deadline: string | undefined): string =>
     `Reminder: ${open === 1 ? 'one contribution is' : `${String(open)} contributions are`} still open.${deadline ? ` Deadline: ${deadline}.` : ''} Ask "status" for the details.`,
+  /** Nobody can be counted as missing: the member list is unknown. */
+  reminderGroupOpen: (deadline: string | undefined): string =>
+    `Reminder: this vote is open${deadline ? ` until ${deadline}` : ''}. Whoever has not contributed yet can still do so.`,
   reminderDirect: (name: string, goal: string, deadline: string | undefined): string =>
     `Hello ${name}, your contribution to "${goal}" is still open.${deadline ? ` Deadline: ${deadline}.` : ''} Please answer in the group; I cannot take contributions here.`,
   directUnreachable: (): string =>
@@ -254,6 +257,10 @@ export const en = {
     participants: string[];
     /** The channel could not list the members (or not all of them). */
     rosterOpen: boolean;
+    /** Named in the request (and listed under participants), matched to nobody yet. */
+    unmatched: string[];
+    /** A vote without a known list: evaluated at the deadline only. */
+    atDeadlineOnly: boolean;
     deadline?: string;
     reminders?: string;
     followUp: boolean;
@@ -272,6 +279,8 @@ export const en = {
       h.participants.length === 0
         ? 'Participants: I could not get the member list of this conversation. Whoever writes here takes part.'
         : `Participants: ${h.participants.join(', ')}${h.rosterOpen ? ' (I could not get the complete member list; whoever writes here takes part)' : ''}`,
+      ...(h.unmatched.length > 0 ? [`I do not know yet who of you ${h.unmatched.length === 1 ? `${h.unmatched[0] ?? ''} is` : `${h.unmatched.join(', ')} are`}: please write here once.`] : []),
+      ...(h.atDeadlineOnly ? ['I cannot see who belongs to this conversation, so I cannot tell when everybody has voted. I evaluate at the deadline.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
       ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
       h.followUp
