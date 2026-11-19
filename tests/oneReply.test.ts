@@ -1,4 +1,4 @@
-// One mention, one reply (1.4.1).
+// One mention, one reply, on a kernel that does not ask the engine (1.4.1).
 //
 // In follow-up the kernel delivers a mention to the engine as an event AND
 // lets the facilitator's ordinary turn answer it. The engine leaves the
@@ -17,7 +17,11 @@ import { PG_SKIP } from './pg.js';
 
 let h: Harness;
 before(async () => {
-  if (!PG_SKIP) h = await createHarness();
+  if (PG_SKIP) return;
+  h = await createHarness();
+  // A kernel before `onAddressedMessage` (plugin-api 1.73): the engine cannot
+  // claim a mention, so in follow-up it leaves it to the ordinary turn.
+  h.kernel.addressedMessages = false;
 });
 after(async () => {
   if (!PG_SKIP) await h.close();

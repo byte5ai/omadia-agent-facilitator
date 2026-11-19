@@ -106,6 +106,14 @@ export async function actionStatusLines(w: Pick<Work, 'tx' | 'f'>): Promise<stri
 }
 
 const DONE = /^(?:(?:done|erledigt|fertig)\s*#?(\d{1,3})|#?(\d{1,3})\s*(?:done|erledigt|fertig))$/;
+/** What a "done" message says: the number it names, or none. Undefined:
+ *  not a "done" message. */
+export function readDone(command: string): { number?: number } | undefined {
+  const match = DONE.exec(command);
+  if (match) return { number: Number(match[1] ?? match[2]) };
+  return DONE_BARE.test(command) ? {} : undefined;
+}
+
 /** "done" without saying which one. */
 const DONE_BARE = /^(?:done|erledigt|fertig)$/;
 

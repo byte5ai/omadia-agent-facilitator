@@ -22,6 +22,7 @@ import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
 import { applySnapshot, fetchSnapshot, installSessions, meetingEnded, meetingStarted } from './sessions.js';
 import { processMembership } from './membership.js';
+import { decideAddressed } from './addressed.js';
 import { answerPrivateMessage } from './privateMessages.js';
 import { syncAllScopes, syncScopes } from './scopes.js';
 import { reconcileAll, reconcileSubscription } from './subscription.js';
@@ -165,6 +166,26 @@ export class FacilitationEngine {
     // A participant asks for the status in a private chat (kernel #2089).
     if (typeof messages.onPrivateMessage === 'function') {
       disposers.push(messages.onPrivateMessage(agentSlug, (request) => (this.stopped ? Promise.resolve({ handled: false as const }) : this.track(answerPrivateMessage(this.core, request)))));
+    }
+    // Who answers a mention during a follow-up: the kernel asks, the engine
+    // decides at once and works after it answered (kernel #2089). Absent on
+    // an older kernel: there a mention is left to the ordinary turn.
+    if (typeof messages.onAddressedMessage === 'function') {
+      this.core.addressedHook.add(agentSlug);
+      disposers.push(() => this.core.addressedHook.delete(agentSlug));
+      disposers.push(
+        messages.onAddressedMessage(agentSlug, async (request) => {
+          if (this.stopped) return { handled: false };
+          const decision = await this.track(decideAddressed(this.core, request));
+          if (!decision.handled) return { handled: false };
+          void this.track(
+            decision.work().catch((err: unknown) => {
+              this.core.log(`facilitation ${decision.facilitationId}: an addressed message it took could not be worked on: ${err instanceof Error ? err.message : String(err)}`);
+            }),
+          );
+          return { handled: true };
+        }),
+      );
     }
     // What the channel offers can change mid-session; meetings start and end.
     const capabilities = this.core.deps.kernel.sessionCapabilities();

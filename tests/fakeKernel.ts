@@ -8,6 +8,8 @@
 
 import { EXECUTION_GRANT_RULES, EXECUTION_SCOPE_PHASES } from '@omadia/plugin-api';
 import type {
+  AddressedMessageReply,
+  AddressedMessageRequest,
   AuthorizeActionRequest,
   ChannelReadinessReport,
   ChannelReadinessService,
@@ -398,6 +400,13 @@ export class FakeKernel {
       const record: ProcessConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${sub.agentSlug}`, processId: sub.processId, ...(addressedToBot ? { addressedToBot: true } : {}) };
       this.events.push(record);
       last = record;
+      // With `onAddressedMessage` registered, a plain message that addresses
+      // the agent is stored for a process that listens for such messages but
+      // not pushed: the handler is its live path. Replies and card answers
+      // bound to a process are pushed as before, and so is everything where
+      // a process of the agent reads every message.
+      const viaHandler = addressedToBot && sub.mode === 'addressed' && !boundHere && this.addressedMessages && (this.addressedHandlers.get(sub.agentSlug)?.size ?? 0) > 0 && this.ordinaryTurnRuns(sub.agentSlug, conversationId);
+      if (viaHandler) continue;
       for (const listener of [...(this.listeners.get(sub.agentSlug) ?? [])]) await listener(record);
     }
     return last ?? { ...base, eventId: 'not-stored', receivedByChannelKey: '' };
@@ -928,6 +937,12 @@ export class FakeKernel {
       this.privateHandlers.set(agentSlug, set);
       return () => set.delete(handler);
     },
+    onAddressedMessage: (agentSlug, handler) => {
+      const set = this.addressedHandlers.get(agentSlug) ?? new Set();
+      set.add(handler);
+      this.addressedHandlers.set(agentSlug, set);
+      return () => set.delete(handler);
+    },
   };
 
   /** What a process may read: only what was stored for it. Reads end with
@@ -936,6 +951,65 @@ export class FakeKernel {
     const sub = this.subscriptionOf(scope);
     if (!sub || sub.ended) return [];
     return (this.events as ProcessConversationMessageRecord[]).filter((e) => e.processId === scope.processId && e.conversationId === scope.conversationId);
+  }
+
+  /** false: a kernel before `onAddressedMessage` (plugin-api 1.73). */
+  addressedMessages = true;
+  private readonly addressedHandlers = new Map<string, Set<(request: AddressedMessageRequest) => Promise<AddressedMessageReply>>>();
+  /** Every question the kernel asked about an addressed message. */
+  readonly addressedAsked: AddressedMessageRequest[] = [];
+
+  /**
+   * A person mentions the facilitator in a group. As the kernel and the
+   * channel together: the message is stored for the processes it goes to,
+   * and the facilitator's turn starts unless a process reads every message
+   * there. Before the model runs, the kernel asks the engine whether a
+   * process that listens for addressed messages takes it.
+   *
+   * Returns who answers: `engine` (the turn stays silent), `turn` (the
+   * ordinary turn runs; the test plays it), or `suppressed` (a process reads
+   * everything and answers through the event).
+   *
+   * `event`: `known` (default) the event is stored and named on the turn;
+   * `unnamed` it is stored but the turn does not know its id; `late` the turn
+   * arrives first and the event is stored afterwards; `none` the channel
+   * states no message id at all.
+   */
+  async mention(conversationId: string, userId: string, text: string, opts: SayOptions & { agent?: string; event?: 'known' | 'unnamed' | 'late' | 'none' } = {}): Promise<{ answeredBy: 'engine' | 'turn' | 'suppressed'; record: ConversationMessageRecord | undefined }> {
+    const agentSlug = opts.agent ?? 'mira';
+    const timing = opts.event ?? 'known';
+    const body = text.toLowerCase().includes(`@${agentSlug}`) ? text : `@${agentSlug} ${text}`;
+    let record: ConversationMessageRecord | undefined;
+    const store = async (): Promise<void> => {
+      record = await this.say(conversationId, userId, body, opts);
+    };
+    if (timing !== 'late') await store();
+    if (!this.ordinaryTurnRuns(agentSlug, conversationId)) {
+      if (timing === 'late') await store();
+      return { answeredBy: 'suppressed', record };
+    }
+    const processIds = this.processSubscriptions.filter((s) => s.agentSlug === agentSlug && s.conversationId === conversationId && !s.ended && s.mode === 'addressed').map((s) => s.processId);
+    let handled = false;
+    if (this.addressedMessages && processIds.length > 0) {
+      const stored = record && record.eventId !== 'not-stored' ? record : undefined;
+      const request: AddressedMessageRequest = {
+        agentSlug,
+        channelType: this.channelType,
+        conversationId,
+        principalId: userId,
+        text: body,
+        ...(timing !== 'none' && stored ? { messageId: stored.messageId } : timing === 'late' ? { messageId: `msg-${String(this.seq + 1).padStart(5, '0')}` } : {}),
+        ...(timing === 'known' && stored ? { eventId: stored.eventId } : {}),
+        processIds,
+      };
+      this.addressedAsked.push(request);
+      for (const handler of [...(this.addressedHandlers.get(agentSlug) ?? [])]) {
+        const reply = await handler(request);
+        if (reply.handled === true) handled = true;
+      }
+    }
+    if (timing === 'late') await store();
+    return { answeredBy: handled ? 'engine' : 'turn', record };
   }
 
   /** A kernel before private status requests (plugin-api 1.68). */
@@ -1190,9 +1264,8 @@ export class FakeKernel {
       grants: unless('grants', this.grantsService),
       messages: () => {
         if (this.absent.has('messages')) return undefined;
-        if (this.privateMessages) return this.messagesService;
-        const { onPrivateMessage: _onPrivateMessage, ...older } = this.messagesService;
-        return older;
+        const { onPrivateMessage, onAddressedMessage, ...older } = this.messagesService;
+        return { ...older, ...(this.privateMessages ? { onPrivateMessage } : {}), ...(this.addressedMessages ? { onAddressedMessage } : {}) } as ProcessConversationMessagesService;
       },
       agentTurn: unless('agentTurn', this.turnService),
       conversationSend: unless('conversationSend', this.sendService),

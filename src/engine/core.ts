@@ -139,6 +139,23 @@ export class EngineCore {
   readonly instanceId: string;
   private readonly afterDispatch: AfterDispatch[] = [];
   private readonly afterRelease: AfterRelease[] = [];
+  /** Facilitators for which the kernel asks the engine who answers a message
+   *  that addresses them in follow-up (`onAddressedMessage`). */
+  readonly addressedHook = new Set<string>();
+  /** Messages the engine took through that question without a stored event,
+   *  by platform message id: their event, should it arrive, is not answered. */
+  private readonly hookTaken = new Map<string, number>();
+
+  noteTakenByHook(messageId: string): void {
+    const now = Date.now();
+    for (const [id, at] of this.hookTaken) if (now - at > TURN_MEMORY_MS) this.hookTaken.delete(id);
+    this.hookTaken.set(messageId, now);
+  }
+
+  takenByHook(messageId: string): boolean {
+    return this.hookTaken.has(messageId);
+  }
+
   /** What the tools of a turn did, by the inbound event the turn answers. */
   private readonly turnNotes = new Map<string, { posted: boolean; refusals: string[]; at: number }>();
 
