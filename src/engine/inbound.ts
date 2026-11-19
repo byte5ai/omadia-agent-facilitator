@@ -265,37 +265,68 @@ export async function ordinaryTurnSuppressed(w: Work): Promise<boolean> {
   return live !== undefined && live.facilitatorAgent === w.f.facilitatorAgent;
 }
 
+/** How a record reached the inbound consumer. */
+export interface InboundOptions {
+  /** The kernel asked who answers this message and the engine took it
+   *  (`onAddressedMessage`): it is the engine's, whatever the rule below says. */
+  fromHook?: boolean;
+  /** The record was built from the kernel's question, not read from its
+   *  store: it is no position the cursor could stand on. */
+  keepCursor?: boolean;
+}
+
 /**
  * One mention, one reply.
  *
  * While a facilitation runs, the engine reads every message and the kernel
  * suppresses the turn a mention would start: the engine answers. In follow-up
- * the engine only hears what is addressed to the facilitator, and the kernel
- * lets the facilitator's ordinary turn answer a mention (it also delivers the
- * mention to the engine as an event). Both would answer. The kernel offers
- * the engine no way to claim the message, so the engine leaves a mention to
- * the turn: it does nothing for it and posts nothing. What the person wants
- * done, the turn does through a tool (`facilitation_action_done`), and a tool
- * that posts makes the kernel drop the turn's own text.
+ * the engine only hears what is addressed to the facilitator, and a mention
+ * there also starts the facilitator's ordinary turn. Exactly one of the two
+ * answers:
  *
- * A reply to one of the facilitation's messages and a card button start no
- * turn: those stay the engine's. So does a mention where another
- * facilitation of this facilitator is live, because then no turn runs.
+ *   a kernel with `onAddressedMessage`   the kernel asks the engine first
+ *       (addressed.ts). What the engine takes it works on from there, and
+ *       the turn stays silent; what it declines the turn answers. The stored
+ *       event of the same message, which also shows up here (pushed, or read
+ *       on a later pass), is nobody's to answer a second time:
+ *       `left_to_hook`.
+ *   an older kernel                      the engine cannot claim the message,
+ *       so it leaves it to the turn: `left_to_turn`. The turn closes an
+ *       action item through `facilitation_action_done`.
+ *
+ * A reply without a mention and a card button start no turn: those stay the
+ * engine's. So does a mention where another facilitation of this facilitator
+ * is live, because the kernel suppresses the turn there.
  */
-async function leftToOrdinaryTurn(w: Work, record: ConversationMessageRecord): Promise<boolean> {
-  if (record.addressedToBot !== true || (record.kind !== 'created' && record.kind !== 'edited')) return false;
-  if (wantedMode(w.f) !== 'addressed') return false;
-  return !(await ordinaryTurnSuppressed(w));
+async function notForTheEventPath(w: Work, record: ConversationMessageRecord, opts: InboundOptions): Promise<'left_to_hook' | 'left_to_turn' | undefined> {
+  if (opts.fromHook === true) return undefined;
+  // Taken through the kernel's question a moment ago, without a stored event
+  // to dedupe on.
+  if (w.engine.takenByHook(record.messageId)) return 'left_to_hook';
+  if (record.addressedToBot !== true || (record.kind !== 'created' && record.kind !== 'edited')) return undefined;
+  if (wantedMode(w.f) !== 'addressed') return undefined;
+  if (await ordinaryTurnSuppressed(w)) return undefined;
+  return w.engine.addressedHook.has(w.f.facilitatorAgent) ? 'left_to_hook' : 'left_to_turn';
 }
 
 /** One stored event, inside the facilitation's unit of work. */
-export async function handleInbound(w: Work, record: ConversationMessageRecord): Promise<InboundResult> {
+export async function handleInbound(w: Work, record: ConversationMessageRecord, opts: InboundOptions = {}): Promise<InboundResult> {
+  const moveCursor = (): Promise<unknown> => (opts.keepCursor === true ? Promise.resolve() : store.advanceCursor(w.tx, w.f.id, record.eventId));
   const claimed = await store.claimInbound(w.tx, ledgerRow(w.f.id, record, w.now));
   if (!claimed) {
-    // Dealt with before. The cursor may still have to catch up to it (it
-    // waited for an earlier message that has been retried since).
-    await store.advanceCursor(w.tx, w.f.id, record.eventId);
-    return { outcome: 'duplicate' };
+    // The event of a message the kernel asked about may have been seen here
+    // first and left for that question. Now the engine took it: it is worked
+    // on once, here.
+    const left =
+      opts.fromHook === true
+        ? await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_inbound WHERE facilitation_id = $1 AND event_id = $2 AND outcome = 'left_to_hook'`, [w.f.id, record.eventId])
+        : { rows: [] };
+    if (left.rows.length === 0) {
+      // Dealt with before. The cursor may still have to catch up to it (it
+      // waited for an earlier message that has been retried since).
+      await moveCursor();
+      return { outcome: 'duplicate' };
+    }
   }
   await w.engine.deps.hooks?.beforeInbound?.(record);
 
@@ -304,15 +335,16 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   // conversation may have been read for an earlier facilitation.)
   if (Date.parse(record.occurredAt) < w.f.createdAt.getTime()) {
     await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'before_facilitation');
-    await store.advanceCursor(w.tx, w.f.id, record.eventId);
+    await moveCursor();
     return { outcome: 'before_facilitation' };
   }
 
-  // A mention in follow-up is the ordinary turn's to answer (see below).
-  if (await leftToOrdinaryTurn(w, record)) {
-    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'left_to_turn');
-    await store.advanceCursor(w.tx, w.f.id, record.eventId);
-    return { outcome: 'left_to_turn' };
+  // A mention in follow-up has one owner, and it is not this path (see above).
+  const left = await notForTheEventPath(w, record, opts);
+  if (left !== undefined) {
+    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, left);
+    await moveCursor();
+    return { outcome: left };
   }
 
   const author = await resolveAuthor(w, record);
@@ -333,7 +365,7 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
   if (w.f.phase === 'aborted' || w.f.phase === 'closed') result = { ...result, ended: true };
   await store.setInboundOutcome(w.tx, w.f.id, record.eventId, result.outcome);
   // Not a state change: the cursor moves without bumping the version.
-  await store.advanceCursor(w.tx, w.f.id, record.eventId);
+  await moveCursor();
   return result;
 }
 
@@ -357,7 +389,7 @@ const ledgerRow = (facilitationId: string, record: ConversationMessageRecord, no
  * a bound it is given up, and the group is told once that a message could not
  * be processed, so nobody waits for an echo that will not come.
  */
-export async function processRecord(engine: EngineCore, agentSlug: string, record: ConversationMessageRecord): Promise<{ facilitationId: string; result: InboundResult } | undefined> {
+export async function processRecord(engine: EngineCore, agentSlug: string, record: ConversationMessageRecord, opts: InboundOptions = {}): Promise<{ facilitationId: string; result: InboundResult } | undefined> {
   // The kernel states which facilitation a record was stored for (a reply to
   // one of its messages, an answer to one of its cards, or simply the one
   // that reads the conversation). A record without it is routed by its
@@ -366,7 +398,7 @@ export async function processRecord(engine: EngineCore, agentSlug: string, recor
   const f = processId !== undefined ? await store.getFacilitation(engine.db(), processId) : await store.findRoutableByConversation(engine.db(), record.channelType, record.conversationId);
   if (!f || f.facilitatorAgent !== agentSlug) return undefined;
   try {
-    const result = await engine.work(f.id, (w) => handleInbound(w, record));
+    const result = await engine.work(f.id, (w) => handleInbound(w, record, opts));
     return { facilitationId: f.id, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
