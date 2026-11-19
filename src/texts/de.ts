@@ -24,7 +24,9 @@ export const de: Texts = {
   aborted: (reason) => `Diese Moderation endet ohne Ergebnis. Grund: ${reason}`,
 
   card: {
-    chatToo: 'Antwortet auf der Karte oder im Chat; eure neueste Antwort zählt.',
+    chatToo: 'Eine Antwort im Chat zählt auch; eure neueste Antwort zählt.',
+    stepOf: (position, total) => `Schritt ${String(position)} von ${String(total)}.`,
+    voteOnCard: 'Abgestimmt wird über die Karte; eine Antwort im Chat zählt auch.',
     rank: 'Reiht die Optionen, die beste zuerst.',
     rankLabel: (rank, points) => (points === undefined ? `${String(rank)}. Platz` : `${String(rank)}. Platz (${String(points)} ${points === 1 ? 'Punkt' : 'Punkte'})`),
     single: 'Wählt eine Option.',

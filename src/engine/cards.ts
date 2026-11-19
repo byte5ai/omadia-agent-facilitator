@@ -163,8 +163,9 @@ async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
     to: 'group',
     deliveryClass: 'essential',
     requiredPhases: input.phases,
-    // Text and card are two messages on some channels: the text stays short.
-    text: input.intro ? `${input.title}\n${input.intro}` : input.title,
+    // A text next to a card is a second message on a channel: the card says
+    // everything itself (title, intro, questions, until when), so no text.
+    text: '',
     card: sent,
     cardFallbackText: input.fallbackText,
     link: { kind: 'card', id: card.cardId },
@@ -177,6 +178,8 @@ async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
 
 async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questions: CardQuestion[], fallbackText: string): Promise<void> {
   const version = await nextVersion(w, step.id);
+  const t = texts(w.f.language);
+  const total = (await store.listSteps(w.tx, w.f.id)).length;
   await sendCard(w, {
     cardId: cardIdOf(step, version),
     stepId: step.id,
@@ -185,7 +188,8 @@ async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questi
     proposalId: step.id,
     version,
     title: step.title,
-    intro: texts(w.f.language).card.chatToo,
+    // The card stands for the step's announcement: where it is, and that the chat counts too.
+    intro: [...(total > 1 ? [t.card.stepOf(step.position, total)] : []), t.card.chatToo].join(' '),
     questions,
     closesAt: step.roundDeadline ?? w.f.deadline,
     fallbackText,
@@ -229,8 +233,23 @@ export async function postStepCard(w: Work, step: Step): Promise<boolean> {
   if (!support || !step.method) return false;
   const questions = voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support);
   if (!questions) return false;
-  await postCard(w, step, 'vote', questions, [step.title, ...rulesOf(w.f, step)].join('\n'));
+  // What the group reads when the channel refuses the card after all: the
+  // whole announcement the card stands for.
+  const total = (await store.listSteps(w.tx, w.f.id)).length;
+  const rules = rulesOf(w.f, step);
+  const fallback = total > 1 ? t.stepOpened(step.position, total, step.title, rules.join(' '), undefined) : [step.title, ...rules].join('\n');
+  await postCard(w, step, 'vote', questions, fallback);
   return true;
+}
+
+/**
+ * Will this deciding step be put to the group as a card? Then the card is the
+ * announcement, and the chat does not explain the vote a second time.
+ */
+export async function voteCardFits(w: Pick<Work, 'tx' | 'f' | 'engine'>, step: Step): Promise<boolean> {
+  const support = cardSupport(w.engine, w.f.channelType);
+  if (!support || !step.method) return false;
+  return voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support) !== undefined;
 }
 
 /** A collecting step: ideas can be sent through a text field as well. */

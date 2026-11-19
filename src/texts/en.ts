@@ -40,7 +40,9 @@ export const en = {
 
   /** What a question card says (the channel words its own buttons). */
   card: {
-    chatToo: 'Answer on the card or in the chat; your newest answer counts.',
+    chatToo: 'An answer in the chat counts too; your newest answer counts.',
+    stepOf: (position: number, total: number): string => `Step ${String(position)} of ${String(total)}.`,
+    voteOnCard: 'You vote on the card; an answer in the chat counts too.',
     rank: 'Rank the options, best first.',
     rankLabel: (rank: number, points: number | undefined): string => {
       const ordinal = `${String(rank)}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'} place`;

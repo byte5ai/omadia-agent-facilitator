@@ -9,6 +9,7 @@ import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Cluster, Contribution, Facilitation, Participant, Proposal, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import { voteCardFits } from './cards.js';
 import { recordContribution, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
@@ -63,14 +64,18 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
   const instruction = needsOptions(opened)
     ? t.needOptions(step.title)
     : [t.stepInstruction[step.kind], ...(opened.method === null && (step.kind === 'collect' || step.kind === 'discuss') ? [t.moveOnHint[step.kind]] : []), ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
-  w.post({
-    purpose: 'step_opened',
-    key: step.id,
-    to: 'group',
-    deliveryClass: 'essential',
-    requiredPhases: ['active'],
-    text: t.stepOpened(step.position, steps.length, step.title, instruction, until ? formatWhen(until, w.f.timezone, w.f.language) : undefined),
-  });
+  // A vote that goes out as a card is announced by the card alone: one
+  // message, not the step text, a pointer to the card and the card.
+  if (needsOptions(opened) || !(await voteCardFits(w, opened))) {
+    w.post({
+      purpose: 'step_opened',
+      key: step.id,
+      to: 'group',
+      deliveryClass: 'essential',
+      requiredPhases: ['active'],
+      text: t.stepOpened(step.position, steps.length, step.title, instruction, until ? formatWhen(until, w.f.timezone, w.f.language) : undefined),
+    });
+  }
   await announceVote(w, opened);
   await announceStepOpened(w, opened);
   return opened;
@@ -247,7 +252,7 @@ export async function setDecision(w: Work, step: Step, patch: Partial<Pick<Step,
   await w.event('decision_set', 'facilitator', { stepId: step.id, method: updated.method, options: updated.options });
   if (updated.status === 'open') {
     const t = texts(w.f.language);
-    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...rulesOf(w.f, updated)].join(' ') });
+    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...((await voteCardFits(w, updated)) ? [t.card.voteOnCard] : rulesOf(w.f, updated))].join(' ') });
     await announceVote(w, updated);
   }
   return updated;

@@ -18,6 +18,7 @@ import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
 import { expectedNames, listKnown } from './roll.js';
 import { openProposal, registerProposalKind } from './proposals.js';
+import { voteCardFits } from './cards.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
 
@@ -45,6 +46,17 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
   const upcoming = upcomingOffsets(f, w.now);
   // Every decision method that is already fixed is announced with its rules.
   const deciding = onlyStep ? [onlyStep] : steps.filter((s) => s.method !== null && (s.method === 'consent' || s.options.length > 0));
+  // A vote that is a card is explained by the card: the handshake points to
+  // it and keeps the line on when it closes. The chat syntax is for channels
+  // without cards.
+  const rules: string[] = [];
+  for (const s of deciding) {
+    const lines = rulesOf(f, s);
+    if (await voteCardFits(w, s)) {
+      if (!rules.includes(t.card.voteOnCard)) rules.push(t.card.voteOnCard);
+      rules.push(...lines.slice(1));
+    } else rules.push(...lines);
+  }
   return t.handshakeFull({
     facilitator: facilitatorName(f),
     ...(named ? { initiator: named } : {}),
@@ -52,7 +64,7 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
     definitionOfDone: dod?.text ?? '',
     format: t.formats[f.format],
     agenda: steps.length > 1 ? steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes)) : [],
-    rules: deciding.flatMap((s) => rulesOf(f, s)),
+    rules,
     // Somebody without a name yet is not listed as a placeholder.
     participants: [...participants.filter((p) => !isPlaceholderName(p.displayName, p.principalId)).map((p) => p.displayName), ...expectedNames(f)],
     rosterOpen: f.settings.openRoster === true,

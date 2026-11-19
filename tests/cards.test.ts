@@ -75,9 +75,9 @@ test('a ranked vote is a card where the channel has cards, chat ballots count ne
       required: true,
     },
   ]);
-  // The text of the same message says that the chat counts as well.
-  assert.match(posted.text, /Pick the name/);
-  assert.match(posted.text, /in the chat/);
+  // One message: no text next to the card; the card says that the chat counts as well.
+  assert.equal(posted.text, '');
+  assert.match(posted.card.intro ?? '', /in the chat/);
   assert.equal(h.kernel.groupPosts(conv).filter((p) => p.poll !== undefined).length, 0, 'no poll next to the card');
 
   await submit(conv, 'anna', rank('A', 'C', 'B'));
@@ -487,4 +487,65 @@ test('D29: reading a number or a date out of what somebody typed', () => {
   assert.equal(date('24.11.2026'), '2026-11-24');
   assert.equal(date('4.1.2027'), '2027-01-04');
   for (const bad of ['31.02.2026', '2026-13-01', 'next Tuesday', '24.11.', '24.11.26 or 25.11.26']) assert.equal(date(bad), undefined, bad);
+});
+
+// ── 1.2.0: live finding D30 ─────────────────────────────────────────────────
+
+test('D30: a vote step is ONE message where the channel has cards: the card carries step, question and deadline', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-one-message', THREE);
+  await tool(conv, 'facilitation_start', {
+    goal: 'Offsite',
+    deadline: new Date(h.clock.now().getTime() + 48 * 3600_000).toISOString(),
+    agenda: [{ kind: 'collect', title: 'Ideas' }, { kind: 'decide', title: 'Pick the place', method: 'ranked', options: ['Alpha', 'Bravo', 'Charlie'] }],
+  });
+  await tool(conv, 'facilitation_open');
+  const before = h.kernel.groupPosts(conv).length;
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  const since = h.kernel.groupPosts(conv).slice(before).filter((p) => !/is closed|whoever has not had the chance/i.test(p.text));
+  const vote = since.filter((p) => p.card !== undefined || /Pick the place/.test(p.text));
+  assert.equal(vote.length, 1, `one message for the vote, got: ${JSON.stringify(vote.map((p) => p.text))}`);
+  const posted = vote[0];
+  assert.equal(posted?.text, '', 'no text next to the card');
+  assert.equal(posted?.card?.title, 'Pick the place');
+  assert.match(posted?.card?.intro ?? '', /^Step 2 of 2\./);
+  assert.match(posted?.card?.intro ?? '', /An answer in the chat counts too/);
+  assert.ok(posted?.card?.closesAt, 'the deadline is on the card');
+  assert.equal(posted?.card?.questions[0]?.label, 'Rank the options, best first.');
+  // The chat still counts.
+  await say(conv, 'anna', 'A > B > C');
+  assert.match(posts(conv).at(-1) ?? '', /^Recorded for you, Anna/);
+});
+
+test('D30: the handshake points to the card where there is one, and explains the chat syntax only where there is none', { skip: PG_SKIP }, async () => {
+  const withCard = h.kernel.conversation('cd-handshake-card', THREE);
+  await tool(withCard, 'facilitation_start', RANKED);
+  const handshake = posts(withCard).find((p) => /Pick the name/.test(p) && p !== '') ?? '';
+  assert.match(handshake, /You vote on the card; an answer in the chat counts too\./);
+  assert.doesNotMatch(handshake, /A > B > C|best first/);
+  assert.equal(h.kernel.groupPosts(withCard).filter((p) => p.card !== undefined).length, 1);
+  assert.equal(h.kernel.groupPosts(withCard).length, 2, 'the handshake and the card, nothing else');
+
+  h.kernel.cardSupport = undefined;
+  const without = h.kernel.conversation('cd-handshake-chat', THREE);
+  await tool(without, 'facilitation_start', RANKED);
+  const plain = posts(without).join('\n');
+  assert.match(plain, /best first/);
+  assert.doesNotMatch(plain, /on the card/);
+});
+
+test('D30: a card the channel refuses still brings the whole step into the chat', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-one-message-refused', THREE);
+  await tool(conv, 'facilitation_start', { goal: 'Offsite', agenda: [{ kind: 'collect', title: 'Ideas' }, { kind: 'decide', title: 'Pick the place', method: 'single', options: ['Alpha', 'Bravo'] }] });
+  await tool(conv, 'facilitation_open');
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  h.kernel.refuseCards = 5;
+  try {
+    await tool(conv, 'facilitation_step', { action: 'close' });
+  } finally {
+    h.kernel.refuseCards = 0;
+  }
+  const text = posts(conv).find((p) => /^Step 2 of 2: Pick the place/.test(p)) ?? '';
+  assert.match(text, /A \(Alpha\)|Alpha/);
+  assert.match(text, /one option/i);
 });
