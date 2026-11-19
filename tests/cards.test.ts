@@ -10,6 +10,8 @@ import * as store from '../src/db/store.js';
 import type { CardAnswerValue, CardSupport } from '../src/cards/types.js';
 import { CARD_ID_PATTERN } from '../src/cards/types.js';
 import { readExpected } from '../src/engine/cards.js';
+import { operatorTerminate } from '../src/engine/governance.js';
+import { MINUTE_MS } from '../src/clock.js';
 import { ANNA, BERT, CARA, createHarness } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
@@ -554,4 +556,77 @@ test('D30: a card the channel refuses still brings the whole step into the chat'
   const text = posts(conv).find((p) => /^Step 2 of 2: Pick the place/.test(p)) ?? '';
   assert.match(text, /A \(Alpha\)|Alpha/);
   assert.match(text, /one option/i);
+});
+
+// O2 of the rollout: a card closed while an operator had stopped the
+// facilitator stayed open in the channel, because its update was dropped at
+// the first refusal.
+const updateRows = async (conv: string) =>
+  (await h.db.pool.query<{ status: string; attempts: number; delivery_class: string; last_error: string | null }>(
+    `SELECT status, attempts, delivery_class, last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'card_update'`,
+    [(await h.facilitation(conv)).id],
+  )).rows;
+
+test("O2: a card closed while an operator's stop is on is closed in the channel once the stop is lifted", { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-stopped', THREE);
+  await tool(conv, 'facilitation_start', RANKED);
+  const f = await h.facilitation(conv);
+  const posted = card(conv);
+  const updates = () => h.kernel.cardUpdates.filter((u) => u.cardMessageId === posted.cardMessageId);
+
+  h.kernel.killSwitch.processes.add(f.id);
+  try {
+    await operatorTerminate(h.engine.core, f.id, 'op@example.com', 'stopped during pass 5');
+    await h.settle();
+    assert.equal((await h.facilitation(conv)).phase, 'aborted');
+    assert.equal(updates().length, 0, 'the kernel refused it');
+    // A long stop: it is asked again and again, and that is not held against it.
+    for (let i = 0; i < 30; i += 1) {
+      h.clock.advance(5 * MINUTE_MS);
+      await h.tick();
+    }
+    assert.equal(updates().length, 0);
+    const held = await updateRows(conv);
+    assert.deepEqual(held.map((r) => [r.status, r.attempts, r.delivery_class]), [['pending', 0, 'essential']], 'held, not dropped; a stop is not a failed attempt');
+    assert.match(held[0]?.last_error ?? '', /^not_authorized:kill_switch: /);
+  } finally {
+    h.kernel.killSwitch.processes.delete(f.id);
+  }
+  h.clock.advance(2 * MINUTE_MS);
+  await h.tick();
+  assert.equal(updates().length, 1, 'applied after the release');
+  assert.equal(updates()[0]?.update.state, 'closed');
+  assert.deepEqual((await updateRows(conv)).map((r) => r.status), ['sent']);
+  await h.tick();
+  await h.tick();
+  assert.equal(updates().length, 1, 'once');
+});
+
+test('O2: a card update the channel fails once is tried again, and applied once', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-update-retry', THREE);
+  await tool(conv, 'facilitation_start', RANKED);
+  const posted = card(conv);
+  const updates = () => h.kernel.cardUpdates.filter((u) => u.cardMessageId === posted.cardMessageId);
+  h.kernel.cardUpdateFaults.push({ code: 'channel_error', message: 'the channel is down' });
+  for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'A > B > C');
+  assert.equal((await h.facilitation(conv)).phase, 'closed');
+  assert.equal(updates().length, 0);
+  assert.deepEqual((await updateRows(conv)).map((r) => [r.status, r.attempts]), [['pending', 1]]);
+  h.clock.advance(2 * MINUTE_MS);
+  await h.tick();
+  assert.equal(updates().length, 1);
+  assert.match((updates()[0]?.update as unknown as { resultLines: string[] }).resultLines.join('\n'), /Alpha/);
+  await h.tick();
+  assert.equal(updates().length, 1);
+});
+
+test('O2: an update for a card that never reached the channel is given up at once', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-never-posted', THREE);
+  h.kernel.sendFaults.push({ code: 'channel_error', message: 'the channel is down' });
+  await tool(conv, 'facilitation_start', RANKED);
+  const f = await h.facilitation(conv);
+  await operatorTerminate(h.engine.core, f.id, 'op@example.com', 'cleaning up');
+  await h.settle();
+  const rows = await updateRows(conv);
+  assert.ok(rows.every((r) => r.status === 'dropped' || r.status === 'sent'), `nothing waits: ${JSON.stringify(rows)}`);
 });
