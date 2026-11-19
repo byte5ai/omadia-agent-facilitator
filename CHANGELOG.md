@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.2
+
+### Changed
+
+- **A meeting nobody scheduled through the facilitator is not narrated.** Its
+  start is silent unless the meeting offers something else than the chat;
+  then one line says what the facilitator perceives in addition or no longer.
+  Its end is not announced. A meeting scheduled through the facilitator is
+  announced as before.
+
+### Fixed
+
+- **A facilitation that starts while a meeting already runs** knows it: the
+  conversation's snapshot is read at the start, and an `online` or `hybrid`
+  modality is a running session from the first moment. The start event that
+  arrives later belongs to the same session.
+- **Sessions left running by facilitations that ended before 1.1.1** are
+  closed once by migration `0004` (ended facilitations only).
+
 ## 1.1.1
 
 Defects from the live runs on 1.0.5 (D25, D26, and the open part of D23).
