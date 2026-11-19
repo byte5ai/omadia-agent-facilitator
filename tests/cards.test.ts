@@ -452,15 +452,21 @@ test('D29: a number or date question on a channel without those fields is a text
   await submit(conv, 'anna', [{ questionId: 'minutes', kind: 'text', text: '15min' }, { questionId: 'day', kind: 'text', text: '24.11.2026' }]);
   await submit(conv, 'bert', [{ questionId: 'minutes', kind: 'text', text: ' 7,5 Minuten ' }]);
   // No number, two numbers, out of range, no real date: refused with a hint to the person.
+  // While a facilitation is being set up its scope lets the facilitator write
+  // privately to the initiator only (spec 2043 §0): the hint to somebody else
+  // is said in the group, with their name.
   const before = (await outcomes(conv)).length;
   const dms = h.kernel.dms.length;
+  const said = h.kernel.groupPosts(conv).length;
   await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: 'a quarter of an hour' }]);
   await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '10-15' }]);
   await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '500' }]);
   await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '15' }, { questionId: 'day', kind: 'text', text: '31.02.2026' }]);
   assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_invalid', 'card_answer_invalid', 'card_answer_invalid', 'card_answer_invalid']);
-  const hints = h.kernel.dms.slice(dms).map((d) => d.text);
+  assert.equal(h.kernel.dms.length, dms, 'no private message outside the scope');
+  const hints = h.kernel.groupPosts(conv).slice(said).map((p) => p.text);
   assert.equal(hints.length, 4);
+  assert.ok(hints.every((text) => text.startsWith('Cara: ')));
   assert.match(hints[0] ?? '', /"How many minutes should the test run take\?".*a number only, for example 15/i);
   assert.match(hints[2] ?? '', /between 1 and 120/);
   assert.match(hints[3] ?? '', /"Which day\?".*2026-11-24/);

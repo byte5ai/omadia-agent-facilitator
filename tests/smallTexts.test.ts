@@ -100,15 +100,17 @@ test('an owner who cannot be reached privately is reminded in the group instead'
   }
 });
 
+// In follow-up the facilitator hears what is addressed to it (a mention, a
+// reply to one of its messages, a card button): spec 2043 §6.2.
 test('"done" without a number closes the only open item of its owner, and asks which one when there are several', { skip: PG_SKIP }, async () => {
   await followUp('st-done-one', 1);
-  await say('st-done-one', 'bert', 'erledigt');
+  await say('st-done-one', 'bert', '@Mira erledigt');
   assert.equal((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-one')).id))[0]?.status, 'confirmed', 'not the owner: nothing happens');
-  await say('st-done-one', 'anna', 'erledigt');
+  await say('st-done-one', 'anna', '@Mira erledigt');
   assert.equal((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-one')).id))[0]?.status, 'done');
 
   await followUp('st-done-two', 2);
-  await say('st-done-two', 'anna', 'Done!');
-  assert.equal(posts('st-done-two').at(-1), 'Anna, which one is done? Write "done 1" or "done 2".');
+  await say('st-done-two', 'anna', '@Mira Done!');
+  assert.equal(posts('st-done-two').at(-1), 'Anna, which one is done? Reply with "done 1" or "done 2".');
   assert.deepEqual((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-two')).id)).map((a) => a.status), ['confirmed', 'confirmed']);
 });

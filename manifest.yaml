@@ -31,7 +31,7 @@ identity:
   kind: "archetype"
   domain: "facilitation"
   name: "Facilitator archetype"
-  version: "1.3.0"
+  version: "1.4.0"
   description:
     en: "Delivers the archetype facilitator, an impartial moderator of group processes, and runs its facilitations: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Liefert den Archetyp Facilitator, einen unparteiischen Moderator von Gruppenprozessen, und führt seine Moderationen: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -46,11 +46,13 @@ identity:
 
 compat:
   # Compared as a semver range against the host's @omadia/plugin-api version.
-  # 1.62.0 is the first kernel that gives an archetype plugin its own schema
-  # and role (`ctx.sql.schema`, `ctx.sql.query`, `ctx.sql.transaction`). An
-  # older kernel is not offered this version. There is no way back to a
-  # version that expects the shared pool once the tables have moved.
-  core: ">=1.62.0 <2.0"
+  # 1.69.0 is the first kernel with everything a facilitation is authorized
+  # and bounded by: execution scopes and the kill switch (1.63), `agentTurn@2`
+  # (1.64), `conversationMessages@2` (1.66), `conversationSend@2` (1.67),
+  # private status requests (1.68) and kernel-issued grants (1.69). An older
+  # kernel is not offered this version. Its own schema (1.62.0) is part of it:
+  # there is no way back to a version that expects the shared pool.
+  core: ">=1.69.0 <2.0"
   node: ">=20"
 
 # The archetype this plugin delivers. Read strictly by the kernel.
@@ -130,23 +132,36 @@ provides:
 
 requires: []
 
-# Least privilege: exactly what the engine consumes.
-#   conversationMessages  every human message of a moderated conversation,
-#                         with authorship the kernel states
-#   agentTurn             the kernel runs the facilitator turn, returns text
-#   conversationSend      post as the facilitator's own identity
-#   targetedSend          private messages as the facilitator's own identity
-#   channelReadiness      installed / may read all messages / may post
-#   sessionCapabilities   what the channel and its media offer in a session
-#   conversationEvents    membership changes (joined / left)
-#   conversationRosters   the participants at start
-#   facilitation.followup free/busy, invitations and mail for a closed
-#                         facilitation (an integration plugin provides it)
+# Least privilege: exactly what the engine consumes. A lookup names its major
+# (`conversationSend@2`), and the kernel only answers for a major declared here.
+#   executionAuthorization  execution scopes, the conversation's reservation
+#                           and the kill switch: every action is drawn from a
+#                           scope (kernel #2090)
+#   executionGrants         kernel-issued grants for mail and calendar, bound
+#                           to a scope (kernel #2078)
+#   conversationMessages@2  every human message of a moderated conversation,
+#                           bound to the facilitation, with authorship the
+#                           kernel states; private status requests
+#   agentTurn@2             the kernel runs the facilitator turn under a scope
+#                           and returns text
+#   conversationSend@2      posts, private messages, card updates and the
+#                           readiness check as the facilitator's own identity,
+#                           each drawn from a scope
+#   conversationMessages@1  only to give back the subscription of a
+#                           facilitation that began before 1.4.0
+#   channelReadiness        the consent repair
+#   sessionCapabilities     what the channel and its media offer in a session
+#   conversationEvents      membership changes (joined / left)
+#   conversationRosters     the participants at start
+#   facilitation.followup   free/busy, invitations and mail for a closed
+#                           facilitation (an integration plugin provides it)
 optional_requires:
+  - "executionAuthorization@^1"
+  - "executionGrants@^1"
+  - "conversationMessages@^2"
+  - "agentTurn@^2"
+  - "conversationSend@^2"
   - "conversationMessages@1"
-  - "agentTurn@1"
-  - "conversationSend@1"
-  - "targetedSend@1"
   - "channelReadiness@1"
   - "sessionCapabilities@1"
   - "conversationEvents@1"

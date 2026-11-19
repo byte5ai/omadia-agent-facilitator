@@ -32,14 +32,14 @@ test('a meeting that starts in a moderated chat opens a session with a fresh sna
   const conv = h.kernel.conversation('me-start', [ANNA, BERT]);
   h.kernel.capabilities(conv, ['text'], ['text']);
   await tool(conv, 'facilitation_start', TALK);
-  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]), [['async', 'running']]);
+  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]), [['async', 'live']]);
 
   // The meeting offers more than the chat did.
   h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls'], { sessionRef: 'meeting-7', modality: 'online' });
   await h.kernel.sessionEvent('mira', conv, 'meeting-7', 'session_started');
   await h.settle();
   const live = (await sessionsOf(conv)).find((s) => s.kind === 'live');
-  assert.equal(live?.status, 'running');
+  assert.equal(live?.status, 'live');
   assert.equal(live?.meetingRef, 'meeting-7');
   assert.equal(live?.modality, 'online');
   assert.deepEqual((live?.capabilitySnapshot as { inputs: string[] }).inputs, ['text', 'card_answers']);
@@ -65,7 +65,7 @@ test('a meeting that starts in a moderated chat opens a session with a fresh sna
   await h.kernel.sessionEvent('mira', conv, 'meeting-7', 'session_ended');
   await h.settle();
   const after = await sessionsOf(conv);
-  assert.deepEqual(after.map((s) => [s.kind, s.status]).sort(), [['async', 'running'], ['live', 'ended']]);
+  assert.deepEqual(after.map((s) => [s.kind, s.status]).sort(), [['async', 'live'], ['live', 'closed']]);
   assert.ok(after.find((s) => s.kind === 'live')?.endedAt);
   assert.deepEqual((after.find((s) => s.kind === 'async')?.capabilitySnapshot as { inputs: string[] }).inputs, ['text', 'message_edits']);
 });
@@ -95,13 +95,13 @@ test('no session stays open when its facilitation has ended', { skip: PG_SKIP },
   for (const who of ['anna', 'bert']) await say(closed, who, 'A');
   assert.equal((await h.facilitation(closed)).phase, 'closed');
   const rows = await sessionsOf(closed);
-  assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'ended'], ['live', 'cancelled'], ['live', 'ended']]);
-  assert.ok(rows.filter((s) => s.status === 'ended').every((s) => s.endedAt !== null));
+  assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'closed'], ['live', 'cancelled'], ['live', 'closed']]);
+  assert.ok(rows.filter((s) => s.status === 'closed').every((s) => s.endedAt !== null));
 
   const aborted = h.kernel.conversation('me-aborted', [ANNA, BERT]);
   await tool(aborted, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
   await say(aborted, 'anna', 'stop');
-  assert.deepEqual((await sessionsOf(aborted)).map((s) => [s.kind, s.status]), [['async', 'ended']]);
+  assert.deepEqual((await sessionsOf(aborted)).map((s) => [s.kind, s.status]), [['async', 'closed']]);
 
   // A meeting event for a conversation whose facilitation is over changes nothing.
   await h.kernel.sessionEvent('mira', aborted, 'meeting-10', 'session_started');
@@ -119,11 +119,11 @@ test('a meeting that offers what the chat offers starts and ends without a word'
   await h.kernel.sessionEvent('mira', conv, 'meeting-20', 'session_started');
   await h.settle();
   assert.equal(posts(conv).length, count, 'nothing is posted');
-  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'running'], ['live', 'running']], 'the session is on record all the same');
+  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'live'], ['live', 'live']], 'the session is on record all the same');
   await h.kernel.sessionEvent('mira', conv, 'meeting-20', 'session_ended');
   await h.settle();
   assert.equal(posts(conv).length, count);
-  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'running'], ['live', 'ended']]);
+  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'live'], ['live', 'closed']]);
 
   // What the meeting takes away is said as well, in the same single line.
   const less = h.kernel.conversation('me-less', [ANNA, BERT]);
@@ -141,7 +141,7 @@ test('a facilitation that starts while a meeting already runs knows the meeting 
   h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls'], { modality: 'online' });
   await tool(conv, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
   const rows = await sessionsOf(conv);
-  assert.deepEqual(rows.map((s) => [s.kind, s.status, s.modality]).sort(), [['async', 'running', 'chat'], ['live', 'running', 'online']]);
+  assert.deepEqual(rows.map((s) => [s.kind, s.status, s.modality]).sort(), [['async', 'live', 'chat'], ['live', 'live', 'online']]);
   assert.equal(h.kernel.groupPosts(conv).filter((p) => p.poll !== undefined).length, 1, 'the vote uses what the meeting offers');
   assert.ok(!posts(conv).some((p) => /A meeting is running/.test(p)), 'the handshake says what is perceived; no extra line');
   // The start event for that meeting arrives late: it is the same session.
@@ -153,7 +153,7 @@ test('a facilitation that starts while a meeting already runs knows the meeting 
   assert.equal(posts(conv).length, count);
   await h.kernel.sessionEvent('mira', conv, 'meeting-30', 'session_ended');
   await h.settle();
-  assert.equal((await sessionsOf(conv)).find((s) => s.kind === 'live')?.status, 'ended');
+  assert.equal((await sessionsOf(conv)).find((s) => s.kind === 'live')?.status, 'closed');
 
   // A plain chat has no live session.
   const chat = h.kernel.conversation('me-chat', [ANNA, BERT]);
@@ -173,11 +173,19 @@ test('the one-time cleanup ends the sessions that facilitations before 1.1.1 lef
   await tool(running, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
   const f = await h.facilitation(ended);
   // As 1.1.0 and older left it.
-  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'running', ended_at = NULL WHERE facilitation_id = $1`, [f.id]);
-  await h.db.pool.query(`INSERT INTO plg_omadia_agent_facilitator_sessions (facilitation_id, kind, modality, status, created_at) VALUES ($1, 'live', 'online', 'scheduled', now())`, [f.id]);
+  // As 1.1.0 and older left it, in the names of that time: the cleanup
+  // (0004) runs before the session states get the names of the
+  // specification (0006).
+  await h.db.asMigrationRole('ALTER TABLE plg_omadia_agent_facilitator_sessions DROP CONSTRAINT plg_omadia_agent_facilitator_sessions_status_check');
+  await h.db.asMigrationRole(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'running' WHERE status = 'live'`);
+  await h.db.asMigrationRole(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'running', ended_at = NULL WHERE facilitation_id = '${f.id}'`);
+  await h.db.asMigrationRole(`INSERT INTO plg_omadia_agent_facilitator_sessions (facilitation_id, kind, modality, status, created_at) VALUES ('${f.id}', 'live', 'online', 'scheduled', now())`);
   await h.db.asMigrationRole(readFileSync(join(MIGRATIONS_DIR, '0004_close_left_sessions.sql'), 'utf8'));
+  for (const statement of readFileSync(join(MIGRATIONS_DIR, '0006_execution_scopes.sql'), 'utf8').split(/;\s*\n/).filter((sql) => /plg_omadia_agent_facilitator_sessions/.test(sql) && !/CREATE/.test(sql))) {
+    await h.db.asMigrationRole(statement.replace(/^\s*--.*$/gm, ''));
+  }
   const rows = await sessionsOf(ended);
-  assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'ended'], ['live', 'cancelled']]);
+  assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'closed'], ['live', 'cancelled']]);
   assert.equal(rows.find((s) => s.kind === 'async')?.endedAt?.getTime(), f.closedAt?.getTime(), 'ended when its facilitation ended');
-  assert.deepEqual((await sessionsOf(running)).map((s) => [s.kind, s.status]), [['async', 'running']], 'a facilitation that is going on is not touched');
+  assert.deepEqual((await sessionsOf(running)).map((s) => [s.kind, s.status]), [['async', 'live']], 'a facilitation that is going on is not touched');
 });

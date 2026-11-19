@@ -89,26 +89,8 @@ test('the handshake says "no private messages" only when the facilitator really 
     await startActive(h, works, { ...VOTE, deadline: new Date(h.clock.now().getTime() + 3 * 3600_000).toISOString(), reminderOffsetsHours: [1] });
     assert.doesNotMatch(h.kernel.groupPosts(works)[0]?.text ?? '', /cannot write to anyone privately/);
 
-    // No way to write privately at all: it says so, and that is true.
-    h.kernel.absent.add('targetedSend');
-    const none = h.kernel.conversation('pt-dm-none', FOUR);
-    await startActive(h, none, VOTE);
-    assert.match(h.kernel.groupPosts(none)[0]?.text ?? '', /I cannot write to anyone privately here, so reminders stay in the group/);
   } finally {
     h.kernel.absent.delete('sessionCapabilities');
-    h.kernel.absent.delete('targetedSend');
-  }
-});
-
-test('a channel that declares private messages without a way to send them is not believed', { skip: PG_SKIP }, async () => {
-  const conv = h.kernel.conversation('pt-dm-declared', FOUR);
-  h.kernel.capabilities(conv, ['text'], ['text', 'private_messages']);
-  h.kernel.absent.add('targetedSend');
-  try {
-    await startActive(h, conv, VOTE);
-    assert.match(h.kernel.groupPosts(conv)[0]?.text ?? '', /I cannot write to anyone privately here/);
-  } finally {
-    h.kernel.absent.delete('targetedSend');
   }
 });
 

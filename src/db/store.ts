@@ -39,7 +39,7 @@ export type NewFacilitation = Pick<
   | 'settings'
   | 'createdAt'
 > &
-  Partial<Pick<Facilitation, 'tenantId' | 'deadline' | 'initiatorParticipant'>>;
+  Partial<Pick<Facilitation, 'id' | 'tenantId' | 'deadline' | 'initiatorParticipant'>>;
 
 export const createFacilitation = (q: Queryable, values: NewFacilitation): Promise<Facilitation> =>
   insert<Facilitation>(q, 'plg_omadia_agent_facilitator_facilitations', { ...values });

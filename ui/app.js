@@ -32,7 +32,7 @@
       dates: { deadline: 'Deadline', created: 'Started', closed: 'Ended', retention: 'Deleted after' },
       formats: { decision: 'Decision', prioritisation: 'Prioritisation', assignment: 'Assignment', ideas: 'Idea collection', retrospective: 'Retrospective', alignment: 'Alignment', custom: 'Custom' },
       activeOf: 'active of',
-      phases: { configuring: 'Being set up', active: 'Running', concluding: 'Concluding', closed: 'Closed', aborted: 'Ended without a result' },
+      phases: { configuring: 'Being set up', active: 'Running', concluding: 'Concluding', closed: 'Closed', aborted: 'Ended without a result', following_up: 'Following up action items', ended: 'Ended' },
       followup: 'follow-up running',
       showContents: 'Show contents',
       terminate: 'Terminate',
@@ -73,7 +73,7 @@
       dates: { deadline: 'Deadline', created: 'Gestartet', closed: 'Beendet', retention: 'Löschung nach' },
       formats: { decision: 'Entscheidung', prioritisation: 'Priorisierung', assignment: 'Zuweisung', ideas: 'Ideensammlung', retrospective: 'Retrospektive', alignment: 'Abstimmung', custom: 'Eigenes Format' },
       activeOf: 'aktiv von',
-      phases: { configuring: 'Wird eingerichtet', active: 'Läuft', concluding: 'Wird abgeschlossen', closed: 'Abgeschlossen', aborted: 'Ohne Ergebnis beendet' },
+      phases: { configuring: 'Wird eingerichtet', active: 'Läuft', concluding: 'Wird abgeschlossen', closed: 'Abgeschlossen', aborted: 'Ohne Ergebnis beendet', following_up: 'Aufgaben werden nachverfolgt', ended: 'Beendet' },
       followup: 'Nachverfolgung läuft',
       showContents: 'Inhalte anzeigen',
       terminate: 'Beenden',
@@ -172,8 +172,10 @@
     el('empty').hidden = items.length !== 0;
     items.forEach(function (f) {
       var tr = document.createElement('tr');
-      var phase = t.phases[f.phase] || f.phase;
-      if (f.followupState === 'active') phase += ' (' + t.followup + ')';
+      // `state` is the lifecycle of the specification (1.4.0): after the
+      // close it says whether action items are followed up or it has ended.
+      var phase = t.phases[f.state || f.phase] || f.state || f.phase;
+      if (!f.state && f.followupState === 'active') phase += ' (' + t.followup + ')';
       // Several short lines in one cell keep the table inside the host's frame.
       var lines = function (pairs) {
         var td = document.createElement('td');

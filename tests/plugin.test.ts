@@ -68,7 +68,7 @@ test('without the SQL grant the engine activates, reports itself unavailable and
 test('every missing kernel service is logged once, none of them stops activation', async () => {
   const { ctx, logs } = bareContext();
   await activate(ctx);
-  for (const name of ['conversationMessages', 'agentTurn', 'conversationSend', 'targetedSend', 'facilitation.followup']) {
+  for (const name of ['executionAuthorization', 'executionGrants', 'conversationMessages@2', 'agentTurn@2', 'conversationSend@2', 'facilitation.followup']) {
     assert.equal(logs.filter((l) => l.includes(`'${name}'`)).length, 1, name);
   }
 });

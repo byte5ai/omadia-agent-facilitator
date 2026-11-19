@@ -76,7 +76,7 @@ test('the handshake says what the facilitator perceives; readiness that could no
   assert.match(posts(conv)[0] ?? '', /What I perceive here: I read the chat, edited messages\. I cannot run polls here, so votes are written in the chat\. Nobody should assume more\./);
   const f = await h.facilitation(conv);
   const [session] = await store.listSessions(h.db.pool, f.id);
-  assert.deepEqual([session?.kind, session?.modality, session?.status], ['async', 'chat', 'running']);
+  assert.deepEqual([session?.kind, session?.modality, session?.status], ['async', 'chat', 'live']);
 });
 
 test('missing consent is repaired once; when the repair fails nothing starts', { skip: PG_SKIP }, async () => {
@@ -175,7 +175,7 @@ test('a meeting: agenda before it, start on time with what is perceived, time ch
   await h.settle();
   assert.ok(posts(conv).includes('"Planning call" has ended. What is still open continues here in the chat.'));
   const sessions = await store.listSessions(h.db.pool, (await h.facilitation(conv)).id);
-  assert.deepEqual(sessions.map((s) => [s.kind, s.status]), [['async', 'running'], ['live', 'ended']]);
+  assert.deepEqual(sessions.map((s) => [s.kind, s.status]), [['async', 'live'], ['live', 'closed']]);
 });
 
 test('hybrid: the speaking order puts remote voices first when the room has spoken more, and rotates who starts', { skip: PG_SKIP }, async () => {

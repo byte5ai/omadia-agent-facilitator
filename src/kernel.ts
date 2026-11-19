@@ -11,22 +11,26 @@
 // plugin.
 
 import {
-  AGENT_TURN_SERVICE_NAME,
+  AGENT_TURN_V2_SERVICE_NAME,
   CHANNEL_READINESS_SERVICE_NAME,
   CONVERSATION_MESSAGES_SERVICE_NAME,
-  CONVERSATION_SEND_SERVICE_NAME,
+  CONVERSATION_MESSAGES_V2_SERVICE_NAME,
+  CONVERSATION_SEND_V2_SERVICE_NAME,
+  EXECUTION_AUTHORIZATION_SERVICE_NAME,
+  EXECUTION_GRANTS_SERVICE_NAME,
   FACILITATION_FOLLOWUP_SERVICE_NAME,
   SESSION_CAPABILITIES_SERVICE_NAME,
-  TARGETED_SEND_SERVICE_NAME,
 } from '@omadia/plugin-api';
 import type {
-  AgentTurnService,
   ChannelReadinessService,
   ConversationMessagesService,
-  ConversationSendService,
+  ExecutionAuthorizationService,
+  ExecutionGrantsService,
   FacilitationFollowupService,
+  ProcessConversationMessagesService,
+  ScopedAgentTurnService,
+  ScopedConversationSendService,
   SessionCapabilitiesService,
-  TargetedSendService,
 } from '@omadia/plugin-api';
 
 import { dbOf } from './db/pool.js';
@@ -104,10 +108,21 @@ export interface ConversationRostersService {
 export interface Kernel {
   /** The engine's own database (`ctx.sql`), absent without the operator's grant. */
   db(): Db | undefined;
-  messages(): ConversationMessagesService | undefined;
-  agentTurn(): AgentTurnService | undefined;
-  conversationSend(): ConversationSendService | undefined;
-  targetedSend(): TargetedSendService | undefined;
+  /** Execution scopes, reservations and the kill switch (kernel #2090). */
+  execution(): ExecutionAuthorizationService | undefined;
+  /** Kernel-issued grants for mail and calendar (kernel #2078). */
+  grants(): ExecutionGrantsService | undefined;
+  /** `conversationMessages@2`: subscriptions and reads bound to a process. */
+  messages(): ProcessConversationMessagesService | undefined;
+  /** `agentTurn@2`: a model turn drawn from an execution scope. */
+  agentTurn(): ScopedAgentTurnService | undefined;
+  /** `conversationSend@2`: posts, direct messages, card updates and the
+   *  readiness check of one conversation, each drawn from a scope. */
+  conversationSend(): ScopedConversationSendService | undefined;
+  /** The first major of the message service. Only asked to give back the
+   *  subscription of a facilitation that began before execution scopes. */
+  legacyMessages(): Pick<ConversationMessagesService, 'unsubscribe'> | undefined;
+  /** Only its consent repair is used; the check itself is a scoped action. */
   readiness(): ChannelReadinessService | undefined;
   sessionCapabilities(): SessionCapabilitiesService | undefined;
   conversationEvents(): ConversationEventsService | undefined;
@@ -117,10 +132,12 @@ export interface Kernel {
 
 /** The names behind {@link Kernel}, in the order the manifest declares them. */
 export const KERNEL_SERVICE_NAMES = [
+  EXECUTION_AUTHORIZATION_SERVICE_NAME,
+  EXECUTION_GRANTS_SERVICE_NAME,
+  CONVERSATION_MESSAGES_V2_SERVICE_NAME,
+  AGENT_TURN_V2_SERVICE_NAME,
+  CONVERSATION_SEND_V2_SERVICE_NAME,
   CONVERSATION_MESSAGES_SERVICE_NAME,
-  AGENT_TURN_SERVICE_NAME,
-  CONVERSATION_SEND_SERVICE_NAME,
-  TARGETED_SEND_SERVICE_NAME,
   CHANNEL_READINESS_SERVICE_NAME,
   SESSION_CAPABILITIES_SERVICE_NAME,
   CONVERSATION_EVENTS_SERVICE_NAME,
@@ -153,14 +170,35 @@ export function createKernel(services: ServiceLookup, sql?: KernelSql): Kernel {
   const lookup = <T>(name: string) => (): T | undefined => resolveService<T>(services, name);
   return {
     db: () => db,
-    messages: lookup<ConversationMessagesService>(CONVERSATION_MESSAGES_SERVICE_NAME),
-    agentTurn: lookup<AgentTurnService>(AGENT_TURN_SERVICE_NAME),
-    conversationSend: lookup<ConversationSendService>(CONVERSATION_SEND_SERVICE_NAME),
-    targetedSend: lookup<TargetedSendService>(TARGETED_SEND_SERVICE_NAME),
+    execution: lookup<ExecutionAuthorizationService>(EXECUTION_AUTHORIZATION_SERVICE_NAME),
+    grants: lookup<ExecutionGrantsService>(EXECUTION_GRANTS_SERVICE_NAME),
+    messages: lookup<ProcessConversationMessagesService>(CONVERSATION_MESSAGES_V2_SERVICE_NAME),
+    agentTurn: lookup<ScopedAgentTurnService>(AGENT_TURN_V2_SERVICE_NAME),
+    conversationSend: lookup<ScopedConversationSendService>(CONVERSATION_SEND_V2_SERVICE_NAME),
+    legacyMessages: lookup<Pick<ConversationMessagesService, 'unsubscribe'>>(CONVERSATION_MESSAGES_SERVICE_NAME),
     readiness: lookup<ChannelReadinessService>(CHANNEL_READINESS_SERVICE_NAME),
     sessionCapabilities: lookup<SessionCapabilitiesService>(SESSION_CAPABILITIES_SERVICE_NAME),
     conversationEvents: lookup<ConversationEventsService>(CONVERSATION_EVENTS_SERVICE_NAME),
     rosters: lookup<ConversationRostersService>(CONVERSATION_ROSTERS_SERVICE_NAME),
     followup: lookup<FacilitationFollowupService>(FACILITATION_FOLLOWUP_SERVICE_NAME),
   };
+}
+
+/** The kernel services a facilitation cannot run without, as an operator
+ *  reads them. */
+const REQUIRED_SERVICES: readonly (readonly [keyof Kernel, string])[] = [
+  ['execution', EXECUTION_AUTHORIZATION_SERVICE_NAME],
+  ['agentTurn', AGENT_TURN_V2_SERVICE_NAME],
+  ['messages', CONVERSATION_MESSAGES_V2_SERVICE_NAME],
+  ['conversationSend', CONVERSATION_SEND_V2_SERVICE_NAME],
+];
+
+/**
+ * Which of the services a facilitation needs the kernel does not offer.
+ * Empty: everything is there. A facilitation needs all of them: without
+ * execution scopes nothing it does would be authorized, so nothing starts
+ * rather than something that half works.
+ */
+export function missingServices(kernel: Kernel): string[] {
+  return REQUIRED_SERVICES.filter(([accessor]) => kernel[accessor]() === undefined).map(([, name]) => name);
 }

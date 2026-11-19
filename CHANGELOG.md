@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.4.0
+
+Execution scopes (specification 2043 §0; kernel #2090, #2089, #2091, #2078).
+
+**Needs kernel `@omadia/plugin-api` >= 1.69.0** (`compat.core: >=1.69.0 <2.0`)
+and, for Teams, `@omadia/channel-teams` >= 0.39.0.
+
+### Changed
+
+- **Every action is drawn from an execution scope of the kernel.** The five
+  scopes of the specification are opened and ended with the lifecycle:
+  `configuring` (with the reservation of the conversation), `active`,
+  `closing` (one per closing event), `scheduling`, `follow_up`. Each has its
+  deadline and budget, and the people it may address are registered on it.
+- **Model turns go through `agentTurn@2`**, with scope, facilitation, phase,
+  purpose, emission type and a reservation of model calls.
+- **Posts, private messages, card updates and the readiness check go through
+  `conversationSend@2`**, each with its scope. The first majors of the send
+  services and `targetedSend` are no longer used.
+- **Reading goes through `conversationMessages@2`**, bound to the
+  facilitation: every message while it runs, what is addressed to the
+  facilitator during follow-up, nothing after the end. A facilitation never
+  sees what an earlier one received in the same conversation.
+- **The reservation is released at `closed` or `aborted`**, not when the last
+  document is out: the closing scope still delivers them.
+- **Follow-up mail and calendar run under kernel-issued grants**
+  (`executionGrants`), passed to `facilitation.followup` with every call. The
+  list of confirmed recipients stays as the second line.
+- **Setting up is bounded.** When the `configuring` scope runs out (72 hours
+  by the kernel's default) the facilitation ends with a short note.
+- **Session states carry the names of the specification**: `scheduled`,
+  `live`, `closed`, `cancelled` (migration `0006`).
+- Reminders of action items say how to report one as done now that the
+  follow-up hears only what is addressed to the facilitator.
+
+### Added
+
+- **Private requests of participants** (`onPrivateMessage`): "status" answers
+  with the status of the facilitation the person takes part in, and asks which
+  when there are several; an owner can report an action item as done. Anything
+  else is handed back to the kernel.
+- **Refusals are said.** `kill_switch`, a used-up budget, a passed deadline,
+  a target outside the scope: on record in the protocol (`execution_refused`)
+  and in the log, once per kind; the group is told where a message can still
+  reach it (a turn over its reservation, a used-up budget for turns). A stop
+  holds the scheduler: the job stays due and is not a failed attempt.
+- **A kernel without these services**: nothing starts, and the facilitator is
+  told what is missing.
+- **Take-over** of a facilitation that was running or in follow-up before
+  1.4.0: its scopes are opened in the kernel's order and it subscribes as
+  itself.
+- The lifecycle of the specification in status, protocol and the
+  facilitations view: after the close a facilitation is `following_up` or
+  `ended` (`state` in the operator API, next to `phase`).
+- Migration `0006`: the table of scopes, and the session state names.
+
+### Removed
+
+- Support for kernels before plugin-api 1.69.0 (inferring a lost subscription
+  from stored events, sends that ride on a subscription).
+
 ## 1.3.0
 
 The plugin's own database (kernel #2088, K3).

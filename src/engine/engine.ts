@@ -11,7 +11,7 @@ import { installCapabilities } from './capabilities.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installActionItems } from './actionItems.js';
-import { closeWhenResultDelivered, installDecisionMethods, releaseWhenEnded } from './decide.js';
+import { closeWhenResultDelivered, installDecisionMethods } from './decide.js';
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
 import { installGovernance, purgeExpired } from './governance.js';
@@ -22,6 +22,8 @@ import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
 import { applySnapshot, fetchSnapshot, installSessions, meetingEnded, meetingStarted } from './sessions.js';
 import { processMembership } from './membership.js';
+import { answerPrivateMessage } from './privateMessages.js';
+import { syncAllScopes, syncScopes } from './scopes.js';
 import { reconcileAll, reconcileSubscription } from './subscription.js';
 import type { SubscriptionState } from './subscription.js';
 import { installTransparency } from './transparency.js';
@@ -66,7 +68,9 @@ export class FacilitationEngine {
     this.core = new EngineCore(deps);
     installOnce();
     this.core.onAfterDispatch(closeWhenResultDelivered);
-    this.core.onAfterRelease(releaseWhenEnded);
+    // After every unit of work the kernel's scopes follow the facilitation's
+    // state: what is over ends, a changed deadline moves, the people are told.
+    this.core.onAfterRelease((engine, facilitationId) => syncScopes(engine, facilitationId));
   }
 
   private readiness: (() => Promise<unknown>) | undefined;
@@ -158,6 +162,10 @@ export class FacilitationEngine {
     const messages = this.core.deps.kernel.messages();
     if (!messages) return;
     const disposers = [messages.onMessage(agentSlug, (record) => this.receive(agentSlug, record))];
+    // A participant asks for the status in a private chat (kernel #2089).
+    if (typeof messages.onPrivateMessage === 'function') {
+      disposers.push(messages.onPrivateMessage(agentSlug, (request) => (this.stopped ? Promise.resolve({ handled: false as const }) : this.track(answerPrivateMessage(this.core, request)))));
+    }
     // What the channel offers can change mid-session; meetings start and end.
     const capabilities = this.core.deps.kernel.sessionCapabilities();
     if (capabilities) {
@@ -280,7 +288,7 @@ export class FacilitationEngine {
         await tick(this.core);
         await this.finishConcluding();
         await purgeExpired(this.core);
-        await this.releaseEnded();
+        await syncAllScopes(this.core);
         await this.catchUp();
       })(),
     );
@@ -300,22 +308,11 @@ export class FacilitationEngine {
     }
   }
 
-  /** A release that could not happen when a facilitation ended (a report was
-   *  still going out) is tried again here. */
-  private async releaseEnded(): Promise<void> {
-    const ended = await this.core.db().query<{ id: string }>(
-      `SELECT id FROM plg_omadia_agent_facilitator_facilitations
-        WHERE phase IN ('closed', 'aborted') AND followup_state <> 'active' AND NOT coalesce((settings->>'released')::boolean, false)
-        ORDER BY closed_at LIMIT 50`,
-    );
-    for (const row of ended.rows) await releaseWhenEnded(this.core, row.id);
-  }
-
   /** Read everything the kernel stored after the facilitation's cursor. */
   async replay(f: Facilitation): Promise<number> {
     const messages = this.core.deps.kernel.messages();
     if (!messages) return 0;
-    const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId };
+    const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, processId: f.id };
     let after = f.inboundCursor ?? undefined;
     let count = 0;
     for (;;) {

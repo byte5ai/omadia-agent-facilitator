@@ -34,11 +34,11 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 | What | Version |
 |---|---|
-| omadia kernel | with archetype plugins and their own database (#2088) and `@omadia/plugin-api` >= 1.62.0, the first kernel that gives an archetype plugin its own schema and role. The manifest says so (`compat.core: >=1.62.0 <2.0`), so the Hub does not offer the package to an older kernel |
+| omadia kernel | with execution scopes and scoped sends (#2089, #2090, #2091, #2078) and `@omadia/plugin-api` >= 1.69.0. The manifest says so (`compat.core: >=1.69.0 <2.0`), so the Hub does not offer the package to an older kernel. On a kernel that lacks one of the services a facilitation needs, nothing starts and the facilitator says what is missing |
 | Model of the facilitator | Sonnet-class or stronger (see "Which model") |
 | Postgres | required. The plugin declares `permissions.sql`; an operator grants it. The kernel then creates the schema `plg_omadia_agent_facilitator` and two roles for it (one that runs the migrations, one the engine works as) and hands the engine `ctx.sql`. The shared pool (`graphPool`) is not used |
-| Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |
-| Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0 |
+| Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.39.0 (it delivers what is addressed to a facilitator during a follow-up, and private messages of participants) |
+| Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0; from the version that verifies kernel grants it asks the kernel before every mail and calendar operation |
 
 ## Set-up
 
@@ -191,6 +191,64 @@ set is kept and stated in the log.
   disabled) is taken up again with a line to the group, or, when the kernel
   keeps refusing for two minutes, ended as aborted with the reason in its
   protocol. It is never left active.
+
+## Execution scopes (1.4.0)
+
+Everything a facilitation does is an action the kernel authorizes: a model
+turn, a post, a private message, a card update, a readiness check. Each is
+drawn from an **execution scope** the kernel keeps for the facilitation, with
+a deadline, a budget and the targets it may address (specification 2043 §0).
+
+| Scope | Opened | Ends |
+|---|---|---|
+| `configuring` | with the start request; it takes the conversation's reservation | when the handshake is posted, or after the kernel's limit (72 hours): then the facilitation ends with a short note |
+| `active` | with the handshake | at the facilitation's deadline (one hour of room for the evaluation at that time; a runoff moves it), or when the facilitation concludes |
+| `closing` | one per closing event: the result, an end without a result | when its documents are out (result, report, protocol, protocol mail) |
+| `scheduling` | when the group agreed a follow-up meeting | when the invitation is settled, or at once on a stop |
+| `follow_up` | when a facilitation closes with action items | on the scheduler pass after the follow-up ended |
+
+What follows from it:
+
+- **One facilitation or discussion per conversation.** The reservation is the
+  kernel's; a conversation another facilitation or an agent discussion holds
+  is not taken. It is released at `closed` or `aborted`, so a new facilitation
+  can start while documents still go out and action items are followed up.
+- **Reading is bound to the facilitation.** While it runs it reads every
+  message. In follow-up the mention gate is back on: the facilitator hears a
+  mention, a reply to one of its messages and a card button. After the end it
+  reads nothing.
+- **An operator's stop holds everything**, the scheduler included: no turn,
+  no post, no reminder, no evaluation of a deadline. What was refused is in
+  the protocol (`execution_refused`) and in the log, once per kind. Essential
+  messages go out when the stop is lifted.
+- **A turn has a hard cap** of model calls. A turn that would need more
+  returns no text, and the group is told; a used-up budget is said once.
+  Votes, "status" and "stop" need no model and keep working.
+- **Mail and calendar need a kernel grant** next to the list of people the
+  group confirmed: `protocol_dispatch` under the closing scope,
+  `followup_scheduling` under the scheduling scope. A grant is issued with the
+  current recipients before each use and revoked when its work is done.
+- **A participant can ask for the status privately.** "status" in a private
+  chat with the facilitator answers with the status of their facilitation and
+  nothing else; with several, the facilitator asks which. An owner can report
+  an action item as done there ("done", or "done 2"). Everything else gets the
+  facilitator's ordinary answer to private requests.
+
+The budgets per scope are fixed in `src/engine/scopes.ts` (`SCOPE_BUDGETS`,
+`TURN_MODEL_CALLS`).
+
+### Upgrading to 1.4.0
+
+- Needs a kernel with `@omadia/plugin-api` >= 1.69.0 and, for Teams,
+  `@omadia/channel-teams` >= 0.39.0.
+- Migration `0006` adds the table of scopes and renames the session states to
+  the names of the specification (`running` to `live`, `ended` to `closed`).
+- A facilitation that is running or in follow-up when 1.4.0 activates is
+  taken over on the first pass: its scopes are opened in the kernel's order,
+  it subscribes as itself, and the subscription of the first major is given
+  back. The log says `taken over under execution scopes`.
+- In follow-up a plain "done 2" in the group is no longer heard. Reminders
+  say how to answer: privately, by a reply, or with a mention.
 
 ## Upgrading to 1.3.0 (own database)
 

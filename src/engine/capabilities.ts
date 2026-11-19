@@ -12,7 +12,7 @@
 // before the integration is called (the integration checks again), and every
 // use is written to the protocol.
 
-import type { FacilitationFollowupService, FollowupGrant, FollowupRefusal } from '@omadia/plugin-api';
+import type { ExecutionGrantKind, FacilitationFollowupService, FollowupGrant, FollowupRefusal } from '@omadia/plugin-api';
 
 import { DAY_MS } from '../clock.js';
 import { principalKey } from '../kernel.js';
@@ -31,6 +31,8 @@ import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { withTimeout } from './outbox.js';
 import { registerExternalJob, registerJobHandler } from './scheduler.js';
 import type { ExternalJob } from './scheduler.js';
+import { recordRefusal } from './refusals.js';
+import { CLOSING_RESULT, SCHEDULING_MEETING, ensureScope } from './scopes.js';
 import { MAX_WINDOW_DAYS, alignToGrid, findSlot } from './slots.js';
 
 const lower = (s: string): string => s.trim().toLowerCase();
@@ -130,14 +132,40 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     return { ok: false, code, ...(detail ? { detail } : {}) };
   };
 
-  const call = async <T extends { outcome: string }>(capability: string, recipients: readonly string[], summary: string, run: (svc: FacilitationFollowupService) => Promise<T | FollowupRefusal>): Promise<ScopedOutcome<T>> => {
+  /**
+   * The kernel's grant for one operation (kernel #2078): issued under the
+   * scope the operation belongs to, for the people the group confirmed, as
+   * they are right now. Whoever left since the last send is not covered any
+   * more. The integration asks the kernel with it before it acts.
+   */
+  const kernelGrant = async (kind: ExecutionGrantKind): Promise<{ ok: true; grantId: string } | { ok: false; code: ScopedCode; detail?: string }> => {
+    const grants = engine.deps.kernel.grants();
+    if (!grants) return { ok: false, code: 'no_grant_service' };
+    const scope = kind === 'followup_scheduling' ? await ensureScope(engine, f, 'scheduling', SCHEDULING_MEETING) : await ensureScope(engine, f, 'closing', CLOSING_RESULT);
+    const issued = scope.ok ? await grants.issueGrant({ scopeId: scope.scope.scopeId, kind, subject: kind === 'followup_scheduling' ? SCHEDULING_MEETING : 'protocol', recipients: grant.allowed }) : { outcome: 'refused' as const, code: scope.code, message: scope.message };
+    if (issued.outcome === 'issued') return { ok: true, grantId: issued.grant.id };
+    await recordRefusal(engine, f.id, { code: issued.code, message: issued.message, what: `the grant for ${kind}` });
+    return { ok: false, code: 'grant_refused', detail: issued.message };
+  };
+
+  const call = async <T extends { outcome: string }>(
+    capability: string,
+    kind: ExecutionGrantKind,
+    recipients: readonly string[],
+    summary: string,
+    run: (svc: FacilitationFollowupService, grant: FollowupGrant) => Promise<T | FollowupRefusal>,
+    /** The operation that completes what the grant was for: revoked after it. */
+    last = false,
+  ): Promise<ScopedOutcome<T>> => {
     if (f.settings.followupGrant !== 'active') return refuse(capability, 'grant_revoked');
     const outside = recipients.map(lower).filter((r) => !grant.allowed.includes(r));
     if (outside.length > 0) return refuse(capability, 'recipient_not_allowed', outside.join(', '));
     if (!service) return refuse(capability, 'no_service');
+    const granted = await kernelGrant(kind);
+    if (!granted.ok) return refuse(capability, granted.code, granted.detail);
     let result: T | FollowupRefusal;
     try {
-      result = await withTimeout(run(service), followupLimits.timeoutMs, `the integration (${capability})`);
+      result = await withTimeout(run(service, { ...grant, grantId: granted.grantId }), followupLimits.timeoutMs, `the integration (${capability})`);
     } catch (err) {
       // No answer: it may or may not have happened. Never repeated.
       const detail = err instanceof Error ? err.message : String(err);
@@ -150,6 +178,15 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
       return { ok: false, code: refusal.code, detail: refusal.message };
     }
     await recordEvent(engine, f.id, 'capability_used', 'engine', { capability, summary });
+    // The sends are confirmed, or the invitations are out: the grant has
+    // done what it was issued for.
+    if (last) {
+      try {
+        await engine.deps.kernel.grants()?.revokeGrant(granted.grantId, `${capability} done`);
+      } catch (err) {
+        engine.log(`facilitation ${f.id}: the grant for ${capability} could not be revoked: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return { ok: true, value: result as T };
   };
 
@@ -157,15 +194,20 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     grant,
     /** Busy intervals only: no subject, body, location or attendees. */
     freeBusy: (attendees: readonly string[], from: Date, to: Date) =>
-      call('free/busy', attendees, log.freeBusy(attendees.length, when(from), when(to)), (svc) =>
+      call('free/busy', 'followup_scheduling', attendees, log.freeBusy(attendees.length, when(from), when(to)), (svc, grant) =>
         svc.freeBusy(grant, { attendees: attendees.map(lower), from: from.toISOString(), to: to.toISOString() }),
       ),
     createInvitation: (request: { attendees: readonly string[]; subject: string; start: Date; end: Date; body: string; online: boolean }) =>
-      call('invitation', request.attendees, log.invitation(request.subject, when(request.start), request.attendees.length), (svc) =>
-        svc.createInvitation(grant, { ...request, attendees: request.attendees.map(lower), start: request.start.toISOString(), end: request.end.toISOString() }),
+      call(
+        'invitation',
+        'followup_scheduling',
+        request.attendees,
+        log.invitation(request.subject, when(request.start), request.attendees.length),
+        (svc, grant) => svc.createInvitation(grant, { ...request, attendees: request.attendees.map(lower), start: request.start.toISOString(), end: request.end.toISOString() }),
+        true,
       ),
     sendMail: (recipients: readonly string[], subject: string, body: string) =>
-      call('protocol mail', recipients, log.mailed(recipients.length), (svc) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body })),
+      call('protocol mail', 'protocol_dispatch', recipients, log.mailed(recipients.length), (svc, grant) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body }), true),
   };
 }
 

@@ -10,8 +10,8 @@ import { HOUR_MS } from '../clock.js';
 import type { Queryable } from '../db/pool.js';
 import { insert, rows } from '../db/sql.js';
 import * as store from '../db/store.js';
-import type { AccessAudit, Facilitation, Phase } from '../model.js';
-import { LIVE_PHASES } from '../model.js';
+import type { AccessAudit, Facilitation, LifecycleState, Phase } from '../model.js';
+import { LIVE_PHASES, lifecycleOf } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore } from './core.js';
 import { Refusal } from './core.js';
@@ -36,6 +36,9 @@ export interface FacilitationMetadata {
   channelType: string;
   conversationId: string;
   phase: Phase;
+  /** Where it is in the lifecycle of the specification (5.2): the phase,
+   *  and after the close `following_up` or `ended`. */
+  state: LifecycleState;
   format: string;
   language: string;
   counts: { participants: number; activeParticipants: number; contributions: number; decisions: number; actionItems: number; steps: number; messagesSent: number };
@@ -92,6 +95,7 @@ export async function listMetadata(q: Queryable, filter: { phase?: string; facil
       channelType: f.channelType,
       conversationId: f.conversationId,
       phase: f.phase,
+      state: lifecycleOf(f),
       format: f.format,
       language: f.language,
       counts: {
@@ -194,6 +198,8 @@ export async function purgeExpired(engine: EngineCore, opts: { maxBatches?: numb
       [engine.now()],
     );
     purged.push(...deleted.rows.map((r) => r.id));
+    // The scopes on record have no foreign key (0006); they go with their facilitation.
+    if (deleted.rows.length > 0) await engine.db().query('DELETE FROM plg_omadia_agent_facilitator_scopes WHERE facilitation_id = ANY($1::uuid[])', [`{${deleted.rows.map((r) => r.id).join(',')}}`]);
     if (deleted.rows.length < PURGE_BATCH) break;
   }
   for (const id of purged) engine.log(`facilitation ${id}: records deleted after the retention period`);
@@ -204,6 +210,13 @@ export function installGovernance(): void {
   registerStartCheck(checkStartQuota);
   // No facilitation stays open forever: reaching the maximum duration ends
   // it with an abort report, never silently.
+  // The time to set a facilitation up is bounded by its `configuring` scope
+  // (72 hours unless the instance says otherwise). When it runs out the
+  // facilitation ends with one short note and gives the conversation back.
+  registerJobHandler('configuring_end', async (w) => {
+    if (w.f.phase !== 'configuring') return;
+    await abortInWork(w, { reason: texts(w.f.language).abortConfiguringExpired(), actor: 'engine' });
+  });
   registerJobHandler('lifetime', async (w) => {
     if (w.f.phase === 'concluding') {
       // The result has not reached the group in all this time: end it with a

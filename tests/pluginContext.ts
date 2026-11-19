@@ -12,7 +12,7 @@ import type { FakeKernel } from './fakeKernel.js';
 import type { TestDb } from './pg.js';
 
 // Same order as KERNEL_SERVICE_NAMES.
-const ACCESSORS: readonly (keyof Kernel)[] = ['messages', 'agentTurn', 'conversationSend', 'targetedSend', 'readiness', 'sessionCapabilities', 'conversationEvents', 'rosters', 'followup'];
+const ACCESSORS: readonly (keyof Kernel)[] = ['execution', 'grants', 'messages', 'agentTurn', 'conversationSend', 'legacyMessages', 'readiness', 'sessionCapabilities', 'conversationEvents', 'rosters', 'followup'];
 
 export interface KernelContext {
   ctx: PluginContext;

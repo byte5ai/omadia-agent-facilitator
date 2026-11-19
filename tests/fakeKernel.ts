@@ -6,28 +6,49 @@
 // same database. Authorship is whatever `say()` was called with: the channel
 // states it, the engine can only read it.
 
+import { EXECUTION_GRANT_RULES, EXECUTION_SCOPE_PHASES } from '@omadia/plugin-api';
 import type {
-  AgentTurnOutcome,
-  AgentTurnRequest,
-  AgentTurnService,
+  AuthorizeActionRequest,
   ChannelReadinessReport,
   ChannelReadinessService,
+  ConversationMessageMode,
   ConversationMessageRecord,
-  ConversationMessageScope,
   ConversationMessagesService,
-  ConversationSendOutcome,
-  ConversationSendRequest,
-  ConversationSendService,
+  ExecutionActionType,
+  ExecutionAuthorization,
+  ExecutionAuthorizationService,
+  ExecutionBudget,
+  ExecutionGrantKind,
+  ExecutionGrantUse,
+  ExecutionGrantsService,
+  ExecutionPhase,
+  ExecutionPurpose,
+  ExecutionRefusal,
+  ExecutionRefusalCode,
+  ExecutionScopeKind,
+  ExecutionTarget,
   FacilitationFollowupService,
+  GrantOperation,
+  GrantRefusalCode,
+  OpenExecutionScopeRequest,
+  PrivateMessageReply,
+  PrivateMessageRequest,
+  ProcessConversationMessageRecord,
+  ProcessConversationMessagesService,
+  ProcessMessageScope,
+  ScopedAgentTurnOutcome,
+  ScopedAgentTurnRequest,
+  ScopedAgentTurnService,
+  ScopedConversationSendRequest,
+  ScopedConversationSendService,
+  ScopedSendOutcome,
+  SendAuthorization,
   SessionCapabilitiesService,
   SessionCapabilitySnapshot,
   SessionEventRecord,
-  TargetedSendDeliveryOutcome,
-  TargetedSendRequest,
-  TargetedSendService,
 } from '@omadia/plugin-api';
 
-import type { CardAnswerValue, CardSendMembers, CardSupport, CardUpdate, QuestionCard } from '../src/cards/types.js';
+import type { CardAnswerValue, CardSupport, CardUpdate, QuestionCard } from '../src/cards/types.js';
 import type { Clock } from '../src/clock.js';
 import type { Db } from '../src/db/pool.js';
 import type {
@@ -72,13 +93,82 @@ export interface Post {
   /** The id answers and updates of the card refer to. */
   cardMessageId?: string;
   messageId: string;
+  /** The facilitation the post was authorized for. */
+  processId?: string;
 }
 
 export interface DirectMessage {
   as: string | undefined;
   principal: string;
   text: string;
+  /** The facilitation the message was authorized for. */
+  processId?: string;
 }
+
+/** An execution scope as the kernel keeps it. */
+export interface FakeScope {
+  id: string;
+  agentSlug: string;
+  processId: string;
+  kind: ExecutionScopeKind;
+  eventId: string;
+  state: 'open' | 'ended';
+  deadline: string;
+  absoluteLimit: string;
+  deadlineWait: boolean;
+  budget: ExecutionBudget;
+  used: ExecutionBudget;
+  targets: ExecutionTarget[];
+  openedAt: string;
+  endedAt?: string;
+  endReason?: string;
+}
+
+export interface FakeReservation {
+  agentSlug: string;
+  processId: string;
+  channelType: string;
+  conversationId: string;
+  role: 'home' | 'session';
+  reservedAt: string;
+  releasedAt?: string;
+}
+
+export interface FakeAuthorization {
+  id: string;
+  scopeId: string;
+  processId: string;
+  kind: ExecutionScopeKind;
+  action: ExecutionActionType;
+  purpose: ExecutionPurpose;
+  phase: ExecutionPhase;
+  modelCalls: number;
+  target?: ExecutionTarget;
+  emission?: 'prose' | 'template' | 'data';
+  settled?: boolean;
+}
+
+export interface FakeGrant {
+  id: string;
+  scopeId: string;
+  processId: string;
+  kind: ExecutionGrantKind;
+  subject: string;
+  recipients: string[];
+  issuedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  revokeReason?: string;
+  uses: ExecutionGrantUse[];
+}
+
+export interface FakeProcessSubscription extends ProcessMessageScope {
+  mode: ConversationMessageMode;
+  ended: boolean;
+}
+
+/** What a test makes a turn answer: a text, or an outcome of its own. */
+export type TurnAnswer = { outcome: 'refused'; code: string; message: string } | { outcome: 'failed'; message: string } | { outcome: 'completed'; text: string };
 
 export interface SayOptions {
   replyTo?: string;
@@ -91,7 +181,7 @@ export interface SayOptions {
  *  anybody outside the grant, answers on a quarter-hour grid in UTC, and
  *  never returns anything but busy intervals. */
 export class FakeFollowup implements FacilitationFollowupService {
-  readonly calls: { method: string; grant: { facilitationId: string; allowed: readonly string[] }; request: Record<string, unknown> }[] = [];
+  readonly calls: { method: string; grant: { facilitationId: string; allowed: readonly string[]; grantId?: string }; request: Record<string, unknown> }[] = [];
   /** Busy intervals per address; an address that is absent is "unknown". */
   readonly calendars = new Map<string, { start: string; end: string }[]>();
   readonly mails: { recipients: readonly string[]; subject: string; body: string }[] = [];
@@ -110,15 +200,25 @@ export class FakeFollowup implements FacilitationFollowupService {
     return value;
   }
 
-  private refuse(grant: { allowed: readonly string[] }, people: readonly string[]) {
+  /** The kernel's `grantVerification`, as the connector asks it (M1). */
+  verify: ((request: { grantId: string; operation: GrantOperation; recipients: readonly string[] }) => { allowed: true } | { allowed: false; code: string; message: string }) | undefined;
+  private operation: GrantOperation = 'send_mail';
+
+  private refuse(grant: { allowed: readonly string[]; grantId?: string }, people: readonly string[]) {
     if (!this.configured) return { outcome: 'refused' as const, code: 'not_configured' as const, message: 'no organiser mailbox is configured' };
+    // The kernel's grant first; the recipient list stays the second line.
+    if (grant.grantId !== undefined && this.verify) {
+      const verdict = this.verify({ grantId: grant.grantId, operation: this.operation, recipients: people });
+      if (!verdict.allowed) return { outcome: 'refused' as const, code: 'grant_refused' as const, message: `${verdict.code}: ${verdict.message}` };
+    }
     const rejected = people.filter((p) => !grant.allowed.includes(p));
     return rejected.length > 0 ? { outcome: 'refused' as const, code: 'recipient_not_allowed' as const, message: 'outside the grant', rejected } : undefined;
   }
 
-  async freeBusy(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; from: string; to: string }) {
+  async freeBusy(grant: { facilitationId: string; allowed: readonly string[]; grantId?: string }, request: { attendees: readonly string[]; from: string; to: string }) {
     this.calls.push({ method: 'freeBusy', grant, request });
     await this.onCall('freeBusy');
+    this.operation = 'free_busy';
     const refused = this.refuse(grant, request.attendees);
     if (refused) return refused;
     return {
@@ -127,18 +227,20 @@ export class FakeFollowup implements FacilitationFollowupService {
     };
   }
 
-  async createInvitation(grant: { facilitationId: string; allowed: readonly string[] }, request: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }) {
+  async createInvitation(grant: { facilitationId: string; allowed: readonly string[]; grantId?: string }, request: { attendees: readonly string[]; subject: string; start: string; end: string; body: string; online?: boolean }) {
     this.calls.push({ method: 'createInvitation', grant, request });
     await this.onCall('createInvitation');
+    this.operation = 'create_invitation';
     const refused = this.refuse(grant, request.attendees);
     if (refused) return refused;
     this.invitations.push(request);
     return this.finish('createInvitation', { outcome: 'created' as const, eventId: `event-${String(this.invitations.length)}`, ...(request.online && this.joinLinks ? { joinUrl: 'https://teams.example/join/1' } : {}) });
   }
 
-  async sendMail(grant: { facilitationId: string; allowed: readonly string[] }, request: { recipients: readonly string[]; subject: string; body: string }) {
+  async sendMail(grant: { facilitationId: string; allowed: readonly string[]; grantId?: string }, request: { recipients: readonly string[]; subject: string; body: string }) {
     this.calls.push({ method: 'sendMail', grant, request });
     await this.onCall('sendMail');
+    this.operation = 'send_mail';
     const refused = this.refuse(grant, request.recipients);
     if (refused) return refused;
     this.mails.push(request);
@@ -153,12 +255,9 @@ export class FakeKernel {
   readonly channelType = 'teams';
   readonly posts: Post[] = [];
   readonly dms: DirectMessage[] = [];
-  readonly turns: AgentTurnRequest[] = [];
+  readonly turns: ScopedAgentTurnRequest[] = [];
   readonly events: ConversationMessageRecord[] = [];
   readonly subscriptions = new Set<string>();
-  /** Where each subscription began: like the real hub, a subscription sees
-   *  only what was stored since it started. */
-  private readonly subscribedFrom = new Map<string, number>();
   /** Agents without an identity of their own on the channel. */
   readonly noIdentity = new Set<string>();
   /** Per `agent|conversation`: what the readiness check reports missing. */
@@ -173,8 +272,16 @@ export class FakeKernel {
    *  answers). */
   readonly sendFaults: Array<'throw' | 'lost' | 'hang' | { code: string; message: string }> = [];
   /** Answers the facilitator's turn; default: says nothing. */
-  onTurn: (request: AgentTurnRequest) => string | AgentTurnOutcome | Promise<string | AgentTurnOutcome> = () => '[silent]';
-  followup: FacilitationFollowupService | undefined;
+  onTurn: (request: ScopedAgentTurnRequest) => string | TurnAnswer | Promise<string | TurnAnswer> = () => '[silent]';
+  private followupService: FacilitationFollowupService | undefined;
+  get followup(): FacilitationFollowupService | undefined {
+    return this.followupService;
+  }
+  /** The integration asks this kernel about every grant it is handed. */
+  set followup(service: FacilitationFollowupService | undefined) {
+    this.followupService = service;
+    if (service instanceof FakeFollowup) service.verify = (request) => this.verifyGrant(request);
+  }
   snapshots = new Map<string, SessionCapabilitySnapshot>();
   /** Display names and languages the kernel knows of facilitators. */
   readonly names = new Map<string, string>();
@@ -230,17 +337,22 @@ export class FakeKernel {
     return id;
   }
 
-  /** The kernel ends a subscription on its own (grant revoked, engine
-   *  reinstalled, agent disabled). Nothing tells the engine. */
+  /** The kernel ends the subscriptions of an agent in a conversation on its
+   *  own (their ground is gone). Nothing tells the engine, and a process
+   *  subscribes a conversation once: it does not get it back. */
   endSubscription(agentSlug: string, conversationId: string): void {
-    const key = scopeKey({ agentSlug, channelType: this.channelType, conversationId });
-    this.subscriptions.delete(key);
-    this.subscribedFrom.delete(key);
+    for (const sub of this.processSubscriptions) if (sub.agentSlug === agentSlug && sub.conversationId === conversationId) sub.ended = true;
+    this.refreshSubscriptions();
   }
 
   /** Subscribe refusals to answer next, per agent (the kernel will not give
    *  the conversation back). */
   readonly subscribeRefusals = new Map<string, { code: 'unavailable' | 'not_ready' | 'not_present'; message: string }>();
+  /** Bot names a message can mention besides the agent's slug. */
+  private addressed(text: string | undefined, agentSlug: string): boolean {
+    const lower = (text ?? '').toLowerCase();
+    return [agentSlug, this.names.get(agentSlug) ?? agentSlug].some((name) => lower.includes(`@${name.toLowerCase()}`));
+  }
 
   private user(conversationId: string, userId: string): FakeUser {
     return this.members.get(conversationId)?.find((m) => m.id === userId) ?? { id: userId, displayName: userId };
@@ -272,14 +384,21 @@ export class FakeKernel {
       ...partial,
     };
     let last: ConversationMessageRecord | undefined;
-    // The kernel stores one record per subscribed facilitator.
-    for (const key of [...this.subscriptions]) {
-      const [agentSlug, channelType, conv] = key.split('|');
-      if (channelType !== this.channelType || conv !== conversationId || !agentSlug) continue;
-      const record: ConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${agentSlug}` };
+    // Which process a message goes to is decided before it is stored: a
+    // reply to a message, or an answer to a card, that belongs to a process
+    // goes to that process alone. Anything else goes to the process that
+    // reads everything and, when it addresses the agent, to those that read
+    // what is addressed to them.
+    const reference = partial.kind === 'card_answer' ? (this.bound.get(partial.cardAnswer?.cardId ?? '') ?? this.bound.get(partial.messageId)) : partial.kind === 'reaction' ? this.bound.get(partial.messageId) : partial.replyToMessageId ? this.bound.get(partial.replyToMessageId) : undefined;
+    for (const sub of [...this.processSubscriptions]) {
+      if (sub.ended || sub.mode === 'none' || sub.channelType !== this.channelType || sub.conversationId !== conversationId) continue;
+      const addressedToBot = this.addressed(partial.text, sub.agentSlug);
+      const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
+      if (boundHere ? sub.processId !== reference : !(sub.mode === 'all' || addressedToBot)) continue;
+      const record: ProcessConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${sub.agentSlug}`, processId: sub.processId, ...(addressedToBot ? { addressedToBot: true } : {}) };
       this.events.push(record);
       last = record;
-      for (const listener of [...(this.listeners.get(agentSlug) ?? [])]) await listener(record);
+      for (const listener of [...(this.listeners.get(sub.agentSlug) ?? [])]) await listener(record);
     }
     return last ?? { ...base, eventId: 'not-stored', receivedByChannelKey: '' };
   }
@@ -418,37 +537,370 @@ export class FakeKernel {
     return this.posts.filter((p) => p.conversationId === conversationId && (as === undefined || p.as === as));
   }
 
-  // ── the services ─────────────────────────────────────────────────────────
+  // ── execution scopes, reservations, kill switch (kernel #2090) ───────────
 
-  /** false: a kernel before plugin-api 1.56, without `isSubscribed`. */
-  exactSubscriptions = true;
+  /** Every scope the engine opened, open and ended. */
+  readonly scopes: FakeScope[] = [];
+  /** Who holds (or held) a conversation's reservation. */
+  readonly reservations: FakeReservation[] = [];
+  /** Every action the kernel authorized, in order. */
+  readonly authorizations: FakeAuthorization[] = [];
+  /** An operator's stop: the whole instance, agents, or single processes. */
+  readonly killSwitch = { instance: false, agents: new Set<string>(), processes: new Set<string>() };
+  /** Conversations an agent discussion holds. */
+  readonly discussions = new Set<string>();
+  /** How long a `configuring` scope may last. */
+  configuringMaxMs = 72 * 3_600_000;
+  /** Model calls a turn makes (main model and one helper). */
+  turnModelCalls = 2;
+  /** Every refusal the execution authorization gave, in order. */
+  readonly refusals: Array<{ code: ExecutionRefusalCode; message: string }> = [];
 
-  private readonly messagesService: ConversationMessagesService = {
-    isSubscribed: async (scope) => this.subscriptions.has(scopeKey(scope)),
-    subscribe: async (scope) => {
-      if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
-      const refusal = this.subscribeRefusals.get(scope.agentSlug);
-      if (refusal && !this.subscriptions.has(scopeKey(scope))) return { outcome: 'refused', ...refusal };
-      if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
-      if (!this.subscriptions.has(scopeKey(scope))) this.subscribedFrom.set(scopeKey(scope), this.events.length);
-      this.subscriptions.add(scopeKey(scope));
-      return { outcome: 'subscribed' };
+  private refuse(code: ExecutionRefusalCode, message: string): ExecutionRefusal {
+    this.refusals.push({ code, message });
+    return { outcome: 'refused', code, message };
+  }
+
+  openScopesOf(processId: string): FakeScope[] {
+    return this.scopes.filter((s) => s.processId === processId && s.state === 'open');
+  }
+
+  scopeOf(processId: string, kind: ExecutionScopeKind, eventId = ''): FakeScope | undefined {
+    return this.scopes.find((s) => s.processId === processId && s.kind === kind && s.eventId === eventId);
+  }
+
+  private holds(processId: string, conversationId: string): boolean {
+    return this.reservations.some((r) => r.processId === processId && r.conversationId === conversationId && r.releasedAt === undefined);
+  }
+
+  private held(processId: string, conversationId: string): boolean {
+    return this.reservations.some((r) => r.processId === processId && r.conversationId === conversationId);
+  }
+
+  private killed(scope: FakeScope): string | undefined {
+    if (this.killSwitch.instance) return 'instance';
+    if (this.killSwitch.agents.has(scope.agentSlug)) return 'agent';
+    return this.killSwitch.processes.has(scope.processId) ? 'process' : undefined;
+  }
+
+  /** What follows from a released reservation or an ended scope, as the hub
+   *  does it: `all` turns into `addressed`, and a process without an open
+   *  scope loses its subscriptions. */
+  private accessChanged(): void {
+    for (const sub of this.processSubscriptions) {
+      if (sub.ended) continue;
+      if (this.openScopesOf(sub.processId).length === 0) sub.ended = true;
+      else if (sub.mode === 'all' && !this.holds(sub.processId, sub.conversationId)) sub.mode = 'addressed';
+    }
+    this.refreshSubscriptions();
+  }
+
+  /** The kernel ends an agent's service (disabled, grant revoked): its scopes
+   *  end, and with them its subscriptions and grants. */
+  endService(agentSlug: string, reason = 'agent_disabled'): void {
+    for (const scope of this.scopes) {
+      if (scope.agentSlug !== agentSlug || scope.state !== 'open') continue;
+      scope.state = 'ended';
+      scope.endedAt = this.clock.now().toISOString();
+      scope.endReason = reason;
+    }
+    for (const r of this.reservations) if (r.agentSlug === agentSlug && r.releasedAt === undefined) r.releasedAt = this.clock.now().toISOString();
+    this.accessChanged();
+  }
+
+  /** A kernel that never heard of a process: what a facilitation from before
+   *  execution scopes looks like to it. It reads through a subscription of
+   *  the first major instead. */
+  forget(processId: string, agentSlug: string, conversationId: string): void {
+    const drop = <T extends { processId: string }>(list: T[]): void => {
+      for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.processId === processId) list.splice(i, 1);
+    };
+    drop(this.scopes);
+    drop(this.reservations);
+    drop(this.processSubscriptions);
+    this.refreshSubscriptions();
+    this.legacySubscriptions.add(scopeKey({ agentSlug, channelType: this.channelType, conversationId }));
+  }
+
+  /** The kernel takes a conversation's reservation away (an operator freed
+   *  the conversation). Whoever read everything there reads only what is
+   *  addressed to it from now on. Nothing tells the engine. */
+  takeReservation(conversationId: string): void {
+    for (const r of this.reservations) if (r.conversationId === conversationId && r.releasedAt === undefined) r.releasedAt = this.clock.now().toISOString();
+    this.accessChanged();
+  }
+
+  private authorizeAction(request: AuthorizeActionRequest): ExecutionAuthorization | ExecutionRefusal {
+    const scope = this.scopes.find((s) => s.id === request.scopeId);
+    if (!scope) return this.refuse('unknown_scope', 'no such scope');
+    if (!EXECUTION_SCOPE_PHASES[scope.kind].includes(request.phase)) return this.refuse('phase_mismatch', `phase '${request.phase}' does not fit a '${scope.kind}' scope`);
+    if (this.disabled.has(scope.agentSlug)) return this.refuse('not_permitted', `agent '${scope.agentSlug}' is disabled`);
+    if (scope.deadlineWait && !['consent', 'status', 'stop'].includes(request.purpose)) return this.refuse('purpose_not_allowed', 'past its deadline this scope only allows consent answers, status and stop');
+    const needsTarget = ['post', 'direct_message', 'card_update', 'delivery'].includes(request.action);
+    if (request.target) {
+      const wanted = request.target;
+      const listed = scope.targets.find((t) =>
+        t.kind === wanted.kind && t.channelType === wanted.channelType && (t.kind === 'conversation' ? t.conversationId === (wanted as typeof t).conversationId : t.principalId.toLowerCase() === (wanted as typeof t).principalId.toLowerCase()),
+      );
+      if (!listed) return this.refuse('target_not_allowed', 'this scope does not list that target');
+      if (listed.kind === 'person' && listed.restriction === 'status_only' && request.purpose !== 'status') return this.refuse('target_not_allowed', 'this person may only receive the status');
+    } else if (needsTarget) {
+      return this.refuse('invalid_request', `a ${request.action} needs a target`);
+    }
+    const modelCalls = request.modelCalls ?? 0;
+    if (request.action === 'model_turn' ? modelCalls < 1 : modelCalls !== 0) return this.refuse('invalid_request', 'a model_turn reserves at least one model call; no other action reserves any');
+    if (scope.state !== 'open') return this.refuse('scope_ended', 'this scope has ended');
+    if (new Date(scope.deadline).getTime() <= this.clock.now().getTime()) return this.refuse('deadline_passed', `this scope's deadline passed at ${scope.deadline}`);
+    const killed = this.killed(scope);
+    if (killed) return this.refuse('kill_switch', `stopped by an operator (${killed} kill switch)`);
+    if (scope.used.actions + 1 > scope.budget.actions || scope.used.modelCalls + modelCalls > scope.budget.modelCalls) return this.refuse('budget_exhausted', "this scope's budget is used up");
+    scope.used = { actions: scope.used.actions + 1, modelCalls: scope.used.modelCalls + modelCalls };
+    const authorizationId = this.nextId('auth');
+    this.authorizations.push({ id: authorizationId, scopeId: scope.id, processId: scope.processId, kind: scope.kind, action: request.action, purpose: request.purpose, phase: request.phase, modelCalls, ...(request.target ? { target: request.target } : {}), ...(request.emission ? { emission: request.emission } : {}) });
+    return { outcome: 'authorized', authorizationId, scopeId: scope.id, remaining: { actions: scope.budget.actions - scope.used.actions, modelCalls: scope.budget.modelCalls - scope.used.modelCalls } };
+  }
+
+  /** Agents an operator disabled. */
+  readonly disabled = new Set<string>();
+
+  private readonly executionService: ExecutionAuthorizationService = {
+    openScope: async (request: OpenExecutionScopeRequest) => {
+      if (this.disabled.has(request.agentSlug)) return this.refuse('not_permitted', `agent '${request.agentSlug}' is disabled`);
+      const eventId = request.kind === 'closing' || request.kind === 'scheduling' ? (request.eventId ?? '') : '';
+      if ((request.kind === 'closing' || request.kind === 'scheduling') && eventId === '') return this.refuse('invalid_request', `a '${request.kind}' scope needs an eventId`);
+      const existing = this.scopes.filter((s) => s.processId === request.processId);
+      if (existing.some((s) => s.kind === request.kind && s.eventId === eventId)) return this.refuse('scope_exists', 'this scope exists');
+      const had = (kind: ExecutionScopeKind): boolean => existing.some((s) => s.kind === kind);
+      const order =
+        request.kind === 'configuring'
+          ? existing.length > 0 ? "'configuring' is the first scope of a process" : undefined
+          : request.kind === 'active'
+            ? existing.some((s) => s.kind === 'configuring' && s.state === 'open') ? undefined : "'active' opens out of an open 'configuring' scope (the handshake)"
+            : request.kind === 'closing'
+              ? had('configuring') ? undefined : "a 'closing' scope needs a process that was started"
+              : had('active') ? undefined : `'${request.kind}' needs a process that was active`;
+      if (order) return this.refuse('scope_order', order);
+      const now = this.clock.now().getTime();
+      const absoluteLimit = now + (request.kind === 'configuring' ? this.configuringMaxMs : request.kind === 'closing' ? 30 * 86_400_000 : 365 * 86_400_000);
+      let deadline = absoluteLimit;
+      if (request.deadline === undefined) {
+        if (request.kind !== 'configuring') return this.refuse('invalid_request', `a '${request.kind}' scope needs a deadline`);
+      } else {
+        deadline = Date.parse(request.deadline);
+        if (!Number.isFinite(deadline)) return this.refuse('invalid_request', 'deadline is not a time');
+        if (deadline <= now) return this.refuse('deadline_passed', 'the deadline is not in the future');
+        if (deadline > absoluteLimit) return this.refuse('limit_exceeded', `a '${request.kind}' scope ends at the latest ${new Date(absoluteLimit).toISOString()}`);
+      }
+      const targets: ExecutionTarget[] = [...(request.targets ?? [])];
+      if (request.kind === 'configuring') {
+        if (!request.home) return this.refuse('invalid_request', "a 'configuring' scope needs the home conversation");
+        const holder = this.reservations.find((r) => r.conversationId === request.home?.conversationId && r.releasedAt === undefined);
+        if (this.discussions.has(request.home.conversationId)) return this.refuse('conversation_busy', 'an agent discussion holds this conversation');
+        if (holder && holder.processId !== request.processId) return this.refuse('conversation_busy', 'another process holds this conversation');
+        if (!holder) this.reservations.push({ agentSlug: request.agentSlug, processId: request.processId, channelType: request.home.channelType, conversationId: request.home.conversationId, role: 'home', reservedAt: this.clock.now().toISOString() });
+        targets.unshift({ kind: 'conversation', ...request.home });
+      }
+      if (request.kind === 'active') {
+        for (const s of existing) {
+          if (s.kind !== 'configuring' || s.state !== 'open') continue;
+          s.state = 'ended';
+          s.endedAt = this.clock.now().toISOString();
+          s.endReason = 'active opened';
+        }
+      }
+      const scope: FakeScope = {
+        id: this.nextId('scope'),
+        agentSlug: request.agentSlug,
+        processId: request.processId,
+        kind: request.kind,
+        eventId,
+        state: 'open',
+        deadline: new Date(deadline).toISOString(),
+        absoluteLimit: new Date(absoluteLimit).toISOString(),
+        deadlineWait: false,
+        budget: { ...request.budget },
+        used: { actions: 0, modelCalls: 0 },
+        targets,
+        openedAt: this.clock.now().toISOString(),
+      };
+      this.scopes.push(scope);
+      return { outcome: 'opened', scope: { ...scope } };
     },
-    unsubscribe: async (scope) => {
-      this.subscriptions.delete(scopeKey(scope));
-      this.subscribedFrom.delete(scopeKey(scope));
+    authorize: async (request) => this.authorizeAction(request),
+    settle: async (authorizationId, used) => {
+      const authorization = this.authorizations.find((a) => a.id === authorizationId);
+      const scope = authorization ? this.scopes.find((s) => s.id === authorization.scopeId) : undefined;
+      if (!authorization || !scope || authorization.settled) return;
+      authorization.settled = true;
+      scope.used = { ...scope.used, modelCalls: scope.used.modelCalls - Math.max(0, authorization.modelCalls - used.modelCalls) };
+    },
+    setPeople: async (scopeId, people) => {
+      const scope = this.scopes.find((s) => s.id === scopeId);
+      if (!scope) return this.refuse('unknown_scope', 'no such scope');
+      if (scope.state !== 'open') return this.refuse('scope_ended', 'this scope has ended');
+      scope.targets = [...scope.targets.filter((t) => t.kind === 'conversation'), ...people];
+      return { outcome: 'updated', scope: { ...scope } };
+    },
+    extendScope: async (scopeId, change) => {
+      const scope = this.scopes.find((s) => s.id === scopeId);
+      if (!scope) return this.refuse('unknown_scope', 'no such scope');
+      if (scope.state !== 'open') return this.refuse('scope_ended', 'this scope has ended');
+      const now = this.clock.now().getTime();
+      const deadline = Date.parse(change.deadline);
+      if (!Number.isFinite(deadline) || deadline <= now) return this.refuse('invalid_request', 'the new deadline is not a time in the future');
+      const passed = Date.parse(scope.deadline) <= now;
+      const wait = change.deadlineWait === true;
+      if (wait && scope.kind !== 'active') return this.refuse('invalid_request', "only an 'active' scope has a deadline wait");
+      if ((passed || scope.deadlineWait) && !wait) return this.refuse('deadline_passed', 'the deadline has passed; only a deadline wait can extend this scope');
+      if (deadline > Date.parse(scope.absoluteLimit)) return this.refuse('limit_exceeded', `this scope ends at the latest ${scope.absoluteLimit}`);
+      scope.deadline = new Date(deadline).toISOString();
+      scope.deadlineWait = wait;
+      return { outcome: 'extended', scope: { ...scope } };
+    },
+    endScope: async (scopeId, reason) => {
+      const scope = this.scopes.find((s) => s.id === scopeId);
+      if (!scope || scope.state !== 'open') return;
+      scope.state = 'ended';
+      scope.endedAt = this.clock.now().toISOString();
+      scope.endReason = reason;
+      this.accessChanged();
+    },
+    listScopes: async (processId) => this.scopes.filter((s) => s.processId === processId).map((s) => ({ ...s })),
+    reserveConversation: async (request) => {
+      if (this.openScopesOf(request.processId).length === 0) return this.refuse('scope_order', 'this process has no open scope');
+      const holder = this.reservations.find((r) => r.conversationId === request.conversationId && r.releasedAt === undefined);
+      if (this.discussions.has(request.conversationId)) return this.refuse('conversation_busy', 'an agent discussion holds this conversation');
+      if (holder && holder.processId !== request.processId) return this.refuse('conversation_busy', 'another process holds this conversation');
+      const reservation = holder ?? { agentSlug: request.agentSlug, processId: request.processId, channelType: request.channelType, conversationId: request.conversationId, role: 'session' as const, reservedAt: this.clock.now().toISOString() };
+      if (!holder) this.reservations.push(reservation);
+      return { outcome: 'reserved', reservation };
+    },
+    releaseConversation: async (request) => {
+      for (const r of this.reservations) {
+        if (r.processId === request.processId && r.conversationId === request.conversationId && r.releasedAt === undefined) r.releasedAt = this.clock.now().toISOString();
+      }
+      this.accessChanged();
+    },
+    listReservations: async (processId) => this.reservations.filter((r) => r.processId === processId),
+  };
+
+  // ── kernel-issued grants (kernel #2078) ──────────────────────────────────
+
+  readonly grants: FakeGrant[] = [];
+
+  private grantLive(grant: FakeGrant): boolean {
+    const scope = this.scopes.find((s) => s.id === grant.scopeId);
+    const now = this.clock.now().getTime();
+    return grant.revokedAt === undefined && Date.parse(grant.expiresAt) > now && scope?.state === 'open' && Date.parse(scope.deadline) > now;
+  }
+
+  private readonly grantsService: ExecutionGrantsService = {
+    issueGrant: async (request) => {
+      const scope = this.scopes.find((s) => s.id === request.scopeId);
+      if (!scope) return this.refuse('unknown_scope', 'no such scope');
+      if (scope.state !== 'open') return this.refuse('scope_ended', 'this scope has ended');
+      if (EXECUTION_GRANT_RULES[request.kind].scope !== scope.kind) return this.refuse('invalid_request', `a ${request.kind} grant is issued under a '${EXECUTION_GRANT_RULES[request.kind].scope}' scope`);
+      if (Date.parse(scope.deadline) <= this.clock.now().getTime()) return this.refuse('deadline_passed', "this scope's deadline has passed");
+      const recipients = [...new Set(request.recipients.map((r) => r.trim().toLowerCase()))];
+      const subject = request.subject ?? '';
+      const live = this.grants.find((g) => g.scopeId === scope.id && g.kind === request.kind && g.subject === subject && this.grantLive(g));
+      if (live) {
+        live.recipients = recipients;
+        return { outcome: 'issued', grant: { ...live, live: true } };
+      }
+      const limit = request.kind === 'protocol_dispatch' ? Math.min(Date.parse(scope.deadline), this.clock.now().getTime() + 7 * 86_400_000) : Date.parse(scope.deadline);
+      const grant: FakeGrant = { id: this.nextId('grant'), scopeId: scope.id, processId: scope.processId, kind: request.kind, subject, recipients, issuedAt: this.clock.now().toISOString(), expiresAt: new Date(limit).toISOString(), uses: [] };
+      this.grants.push(grant);
+      return { outcome: 'issued', grant: { ...grant, live: true } };
+    },
+    revokeGrant: async (grantId, reason) => {
+      const grant = this.grants.find((g) => g.id === grantId);
+      if (!grant || grant.revokedAt !== undefined) return;
+      grant.revokedAt = this.clock.now().toISOString();
+      grant.revokeReason = reason;
+    },
+    listGrants: async (processId) => this.grants.filter((g) => g.processId === processId).map((g) => ({ ...g, live: this.grantLive(g) })),
+  };
+
+  /** `grantVerification`: what the integration asks before every operation. */
+  verifyGrant(request: { grantId: string; operation: GrantOperation; recipients: readonly string[] }): { allowed: true } | { allowed: false; code: string; message: string } {
+    const grant = this.grants.find((g) => g.id === request.grantId);
+    const answer = ((): { allowed: true } | { allowed: false; code: string; message: string } => {
+      if (!grant) return { allowed: false, code: 'unknown_grant', message: 'no such grant' };
+      if (grant.revokedAt !== undefined) return { allowed: false, code: 'revoked', message: 'the grant was revoked' };
+      const scope = this.scopes.find((s) => s.id === grant.scopeId);
+      if (!scope || scope.state !== 'open') return { allowed: false, code: 'scope_ended', message: 'the scope of the grant has ended' };
+      if (!this.grantLive(grant)) return { allowed: false, code: 'expired', message: 'the grant has expired' };
+      if (this.killed(scope)) return { allowed: false, code: 'kill_switch', message: 'stopped by an operator' };
+      if (!EXECUTION_GRANT_RULES[grant.kind].operations.includes(request.operation)) return { allowed: false, code: 'operation_not_covered', message: `a ${grant.kind} grant does not cover ${request.operation}` };
+      const outside = request.recipients.map((r) => r.toLowerCase()).filter((r) => !grant.recipients.includes(r));
+      return outside.length > 0 ? { allowed: false, code: 'recipient_not_covered', message: `not covered: ${outside.join(', ')}` } : { allowed: true };
+    })();
+    grant?.uses.push({ operation: request.operation, recipients: [...request.recipients], askedBy: 'followup', allowed: answer.allowed, usedAt: this.clock.now().toISOString(), ...(answer.allowed ? {} : { refusal: answer.code as GrantRefusalCode }) });
+    return answer;
+  }
+
+  // ── conversationMessages@2: subscriptions bound to a process ─────────────
+
+  /** One subscription per process and conversation. */
+  readonly processSubscriptions: FakeProcessSubscription[] = [];
+  /** Which process a posted message or card belongs to. */
+  private readonly bound = new Map<string, string>();
+  private readonly privateHandlers = new Map<string, Set<(request: PrivateMessageRequest) => Promise<PrivateMessageReply>>>();
+  /** Subscriptions of the first major (a facilitation from before 1.4.0). */
+  readonly legacySubscriptions = new Set<string>();
+
+  /** `subscriptions` lists `agent|channel|conversation` while some process of
+   *  the agent receives messages there. */
+  private refreshSubscriptions(): void {
+    this.subscriptions.clear();
+    for (const sub of this.processSubscriptions) {
+      if (!sub.ended && sub.mode !== 'none') this.subscriptions.add(scopeKey(sub));
+    }
+  }
+
+  private subscriptionOf(scope: ProcessMessageScope): FakeProcessSubscription | undefined {
+    return this.processSubscriptions.find((s) => s.agentSlug === scope.agentSlug && s.conversationId === scope.conversationId && s.processId === scope.processId);
+  }
+
+  /** The mode a process reads a conversation in; undefined: not (any more). */
+  modeOf(processId: string, conversationId: string): ConversationMessageMode | undefined {
+    const sub = this.processSubscriptions.find((s) => s.processId === processId && s.conversationId === conversationId);
+    return sub && !sub.ended ? sub.mode : undefined;
+  }
+
+  private readonly messagesService: ProcessConversationMessagesService = {
+    subscribe: async (scope, options) => {
+      if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
+      const existing = this.subscriptionOf(scope);
+      if (existing?.ended) return { outcome: 'refused', code: 'ended', message: "this process's subscription for the conversation has ended" };
+      const refusal = this.subscribeRefusals.get(scope.agentSlug);
+      if (refusal && !existing) return { outcome: 'refused', ...refusal };
+      if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
+      if (this.openScopesOf(scope.processId).length === 0) return { outcome: 'refused', code: 'no_scope', message: 'this process has no open execution scope' };
+      if (options.mode === 'all' && !this.holds(scope.processId, scope.conversationId)) return { outcome: 'refused', code: 'not_reserved', message: 'every message of a conversation is read only by the process that holds its reservation' };
+      if (options.mode === 'addressed' && !this.held(scope.processId, scope.conversationId)) return { outcome: 'refused', code: 'not_reserved', message: 'this process never held the reservation of this conversation' };
+      if (existing) existing.mode = options.mode;
+      else this.processSubscriptions.push({ ...scope, mode: options.mode, ended: false });
+      this.refreshSubscriptions();
+      return { outcome: 'subscribed', mode: options.mode };
+    },
+    modeOf: async (scope) => {
+      const sub = this.subscriptionOf(scope);
+      return sub && !sub.ended ? sub.mode : undefined;
     },
     onMessage: (agentSlug, handler) => {
       const set = this.listeners.get(agentSlug) ?? new Set();
-      set.add(handler);
+      set.add(handler as (record: ConversationMessageRecord) => void | Promise<void>);
       this.listeners.set(agentSlug, set);
-      return () => set.delete(handler);
+      return () => set.delete(handler as (record: ConversationMessageRecord) => void | Promise<void>);
     },
     getEvent: async (scope, messageId, revision) => {
       const matching = this.forScope(scope).filter((e) => e.messageId === messageId && (e.kind === 'created' || e.kind === 'edited' || e.kind === 'deleted'));
       if (revision !== undefined) return matching.find((e) => e.revision === revision);
       return matching.sort((a, b) => b.revision - a.revision)[0];
     },
+    getEventById: async (scope, eventId) => this.forScope(scope).find((e) => e.eventId === eventId),
     listSince: async (scope, opts) => {
       const all = this.forScope(scope);
       const start = opts?.after ? all.findIndex((e) => e.eventId === opts.after) + 1 : 0;
@@ -457,106 +909,200 @@ export class FakeKernel {
       const last = events[events.length - 1];
       return { events, ...(last && start + limit < all.length ? { nextCursor: last.eventId } : {}) };
     },
+    bindMessage: async (scope, ref) => {
+      if (!this.subscriptionOf(scope)) return false;
+      for (const id of [ref.messageId, ref.cardId]) if (id !== undefined) this.bound.set(id, scope.processId);
+      return true;
+    },
+    onPrivateMessage: (agentSlug, handler) => {
+      const set = this.privateHandlers.get(agentSlug) ?? new Set();
+      set.add(handler);
+      this.privateHandlers.set(agentSlug, set);
+      return () => set.delete(handler);
+    },
   };
 
-  private forScope(scope: ConversationMessageScope): ConversationMessageRecord[] {
-    const from = this.subscribedFrom.get(scopeKey(scope));
-    if (from === undefined) return [];
-    return this.events.slice(from).filter((e) => e.receivedByChannelKey === `28:${scope.agentSlug}` && e.channelType === scope.channelType && e.conversationId === scope.conversationId);
+  /** What a process may read: only what was stored for it. Reads end with
+   *  the subscription. */
+  private forScope(scope: ProcessMessageScope): ProcessConversationMessageRecord[] {
+    const sub = this.subscriptionOf(scope);
+    if (!sub || sub.ended) return [];
+    return (this.events as ProcessConversationMessageRecord[]).filter((e) => e.processId === scope.processId && e.conversationId === scope.conversationId);
   }
 
-  private readonly sendService: ConversationSendService = {
-    sendToConversation: async (request: ConversationSendRequest): Promise<ConversationSendOutcome> => {
-      if (request.asOwnIdentity !== true) return { outcome: 'unreachable', code: 'not_own_identity', message: 'the engine must post as the facilitator itself' };
-      if (this.noIdentity.has(request.agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
-      if (!this.subscriptions.has(scopeKey(request))) return { outcome: 'unreachable', code: 'not_permitted', message: 'no subscription for this conversation' };
-      const fault = this.sendFaults.shift();
-      if (fault === 'throw') throw new Error('channel connection reset');
-      // A channel call that never answers.
-      if (fault === 'hang') return new Promise<ConversationSendOutcome>(() => undefined);
-      if (fault && fault !== 'lost') return { outcome: 'unreachable', ...fault };
-      const message = request.message;
-      const card = (message as { card?: QuestionCard }).card;
-      // As the kernel: a card on a channel that declares none (or not that
-      // kind) is refused and nothing is posted.
-      if (card !== undefined && this.refuseCards > 0) {
-        this.refuseCards -= 1;
-        return { outcome: 'unreachable', code: 'channel_error', message: 'the card is too large' };
-      }
-      if (card !== undefined && (!this.cardSupport || card.questions.length > this.cardSupport.maxQuestions || card.questions.some((q) => !this.cardSupport?.kinds.includes(q.kind)))) {
-        return { outcome: 'unreachable', code: 'channel_error', message: 'this channel does not render that card' };
-      }
-      // As Teams 0.38.4: a fixed candidate list needs one candidate where the
-      // volunteer button is shown (the card's only question), two otherwise.
-      for (const q of card?.questions ?? []) {
-        if (q.kind !== 'assignment' || q.candidates === 'conversation_members') continue;
-        const volunteerShown = q.allowVolunteer !== false && card?.questions.length === 1;
-        if (q.candidates.length > 20) return { outcome: 'unreachable', code: 'channel_error', message: 'invalid question card: at most 20 candidates' };
-        if (q.candidates.length < (volunteerShown ? 1 : 2)) {
-          return { outcome: 'unreachable', code: 'channel_error', message: `invalid question card: question ${String(card!.questions.indexOf(q) + 1)}: at least ${volunteerShown ? 'one candidate is' : 'two options are'} needed` };
-        }
-      }
-      const messageId = this.nextId('bot');
-      this.posts.push({
-        as: request.agentSlug,
-        conversationId: request.conversationId,
-        text: message.text,
-        mentions: [...(message.mentions ?? [])],
-        ...(message.poll !== undefined ? { poll: message.poll } : {}),
-        ...(card !== undefined ? { card, cardMessageId: `${messageId}-card` } : {}),
-        messageId,
-      });
-      if (fault === 'lost') return { outcome: 'unreachable', code: 'timeout', message: 'no confirmation from the channel' };
-      return { outcome: 'delivered', messageId, ...(message.poll !== undefined || card !== undefined ? { cardMessageId: `${messageId}-card` } : {}) };
-    },
-  };
+  /** A kernel before private status requests (plugin-api 1.68). */
+  privateMessages = true;
+  /** Private chats: what a person wrote to a facilitator and what they got. */
+  readonly privateAnswers: Array<{ agentSlug: string; userId: string; text: string; answer: string | undefined }> = [];
 
-  private readonly targetedService: TargetedSendService = {
-    sendToPrincipal: async (request: TargetedSendRequest) => {
-      let outcome: TargetedSendDeliveryOutcome;
+  /**
+   * A person writes to the facilitator in a private chat. As the kernel's
+   * router: the message reaches the engine only when the person is listed on
+   * an open scope of a process of that agent, and the engine's answer is
+   * given only when it is authorized as a private message to that person.
+   * `undefined`: the facilitator's fixed answer to private requests.
+   */
+  async privateMessage(agentSlug: string, userId: string, text: string): Promise<string | undefined> {
+    const listed = [...new Set(this.scopes.filter((s) => s.agentSlug === agentSlug && s.state === 'open' && s.targets.some((t) => t.kind === 'person' && t.principalId.toLowerCase() === userId.toLowerCase())).map((s) => s.processId))];
+    let answer: string | undefined;
+    if (listed.length > 0) {
+      for (const handler of [...(this.privateHandlers.get(agentSlug) ?? [])]) {
+        const reply = await handler({ agentSlug, channelType: this.channelType, principalId: userId, text, processIds: listed });
+        if (reply.handled !== true || reply.text.trim() === '' || !listed.includes(reply.authorization.processId)) continue;
+        const scope = this.scopes.find((s) => s.id === reply.authorization.scopeId && s.processId === reply.authorization.processId);
+        if (!scope) continue;
+        const granted = this.authorizeAction({ scopeId: scope.id, phase: reply.authorization.phase, purpose: reply.authorization.purpose, action: 'direct_message', target: { kind: 'person', channelType: this.channelType, principalId: userId }, emission: reply.authorization.emission });
+        if (granted.outcome !== 'authorized') continue;
+        answer = reply.text.trim();
+        break;
+      }
+    }
+    this.privateAnswers.push({ agentSlug, userId, text, answer });
+    return answer;
+  }
+
+  // ── conversationSend@2: every send is an authorized action ───────────────
+
+  private authorizeSend(agentSlug: string, authorization: SendAuthorization | Omit<SendAuthorization, 'emission' | 'purpose'>, action: ExecutionActionType, target: ExecutionTarget | undefined, fixed: { purpose?: ExecutionPurpose } = {}): { authorizationId: string } | { outcome: 'unreachable'; code: string; message: string; executionCode: ExecutionRefusalCode } {
+    const scope = this.scopes.find((s) => s.id === authorization.scopeId && s.processId === authorization.processId);
+    if (!scope || scope.agentSlug !== agentSlug) {
+      this.refusals.push({ code: 'unknown_scope', message: 'no such scope for this process and agent' });
+      return { outcome: 'unreachable', code: 'not_authorized', message: 'no such scope for this process and agent', executionCode: 'unknown_scope' };
+    }
+    const full = authorization as SendAuthorization;
+    const granted = this.authorizeAction({ scopeId: scope.id, phase: authorization.phase, purpose: fixed.purpose ?? full.purpose, action, ...(target ? { target } : {}), ...(full.emission ? { emission: full.emission } : {}) });
+    return granted.outcome === 'authorized' ? { authorizationId: granted.authorizationId } : { outcome: 'unreachable', code: 'not_authorized', message: granted.message, executionCode: granted.code };
+  }
+
+  /** The channel's part of a post: faults, cards, the message itself. */
+  private async post(agentSlug: string, conversationId: string, message: ScopedConversationSendRequest['message'], processId: string): Promise<{ outcome: 'delivered'; messageId: string; cardMessageId?: string } | { outcome: 'unreachable'; code: string; message: string }> {
+    if (this.noIdentity.has(agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
+    const fault = this.sendFaults.shift();
+    if (fault === 'throw') throw new Error('channel connection reset');
+    // A channel call that never answers.
+    if (fault === 'hang') return new Promise(() => undefined);
+    if (fault && fault !== 'lost') return { outcome: 'unreachable', ...fault };
+    const card = (message as { card?: QuestionCard }).card;
+    // As the kernel: a card on a channel that declares none (or not that
+    // kind) is refused and nothing is posted.
+    if (card !== undefined && this.refuseCards > 0) {
+      this.refuseCards -= 1;
+      return { outcome: 'unreachable', code: 'channel_error', message: 'the card is too large' };
+    }
+    if (card !== undefined && (!this.cardSupport || card.questions.length > this.cardSupport.maxQuestions || card.questions.some((q) => !this.cardSupport?.kinds.includes(q.kind)))) {
+      return { outcome: 'unreachable', code: 'channel_error', message: 'this channel does not render that card' };
+    }
+    // As Teams 0.38.4: a fixed candidate list needs one candidate where the
+    // volunteer button is shown (the card's only question), two otherwise.
+    for (const q of card?.questions ?? []) {
+      if (q.kind !== 'assignment' || q.candidates === 'conversation_members') continue;
+      const volunteerShown = q.allowVolunteer !== false && card?.questions.length === 1;
+      if (q.candidates.length > 20) return { outcome: 'unreachable', code: 'channel_error', message: 'invalid question card: at most 20 candidates' };
+      if (q.candidates.length < (volunteerShown ? 1 : 2)) {
+        return { outcome: 'unreachable', code: 'channel_error', message: `invalid question card: question ${String((card?.questions.indexOf(q) ?? 0) + 1)}: at least ${volunteerShown ? 'one candidate is' : 'two options are'} needed` };
+      }
+    }
+    const messageId = this.nextId('bot');
+    const cardMessageId = `${messageId}-card`;
+    this.posts.push({
+      as: agentSlug,
+      conversationId,
+      text: message.text,
+      mentions: [...(message.mentions ?? [])],
+      ...(message.poll !== undefined ? { poll: message.poll } : {}),
+      ...(card !== undefined ? { card, cardMessageId } : {}),
+      messageId,
+      processId,
+    });
+    // The kernel records which process the message and the card belong to.
+    this.bound.set(messageId, processId);
+    if (message.poll !== undefined || card !== undefined) this.bound.set(cardMessageId, processId);
+    if (card !== undefined) this.bound.set(card.cardId, processId);
+    if (fault === 'lost') return { outcome: 'unreachable', code: 'timeout', message: 'no confirmation from the channel' };
+    return { outcome: 'delivered', messageId, ...(message.poll !== undefined || card !== undefined ? { cardMessageId } : {}) };
+  }
+
+  private readonly sendService: ScopedConversationSendService = {
+    capabilities: () => (this.cardSupport ? { asOwnIdentity: true, mentions: true, poll: true, card: this.cardSupport } : { asOwnIdentity: true, mentions: true, poll: true }),
+    sendToConversation: async (request): Promise<ScopedSendOutcome> => {
+      const granted = this.authorizeSend(request.agentSlug, request.authorization, 'post', { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId });
+      if ('outcome' in granted) return granted;
+      const outcome = await this.post(request.agentSlug, request.conversationId, request.message, request.authorization.processId);
+      return outcome.outcome === 'delivered' ? { ...outcome, authorizationId: granted.authorizationId } : { ...outcome, authorizationId: granted.authorizationId };
+    },
+    sendToPerson: async (request): Promise<ScopedSendOutcome> => {
+      const principalId = request.principal.startsWith('user:') ? request.principal.slice(5) : '';
+      if (!principalId) return { outcome: 'unreachable', code: 'not_permitted', message: `'${request.principal}' is not a user principal ('user:<id>')` };
+      const granted = this.authorizeSend(request.agentSlug, request.authorization, 'direct_message', { kind: 'person', channelType: request.channelType, principalId });
+      if ('outcome' in granted) return granted;
+      if (this.noIdentity.has(request.agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity', authorizationId: granted.authorizationId };
       const blocked = this.dmBlocked.get(request.principal);
-      if (!request.asAgentSlug || this.noIdentity.has(request.asAgentSlug)) outcome = { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
-      // As the kernel: it only writes to people of a conversation it moderates.
-      else if (![...this.subscriptions].some((key) => key.startsWith(`${request.asAgentSlug}|`))) outcome = { outcome: 'unreachable', code: 'not_permitted', message: 'not part of a conversation this agent moderates' };
-      else if (blocked) outcome = { outcome: 'unreachable', code: blocked, message: `cannot reach ${request.principal}: ${blocked}` };
-      else {
-        this.dms.push({ as: request.asAgentSlug, principal: request.principal, text: request.message.text });
-        outcome = { outcome: 'delivered', messageId: this.nextId('dm') };
-      }
-      return { resolution: { kind: 'single-user' as const }, deliveries: [{ principalId: request.principal, outcome }], diagnostics: [] };
+      if (blocked) return { outcome: 'unreachable', code: blocked, message: `cannot reach ${request.principal}: ${blocked}`, authorizationId: granted.authorizationId };
+      this.dms.push({ as: request.agentSlug, principal: request.principal, text: request.message.text, processId: request.authorization.processId });
+      return { outcome: 'delivered', authorizationId: granted.authorizationId, messageId: this.nextId('dm') };
+    },
+    updateCard: async (request) => {
+      const granted = this.authorizeSend(request.agentSlug, request.authorization, 'card_update', { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId });
+      if ('outcome' in granted) return granted;
+      const fault = this.cardUpdateFaults.shift();
+      if (fault) return { outcome: 'unreachable', ...fault };
+      if (!this.cardSupport?.update) return { outcome: 'unreachable', code: 'channel_error', message: 'this channel cannot update cards' };
+      this.cardUpdates.push({ as: request.agentSlug, conversationId: request.conversationId, cardMessageId: request.cardMessageId, update: request.update });
+      return { outcome: 'updated' };
+    },
+    checkReadiness: async (request) => {
+      if (this.absent.has('readiness')) return { outcome: 'unreachable', code: 'channel_error', message: 'no channel readiness is wired on this host' };
+      const granted = this.authorizeSend(request.agentSlug, request.authorization, 'check', undefined, { purpose: 'readiness_check' });
+      if ('outcome' in granted) return granted;
+      return { outcome: 'checked', report: this.readinessOf(request), authorizationId: granted.authorizationId };
     },
   };
 
-  private readonly turnService: AgentTurnService = {
-    runTurn: async (request) => {
+  private readonly turnService: ScopedAgentTurnService = {
+    runTurn: async (request): Promise<ScopedAgentTurnOutcome> => {
+      const scope = this.scopes.find((s) => s.id === request.scopeId && s.processId === request.processId);
+      if (!scope || scope.agentSlug !== request.agentSlug) return { outcome: 'refused', code: 'not_authorized', message: 'no such scope for this process and agent', executionCode: 'unknown_scope' };
+      const granted = this.authorizeAction({ scopeId: scope.id, phase: request.phase, purpose: request.purpose, action: 'model_turn', emission: 'prose', modelCalls: request.budget.modelCalls, ...(request.target ? { target: request.target } : {}) });
+      if (granted.outcome !== 'authorized') return { outcome: 'refused', code: 'not_authorized', message: granted.message, executionCode: granted.code };
       this.turns.push(request);
       const answer = await this.onTurn(request);
-      return typeof answer === 'string' ? { outcome: 'completed', text: answer } : answer;
+      const used = Math.min(this.turnModelCalls, request.budget.modelCalls);
+      await this.executionService.settle(granted.authorizationId, { modelCalls: used });
+      // The reservation is a hard cap: a call it does not cover is not made,
+      // and the turn returns no text.
+      if (this.turnModelCalls > request.budget.modelCalls) {
+        return { outcome: 'refused', code: 'reservation_exceeded', message: 'the turn needed more model calls than it reserved', authorizationId: granted.authorizationId, modelCalls: { reserved: request.budget.modelCalls, used, refused: this.turnModelCalls - request.budget.modelCalls } };
+      }
+      if (typeof answer !== 'string') return answer as ScopedAgentTurnOutcome;
+      return { outcome: 'completed', text: answer, authorizationId: granted.authorizationId, modelCalls: { reserved: request.budget.modelCalls, used } };
     },
     getProfile: async (agentSlug) => ({
       agentSlug,
       kind: 'facilitator',
+      archetype: 'facilitator',
       displayName: this.names.get(agentSlug) ?? `${agentSlug.charAt(0).toUpperCase()}${agentSlug.slice(1)}`,
       ...(this.languages.has(agentSlug) ? { language: this.languages.get(agentSlug) as string } : {}),
       ownIdentityChannelTypes: this.noIdentity.has(agentSlug) ? [] : [this.channelType],
     }),
   };
 
+  private readinessOf(request: { agentSlug: string; conversationId: string }): ChannelReadinessReport {
+    const missing = [
+      ...(this.noIdentity.has(request.agentSlug) ? [{ code: 'no_identity', message: 'the facilitator has no bot of its own' }] : []),
+      ...(this.notReady.get(`${request.agentSlug}|${request.conversationId}`) ?? []),
+    ];
+    const has = (code: string): boolean => missing.some((m) => m.code === code);
+    return {
+      ready: missing.length === 0,
+      installed: !has('app_not_installed') && !has('no_identity'),
+      canReadAllMessages: !has('consent_missing'),
+      canPost: !has('cannot_post'),
+      missing,
+    };
+  }
+
   private readonly readinessService: ChannelReadinessService = {
-    check: async (request): Promise<ChannelReadinessReport> => {
-      const missing = [
-        ...(this.noIdentity.has(request.agentSlug) ? [{ code: 'no_identity', message: 'the facilitator has no bot of its own' }] : []),
-        ...(this.notReady.get(`${request.agentSlug}|${request.conversationId}`) ?? []),
-      ];
-      const has = (code: string): boolean => missing.some((m) => m.code === code);
-      return {
-        ready: missing.length === 0,
-        installed: !has('app_not_installed') && !has('no_identity'),
-        canReadAllMessages: !has('consent_missing'),
-        canPost: !has('cannot_post'),
-        missing,
-      };
-    },
+    check: async (request): Promise<ChannelReadinessReport> => this.readinessOf(request),
     repairConsent: async (request) => {
       const key = `${request.agentSlug}|${request.conversationId}`;
       this.repairs.push(key);
@@ -620,34 +1166,29 @@ export class FakeKernel {
     },
   };
 
+  /** The first major, kept for a facilitation from before 1.4.0. */
+  private readonly legacyMessagesService: Pick<ConversationMessagesService, 'unsubscribe'> = {
+    unsubscribe: async (scope) => {
+      this.legacySubscriptions.delete(scopeKey(scope));
+    },
+  };
+
   /** The accessor the engine consumes. */
   kernel(): Kernel {
     const unless = <T>(name: keyof Kernel, value: T) => (): T | undefined => (this.absent.has(name) ? undefined : value);
     return {
       db: () => (this.absent.has('db') ? undefined : this.database),
+      execution: unless('execution', this.executionService),
+      grants: unless('grants', this.grantsService),
       messages: () => {
         if (this.absent.has('messages')) return undefined;
-        if (this.exactSubscriptions) return this.messagesService;
-        const { isSubscribed: _isSubscribed, ...older } = this.messagesService;
+        if (this.privateMessages) return this.messagesService;
+        const { onPrivateMessage: _onPrivateMessage, ...older } = this.messagesService;
         return older;
       },
       agentTurn: unless('agentTurn', this.turnService),
-      conversationSend: () => {
-        if (this.absent.has('conversationSend')) return undefined;
-        if (!this.cardSupport) return this.sendService;
-        const members: CardSendMembers = {
-          capabilities: () => ({ card: this.cardSupport as CardSupport }),
-          updateCard: async (request) => {
-            const fault = this.cardUpdateFaults.shift();
-            if (fault) return { outcome: 'unreachable', ...fault };
-            if (!this.cardSupport?.update) return { outcome: 'unreachable', code: 'channel_error', message: 'this channel cannot update cards' };
-            this.cardUpdates.push({ as: request.agentSlug, conversationId: request.conversationId, cardMessageId: request.cardMessageId, update: request.update });
-            return { outcome: 'updated' };
-          },
-        };
-        return Object.assign({}, this.sendService, members) as ConversationSendService;
-      },
-      targetedSend: unless('targetedSend', this.targetedService),
+      conversationSend: unless('conversationSend', this.sendService),
+      legacyMessages: unless('legacyMessages', this.legacyMessagesService),
       readiness: unless('readiness', this.readinessService),
       sessionCapabilities: unless('sessionCapabilities', this.capabilitiesService),
       conversationEvents: unless('conversationEvents', this.eventsService),

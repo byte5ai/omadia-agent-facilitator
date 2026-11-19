@@ -1,11 +1,12 @@
 // The kernel's subscription under a facilitation.
 //
-// Reading a conversation and posting in it both ride on the subscription the
-// kernel keeps for the facilitator. The kernel ends it on its own when its
-// ground is gone (the engine's grant was revoked, the engine was reinstalled,
+// A facilitation reads its conversation through a subscription of its own
+// (`conversationMessages@2`): bound to the facilitation, so it sees only what
+// arrived for it. The kernel ends the subscription when its ground is gone
+// (the facilitation has no open scope left, the engine's grant was revoked,
 // the agent was disabled), and nothing tells the engine. So the engine asks
-// (`isSubscribed`, or on an older kernel infers it from what the kernel stored):
-// when it comes up, on every scheduler pass, and before a tool acts.
+// (`modeOf`): when it comes up, on every scheduler pass, and before a tool
+// acts.
 //
 //   still there        -> nothing happens
 //   gone, given back   -> the group is told once that the facilitation continues
@@ -13,20 +14,23 @@
 //                         with the kernel's reason on record
 //
 // A facilitation is never left active without a subscription.
+//
+// A facilitation that began before 1.4.0 has no scope and reads through the
+// first major's subscription. It is taken over here, once: its scopes are
+// opened, it subscribes as itself, and the old subscription is given back.
 
-import { DAY_MS, MINUTE_MS } from '../clock.js';
+import { MINUTE_MS } from '../clock.js';
 import * as store from '../db/store.js';
 import type { Facilitation } from '../model.js';
 import { texts } from '../texts/index.js';
 import { endFollowup } from './actionItems.js';
 import type { EngineCore } from './core.js';
 import { abortInWork, releaseConversation } from './lifecycle.js';
+import { ensureScope, scopeKeyFor, wantedMode } from './scopes.js';
 
 /** How long the kernel may refuse before the facilitation ends. A refusal can
  *  pass on its own: after a grant change the kernel rebuilds the facilitator. */
 export const SUBSCRIBE_GRACE_MS = 2 * MINUTE_MS;
-/** The kernel keeps stored events for 30 days; older ones prove nothing. */
-const EVENT_EVIDENCE_MS = 29 * DAY_MS;
 
 export type SubscriptionState =
   | { state: 'ok' | 'restored' | 'unknown' }
@@ -36,43 +40,51 @@ export type SubscriptionState =
 const LIVE = new Set(['configuring', 'active', 'concluding']);
 
 /**
- * Is there evidence that the subscription is gone? Only for a kernel that
- * cannot be asked (before plugin-api 1.56). The engine reads the kernel's store: a subscription
- * that delivered events to this facilitation still lists them. An empty list
- * after events arrived means the subscription those events belonged to ended.
+ * Take over a facilitation from before execution scopes. Its scopes are
+ * opened in the kernel's order (the ones it is past are ended by the sync),
+ * and the first major's subscription is given back: from now on the
+ * conversation is read for this facilitation alone.
  */
-async function lostByEvidence(engine: EngineCore, f: Facilitation, listed: number): Promise<boolean> {
-  if (f.settings.subscriptionLost === true) return true;
-  if (listed > 0) return false;
-  const now = engine.now();
-  const since = f.settings.subscribedAt ? new Date(f.settings.subscribedAt) : f.createdAt;
-  const seen = await engine.db().query(
-    `SELECT 1 FROM plg_omadia_agent_facilitator_inbound WHERE facilitation_id = $1 AND processed_at > $2 AND processed_at > $3 LIMIT 1`,
-    [f.id, since, new Date(now.getTime() - EVENT_EVIDENCE_MS)],
-  );
-  return seen.rows.length > 0;
+async function takeOver(engine: EngineCore, f: Facilitation): Promise<Facilitation> {
+  const key = scopeKeyFor(f, '', false);
+  const scope = await ensureScope(engine, f, key.kind, key.eventId);
+  if (!scope.ok) {
+    engine.log(`facilitation ${f.id}: it began before execution scopes and could not be taken over (${scope.code}: ${scope.message})`);
+    return f;
+  }
+  try {
+    await engine.deps.kernel.legacyMessages()?.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });
+  } catch (err) {
+    engine.log(`facilitation ${f.id}: its subscription from before execution scopes could not be given back: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // The cursor named an event of the old subscription; the new one starts empty.
+  await engine.db().query(`UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = NULL, settings = (settings - 'released') || '{"scoped": true}'::jsonb WHERE id = $1`, [f.id]);
+  engine.log(`facilitation ${f.id}: taken over under execution scopes (${key.kind})`);
+  return (await store.getFacilitation(engine.db(), f.id)) ?? f;
 }
 
 /** Make sure a facilitation that reads a conversation still can. Called
  *  outside any unit of work: it calls the kernel. */
-export async function reconcileSubscription(engine: EngineCore, f: Facilitation): Promise<SubscriptionState> {
+export async function reconcileSubscription(engine: EngineCore, stored: Facilitation): Promise<SubscriptionState> {
   const messages = engine.deps.kernel.messages();
-  if (!messages) return { state: 'unknown' };
-  const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId };
-  let lost: boolean;
-  if (typeof messages.isSubscribed === 'function') {
-    // The kernel answers exactly (plugin-api 1.56).
-    const held = await messages.isSubscribed(scope);
-    if (held && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
-    lost = !held || f.settings.subscriptionLost === true;
-  } else {
-    // An older kernel: inferred from what it stored.
-    const listed = (await messages.listSince(scope, { limit: 1 })).events.length;
-    // Events are listed: the subscription stands, whatever else is going on.
-    if (listed > 0 && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
-    lost = await lostByEvidence(engine, f, listed);
-  }
-  const outcome = await messages.subscribe(scope);
+  if (!messages || !engine.deps.kernel.execution()) return { state: 'unknown' };
+  const f = stored.settings.scoped === true ? stored : await takeOver(engine, stored);
+  if (f.settings.scoped !== true) return { state: 'unknown' };
+  const wanted = wantedMode(f);
+  if (wanted === 'none') return { state: 'ok' };
+  const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, processId: f.id };
+  const mode = await messages.modeOf(scope);
+  // `addressed` where everything should be read is the kernel's doing too
+  // (the reservation was taken away); reading less than wanted is a loss.
+  const held = mode === wanted || (mode === 'all' && wanted === 'addressed');
+  if (held && f.settings.subscriptionLost !== true && f.settings.refusedSince === undefined) return { state: 'ok' };
+  const lost = !held || f.settings.subscriptionLost === true;
+  // A subscription needs an open scope, and reading everything needs the
+  // conversation's reservation.
+  const key = scopeKeyFor(f, '', false);
+  await ensureScope(engine, f, key.kind, key.eventId);
+  if (wanted === 'all') await engine.deps.kernel.execution()?.reserveConversation({ agentSlug: f.facilitatorAgent, processId: f.id, channelType: f.channelType, conversationId: f.conversationId });
+  const outcome = await messages.subscribe(scope, { mode: wanted });
 
   if (outcome.outcome === 'subscribed') {
     if (!lost && f.settings.refusedSince === undefined) return { state: 'ok' };
@@ -99,9 +111,9 @@ export async function reconcileSubscription(engine: EngineCore, f: Facilitation)
       return false;
     }
     if (w.now.getTime() - since.getTime() < SUBSCRIBE_GRACE_MS) return false;
-    // It does not come back. Nothing of this facilitation can be posted any
-    // more, so nothing is kept waiting for it either.
-    await w.patch({ settings: { ...w.f.settings, orphaned: true } });
+    // It does not come back. What the facilitation still has to say is
+    // authorized by its scopes, not by the subscription: the abort report
+    // goes out where the kernel still lets it.
     if (LIVE.has(w.f.phase)) {
       await abortInWork(w, { reason: texts(w.f.language).abortNoSubscription(), actor: 'engine', detail: { subscription: reason } });
     } else {

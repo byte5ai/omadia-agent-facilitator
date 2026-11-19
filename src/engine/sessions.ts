@@ -43,7 +43,7 @@ const snapshotOf = (session: Session | undefined): Snapshot | undefined => (sess
 /** The session that is going on: a running meeting, otherwise the chat. */
 export async function currentSession(q: Queryable, facilitationId: string): Promise<Session | undefined> {
   const sessions = await store.listSessions(q, facilitationId);
-  return sessions.find((s) => s.kind === 'live' && s.status === 'running') ?? sessions.find((s) => s.kind === 'async');
+  return sessions.find((s) => s.kind === 'live' && s.status === 'live') ?? sessions.find((s) => s.kind === 'async');
 }
 
 /** The capabilities of a conversation or a meeting, asked of the kernel.
@@ -68,7 +68,7 @@ export async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f:
 
 /** A snapshot with what the facilitator can really do privately. */
 const real = <S extends Pick<SessionCapabilitySnapshot, 'outputs'>>(engine: Pick<EngineCore, 'deps'>, snapshot: S): S =>
-  withRealOutputs(snapshot, engine.deps.kernel.targetedSend() !== undefined);
+  withRealOutputs(snapshot, engine.deps.kernel.conversationSend() !== undefined);
 
 /** The chat phase of a facilitation is created with it, with what the channel
  *  offers there. */
@@ -76,7 +76,7 @@ async function createChatSession(engine: EngineCore, f: Facilitation): Promise<v
   const snapshot = await fetchSnapshot(engine, f);
   const db = engine.db();
   if ((await store.listSessions(db, f.id)).some((s) => s.kind === 'async')) return;
-  await insert<Session>(db, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'running', startedAt: engine.now(), createdAt: engine.now() });
+  await insert<Session>(db, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'live', startedAt: engine.now(), createdAt: engine.now() });
   // A meeting may already be running: the kernel reports a start, not a
   // state, so the conversation's snapshot is what tells. The session is on
   // record from the first moment; the handshake says what is perceived in it.
@@ -87,7 +87,7 @@ async function createChatSession(engine: EngineCore, f: Facilitation): Promise<v
       meetingRef: snapshot.sessionRef ?? null,
       modality: snapshot.modality,
       capabilitySnapshot: snapshot,
-      status: 'running',
+      status: 'live',
       startedAt: engine.now(),
       createdAt: engine.now(),
     });
@@ -104,7 +104,7 @@ async function ensureChatSession(w: Work): Promise<Session> {
     kind: 'async',
     modality: 'chat',
     capabilitySnapshot: real(w.engine, baselineSnapshot(w.f.channelType, w.f.conversationId, w.now)),
-    status: 'running',
+    status: 'live',
     startedAt: w.now,
     createdAt: w.now,
   });
@@ -158,7 +158,7 @@ export async function scheduleSession(w: Work, input: ScheduleInput): Promise<Se
 const getSession = (q: Queryable, id: string): Promise<Session | undefined> => one<Session>(q, 'SELECT * FROM plg_omadia_agent_facilitator_sessions WHERE id = $1', [id]);
 
 async function sendAgenda(w: Work, session: Session): Promise<void> {
-  if (session.agendaSentAt || session.status === 'cancelled' || session.status === 'ended') return;
+  if (session.agendaSentAt || session.status === 'cancelled' || session.status === 'closed') return;
   const t = texts(w.f.language);
   const steps = (await store.listSteps(w.tx, w.f.id)).filter((s) => s.kind !== 'open');
   await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { agendaSentAt: w.now });
@@ -180,7 +180,7 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
   const chat = snapshotOf(await ensureChatSession(w));
   const snapshot: SessionCapabilitySnapshot = real(w.engine, prefetched ?? { ...baselineSnapshot(w.f.channelType, w.f.conversationId, w.now), ...(chat ? { inputs: chat.inputs, outputs: chat.outputs } : {}) });
   const perceived: Snapshot = { ...snapshot, modality: session.modality };
-  const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'running', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
+  const started = (await update<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'live', startedAt: w.now, capabilitySnapshot: { ...snapshot, modality: session.modality } })) ?? session;
   // A meeting the group scheduled here has an agenda to send; one that simply
   // started has not.
   const adHoc = session.title === null && session.scheduledStart === null;
@@ -217,8 +217,8 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
 }
 
 export async function endSession(w: Work, session: Session): Promise<void> {
-  if (session.status !== 'running') return;
-  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'ended', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
+  if (session.status !== 'live') return;
+  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'closed', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
   w.bump();
   await w.event('session_ended', 'engine', { sessionId: session.id });
   // The end of a meeting nobody scheduled here is not announced either.
@@ -243,13 +243,13 @@ export async function meetingStarted(w: Work, sessionRef: string, snapshot: Sess
   }
   // A meeting was already running when the facilitation started (its session
   // has no reference yet): this is its start, reported late.
-  const known = live.find((s) => s.status === 'running' && s.meetingRef === null);
+  const known = live.find((s) => s.status === 'live' && s.meetingRef === null);
   if (known) {
     await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: known.id }, { meetingRef: sessionRef });
     return;
   }
   // Another meeting is on record as running: only one is, at a time.
-  if (live.some((s) => s.status === 'running')) return;
+  if (live.some((s) => s.status === 'live')) return;
   const session = await insert<Session>(w.tx, 'plg_omadia_agent_facilitator_sessions', {
     facilitationId: w.f.id,
     kind: 'live',
@@ -262,7 +262,7 @@ export async function meetingStarted(w: Work, sessionRef: string, snapshot: Sess
 
 /** The meeting is over: its session ends and the chat is what counts again. */
 export async function meetingEnded(w: Work, sessionRef: string, chat: SessionCapabilitySnapshot | undefined): Promise<void> {
-  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.status === 'running');
+  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.status === 'live');
   const session = live.find((s) => s.meetingRef === sessionRef) ?? live[0];
   if (!session) return;
   await endSession(w, session);
@@ -272,7 +272,7 @@ export async function meetingEnded(w: Work, sessionRef: string, chat: SessionCap
 /** A facilitation that ended has no session that is going on (D26). */
 async function closeSessions(w: Work): Promise<void> {
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'cancelled' WHERE facilitation_id = $1 AND status = 'scheduled'`, [w.f.id]);
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'ended', ended_at = $2 WHERE facilitation_id = $1 AND status = 'running'`, [w.f.id, w.now]);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'closed', ended_at = $2 WHERE facilitation_id = $1 AND status = 'live'`, [w.f.id, w.now]);
 }
 
 // ── media consent and speech ────────────────────────────────────────────────
@@ -358,8 +358,8 @@ export async function applySnapshot(w: Work, reported: SessionCapabilitySnapshot
   const t = texts(w.f.language);
   const sessions = await store.listSessions(w.tx, w.f.id);
   const session =
-    (snapshot.sessionRef ? sessions.find((s) => s.kind === 'live' && s.meetingRef === snapshot.sessionRef && s.status === 'running') : undefined) ??
-    sessions.find((s) => s.kind === 'live' && s.status === 'running') ??
+    (snapshot.sessionRef ? sessions.find((s) => s.kind === 'live' && s.meetingRef === snapshot.sessionRef && s.status === 'live') : undefined) ??
+    sessions.find((s) => s.kind === 'live' && s.status === 'live') ??
     (await ensureChatSession(w));
   const diff = diffSnapshots(snapshotOf(session), snapshot);
   if (!diff.changed) return;
@@ -504,7 +504,7 @@ export function installSessions(): void {
     (engine, job) => prepareSessionStart(engine, job.facilitationId, String(job.payload['sessionId'])),
   );
   registerJobHandler('session_end', withSession(endSession));
-  registerJobHandler('media_consent', withSession(async (w, session) => (session.status === 'running' ? askMediaConsent(w, { ...session, mediaConsent: 'not_needed' }) : undefined)));
+  registerJobHandler('media_consent', withSession(async (w, session) => (session.status === 'live' ? askMediaConsent(w, { ...session, mediaConsent: 'not_needed' }) : undefined)));
 
   registerProposalKind('media_consent', {
     describe: (w, p) => texts(w.f.language).proposalKinds.media_consent(p.summary),

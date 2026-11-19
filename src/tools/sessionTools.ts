@@ -68,7 +68,7 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
             await startSession(w, next, prefetched);
             return 'The session is running. What can be perceived in it was said in the group.';
           }
-          const running = sessions.find((s) => s.status === 'running');
+          const running = sessions.find((s) => s.status === 'live');
           if (!running) throw new Refusal('no_session', 'No session is running.');
           await endSession(w, running);
           return 'The session has ended. Follow-up continues in the chat.';

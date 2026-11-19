@@ -31,7 +31,10 @@ const CONTRIBUTION_KINDS: readonly ContributionKind[] = [
 export async function storedMessage(engine: FacilitationEngine, ctx: ResolvedContext, messageId: string) {
   const messages = engine.core.deps.kernel.messages();
   if (!messages) throw new Refusal('no_message_service', 'The messages of this conversation cannot be read right now; nothing can be recorded.');
-  const record = await messages.getEvent({ agentSlug: ctx.agentSlug, channelType: ctx.channelType, conversationId: ctx.conversationId }, messageId);
+  // Read as the facilitation of this conversation: the kernel returns only
+  // what that facilitation received.
+  const f = await store.findRoutableByConversation(engine.core.db(), ctx.channelType, ctx.conversationId);
+  const record = f ? await messages.getEvent({ agentSlug: ctx.agentSlug, channelType: ctx.channelType, conversationId: ctx.conversationId, processId: f.id }, messageId) : undefined;
   if (!record) {
     throw new Refusal(
       'unknown_message',
