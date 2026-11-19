@@ -25,6 +25,12 @@ async function say(conv: string, who: string, text: string): Promise<void> {
   await h.kernel.say(conv, who, text);
   await h.settle();
 }
+/** A reply to the facilitator's last message: what it hears in follow-up
+ *  without a turn of the facilitator being started (a mention starts one). */
+async function reply(conv: string, who: string, text: string): Promise<void> {
+  await h.kernel.say(conv, who, text, { replyTo: h.kernel.groupPosts(conv).at(-1)?.messageId ?? '' });
+  await h.settle();
+}
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 
 test('a reminder offset below one hour is printed in minutes', () => {
@@ -104,13 +110,13 @@ test('an owner who cannot be reached privately is reminded in the group instead'
 // reply to one of its messages, a card button): spec 2043 §6.2.
 test('"done" without a number closes the only open item of its owner, and asks which one when there are several', { skip: PG_SKIP }, async () => {
   await followUp('st-done-one', 1);
-  await say('st-done-one', 'bert', '@Mira erledigt');
+  await reply('st-done-one', 'bert', 'erledigt');
   assert.equal((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-one')).id))[0]?.status, 'confirmed', 'not the owner: nothing happens');
-  await say('st-done-one', 'anna', '@Mira erledigt');
+  await reply('st-done-one', 'anna', 'erledigt');
   assert.equal((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-one')).id))[0]?.status, 'done');
 
   await followUp('st-done-two', 2);
-  await say('st-done-two', 'anna', '@Mira Done!');
+  await reply('st-done-two', 'anna', 'Done!');
   assert.equal(posts('st-done-two').at(-1), 'Anna, which one is done? Reply with "done 1" or "done 2".');
   assert.deepEqual((await store.listActionItems(h.db.pool, (await h.facilitation('st-done-two')).id)).map((a) => a.status), ['confirmed', 'confirmed']);
 });

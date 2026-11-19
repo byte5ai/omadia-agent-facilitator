@@ -863,6 +863,14 @@ export class FakeKernel {
     return this.processSubscriptions.find((s) => s.agentSlug === scope.agentSlug && s.conversationId === scope.conversationId && s.processId === scope.processId);
   }
 
+  /** Does a mention start the facilitator's ordinary turn in this
+   *  conversation? As the kernel: not where a process of the agent reads
+   *  every message (the engine answers there); otherwise yes, also where a
+   *  process hears what is addressed to it. */
+  ordinaryTurnRuns(agentSlug: string, conversationId: string): boolean {
+    return !this.processSubscriptions.some((s) => s.agentSlug === agentSlug && s.conversationId === conversationId && !s.ended && s.mode === 'all');
+  }
+
   /** The mode a process reads a conversation in; undefined: not (any more). */
   modeOf(processId: string, conversationId: string): ConversationMessageMode | undefined {
     const sub = this.processSubscriptions.find((s) => s.processId === processId && s.conversationId === conversationId);

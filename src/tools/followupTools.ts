@@ -1,9 +1,11 @@
 // Tools for what happens after the close: stakeholders and the follow-up
 // meeting. Both are agreed by the group before anything is sent or read.
 
-import type { StakeholderRole } from '../model.js';
+import { rows } from '../db/sql.js';
+import type { ActionItem, Facilitation, StakeholderRole } from '../model.js';
 import * as store from '../db/store.js';
 import { proposeFollowupMeeting, proposeStakeholder, refreshAddresses } from '../engine/capabilities.js';
+import { markActionDone } from '../engine/actionItems.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
@@ -14,6 +16,55 @@ const ROLES: readonly StakeholderRole[] = ['receives_protocol', 'invited_to_foll
 
 export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
+    // For the facilitator's ordinary turn. In follow-up the engine leaves a
+    // mention to that turn (one mention, one reply); this is how the turn
+    // gets the item closed. It posts, so the kernel drops the turn's own text.
+    defineTool(
+      engine,
+      {
+        name: 'facilitation_action_done',
+        description:
+          'After a facilitation closed, while its action items are followed up: the person who wrote this message says that one of THEIR action items is done ("done", "done 2", "erledigt 2"). Call it for that and nothing else. The engine closes the item and says so in the group; you write nothing on top. Whose item it is comes from the message, never from an argument: nobody can close an item for somebody else.',
+        properties: { number: { type: 'number', description: 'The number of the action item, if the person named one.' } },
+      },
+      async (args, ctx) => {
+        if (!ctx.callerPrincipalId) throw new Refusal('no_caller', 'It is not known who wrote this message, so no action item can be closed for them.');
+        const caller = ctx.callerPrincipalId;
+        const db = engine.core.db();
+        const following = await rows<Facilitation>(
+          db,
+          `SELECT * FROM plg_omadia_agent_facilitator_facilitations WHERE facilitator_agent = $1 AND channel_type = $2 AND conversation_id = $3 AND followup_state = 'active' ORDER BY closed_at`,
+          [ctx.agentSlug, ctx.channelType, ctx.conversationId],
+        );
+        if (following.length === 0) throw new Refusal('no_followup', 'No action items are being followed up in this conversation.');
+        const number = optionalNumber(args, 'number');
+        const open: { f: Facilitation; item: ActionItem }[] = [];
+        for (const f of following) {
+          for (const item of await store.listActionItems(db, f.id)) if (item.status === 'confirmed') open.push({ f, item });
+        }
+        const named = number !== undefined ? open.filter((o) => o.item.number === number) : open;
+        const own = named.filter((o) => o.item.ownerPrincipal === caller);
+        if (own.length === 0) {
+          if (number !== undefined && named.length > 0) throw new Refusal('not_owner', `Action item ${String(number)} is not theirs to close. Only its owner can say that it is done.`);
+          throw new Refusal('no_open_item', number !== undefined ? `There is no open action item ${String(number)} here.` : 'This person has no open action item here.');
+        }
+        const only = own[0];
+        if (own.length > 1 || !only) {
+          return `Nothing was closed: several of their action items are open (${own.map((o) => `${String(o.item.number)}: ${o.item.description}`).join('; ')}). Ask which one is done.`;
+        }
+        const owner = await store.getParticipant(db, only.f.id, caller);
+        if (!owner) throw new Refusal('no_open_item', 'This person has no open action item here.');
+        const closed = await engine.core.work(only.f.id, async (w) => {
+          const current = (await store.listActionItems(w.tx, w.f.id)).find((a) => a.id === only.item.id);
+          if (!current || current.status !== 'confirmed') return false;
+          await markActionDone(w, current, owner);
+          return true;
+        });
+        if (!closed) throw new Refusal('no_open_item', 'That action item is not open any more.');
+        return `Action item ${String(only.item.number)} is closed and that was said in the group. Do not repeat it. Answer ${'[silent]'} now.`;
+      },
+    ),
+
     defineTool(
       engine,
       {

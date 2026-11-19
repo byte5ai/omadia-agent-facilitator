@@ -199,10 +199,13 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       engine,
       {
         name: 'facilitation_status',
-        description: 'The current state of this facilitation as the engine computed it: phase, who has contributed, who has not, deadline. Use it instead of counting yourself.',
+        description: 'The current state of this facilitation as the engine computed it: phase, who has contributed, who has not, deadline. Use it instead of counting yourself. Also works after the close while action items are followed up.',
       },
       async (_args, ctx) => {
-        const f = await liveFacilitation(engine, ctx);
+        // Also after the close while action items are followed up: then a
+        // mention is answered by an ordinary turn, and this is its source.
+        const following = await store.findRoutableByConversation(engine.core.db(), ctx.channelType, ctx.conversationId);
+        const f = following && following.facilitatorAgent === ctx.agentSlug && following.followupState === 'active' && following.phase === 'closed' ? following : await liveFacilitation(engine, ctx);
         return statusText(engine.core.db(), f);
       },
     ),

@@ -32,6 +32,12 @@ async function say(conv: string, who: string, text: string) {
   await h.settle();
   return record;
 }
+/** A reply to the facilitator's last message: what it hears in follow-up
+ *  without a turn of the facilitator being started (a mention starts one). */
+async function reply(conv: string, who: string, text: string): Promise<void> {
+  await h.kernel.say(conv, who, text, { replyTo: h.kernel.groupPosts(conv).at(-1)?.messageId ?? '' });
+  await h.settle();
+}
 const all = async (conv: string, text: string, who = ['anna', 'bert', 'cara']): Promise<void> => {
   for (const person of who) await say(conv, person, text);
 };
@@ -175,8 +181,8 @@ test('with action items the grant ends with their follow-up', { skip: PG_SKIP },
   await tool(conv, 'facilitation_step', { action: 'close' });
   await all(conv, 'agreed', ['anna', 'bert']);
   assert.equal((await h.facilitation(conv)).settings.followupGrant, 'active');
-  // In follow-up the facilitator hears what is addressed to it.
-  await say(conv, 'anna', '@Mira done 1');
+  // In follow-up the facilitator hears a reply to one of its messages.
+  await reply(conv, 'anna', 'done 1');
   const ended = await h.facilitation(conv);
   assert.equal(ended.followupState, 'ended');
   assert.equal(ended.settings.followupGrant, 'revoked');
