@@ -896,7 +896,10 @@ export class FakeKernel {
       const existing = this.subscriptionOf(scope);
       if (existing?.ended) return { outcome: 'refused', code: 'ended', message: "this process's subscription for the conversation has ended" };
       const refusal = this.subscribeRefusals.get(scope.agentSlug);
-      if (refusal && !existing) return { outcome: 'refused', ...refusal };
+      // A new subscription, and (kernel K6.4) one that is turned up to every
+      // message: the kernel asks the channel's readiness for both, and the
+      // refused subscription keeps its mode.
+      if (refusal && (!existing || (options.mode === 'all' && existing.mode !== 'all'))) return { outcome: 'refused', ...refusal };
       if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
       if (this.openScopesOf(scope.processId).length === 0) return { outcome: 'refused', code: 'no_scope', message: 'this process has no open execution scope' };
       if (options.mode === 'all' && !this.holds(scope.processId, scope.conversationId)) return { outcome: 'refused', code: 'not_reserved', message: 'every message of a conversation is read only by the process that holds its reservation' };
