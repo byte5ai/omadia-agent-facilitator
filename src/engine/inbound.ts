@@ -195,7 +195,7 @@ const revisions: InboundHandler = async (ctx) => {
 
 /** Reading order. Lower runs first; the fixed readings come before the
  *  method- and process-specific ones other modules register. */
-export const PRIORITY = { revisions: 0, commands: 10, acknowledgements: 20, proposals: 30, followup: 35, ballots: 40, process: 50 } as const;
+export const PRIORITY = { revisions: 0, commands: 10, acknowledgements: 20, proposals: 30, followup: 35, ballots: 40, process: 50, quiet: 60 } as const;
 
 const handlers: Array<{ priority: number; handler: InboundHandler }> = [
   { priority: PRIORITY.revisions, handler: revisions },

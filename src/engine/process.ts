@@ -315,9 +315,51 @@ const collecting: InboundHandler = async ({ w, record, author, command, retired 
   return { outcome: 'collected' };
 };
 
+/** Methods whose ballot is a choice between announced options. Consent and
+ *  assignment are answered in free words, which the facilitator reads. */
+const CHOICE_METHODS = new Set<NonNullable<Step['method']>>(['ranked', 'single', 'approval']);
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Words of somebody who wants something about the vote itself: its rules,
+ *  its deadline, its options, its result. */
+const ABOUT_THE_VOTE =
+  /(?<!\p{L})(deadline|frist|verl[aä]nger\p{L}*|extend\p{L}*|propos\p{L}*|vorschlag\p{L}*|schlage|[aä]nder\p{L}*|change\p{L}*|regel\p{L}*|rules?|option\p{L}*|erinner\p{L}*|remind\p{L}*|ergebnis\p{L}*|results?|punkte?|points?|stimm\p{L}*)(?!\p{L})/iu;
+
+/** The message names an option (by its label, or by its key as a word of its
+ *  own) or abstains: it may be a ballot the engine could not read. */
+function looksLikeBallot(text: string, step: Step, abstention: string): boolean {
+  const options = step.roundOptions ?? step.options;
+  const lower = text.toLowerCase();
+  if (lower.includes(abstention.toLowerCase()) || /(?<!\p{L})(abstain|enthalt\p{L}*)(?!\p{L})/iu.test(text)) return true;
+  return options.some((o) => lower.includes(o.label.toLowerCase()) || new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(o.key)}(?![\\p{L}\\p{N}])`, 'u').test(text));
+}
+
+/**
+ * In a vote between announced options the facilitator stays quiet (D19).
+ *
+ * Ballots and commands were read before this handler, without a model. What
+ * is left is conversation among the group: it gets a model turn only when it
+ * is meant for the facilitator (a question, its name, something about the
+ * process) or may be a ballot in other words. Everything else is on record
+ * and not answered: a facilitator that comments on small talk during a vote
+ * is noise.
+ */
+const quietInAVote: InboundHandler = async ({ w, record, author }) => {
+  if (w.f.phase !== 'active' || !author) return undefined;
+  if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
+  const step = await store.openStepOf(w.tx, w.f.id);
+  if (!step?.method || !CHOICE_METHODS.has(step.method) || (step.roundOptions ?? step.options).length === 0) return undefined;
+  const text = (record.text ?? '').trim();
+  if (text === '') return undefined;
+  if (addressesProcess(text, facilitatorName(w.f)) || ABOUT_THE_VOTE.test(text) || looksLikeBallot(text, step, texts(w.f.language).words.abstention)) return undefined;
+  return { outcome: 'not_addressed' };
+};
+
 export function installProcess(): void {
   registerInboundHandler(movingOn, PRIORITY.process);
   registerInboundHandler(collecting, PRIORITY.process);
+  registerInboundHandler(quietInAVote, PRIORITY.quiet);
   setAfterStepDecided(afterStepClosed);
   setStepOpener(openStep);
   registerJobHandler('timebox_end', async (w, job) => timeboxEnded(w, String(job.payload['stepId'])));
