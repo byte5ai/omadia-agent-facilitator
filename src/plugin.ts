@@ -16,6 +16,7 @@ import type { PluginContext } from '@omadia/plugin-api';
 
 import { systemClock } from './clock.js';
 import { CONFIG_KEYS, OBSOLETE_CONFIG_KEYS, isKernelKey, parseConfig } from './config.js';
+import { lockLog } from './db/tx.js';
 import type { EngineConfig } from './config.js';
 import { FacilitationEngine } from './engine/engine.js';
 import { OPERATOR_API_PREFIX, router as operatorRouter } from './http/operatorApi.js';
@@ -23,7 +24,7 @@ import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js'
 import { buildTools } from './tools/index.js';
 
 export const PLUGIN_ID = '@omadia/agent-facilitator' as const;
-export const ENGINE_VERSION = '1.0.4' as const;
+export const ENGINE_VERSION = '1.0.5' as const;
 /** `facilitationEngine@1` without the version suffix: the registry key. */
 export const ENGINE_SERVICE_NAME = FACILITATION_ENGINE_CAPABILITY.split('@')[0] ?? 'facilitationEngine';
 
@@ -107,6 +108,7 @@ export async function onMigrate(ctx: { fromVersion: string; toVersion: string; p
 export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   const log = (msg: string): void => ctx.log(msg);
   log('activating facilitation engine');
+  lockLog.write = log;
   log(privacyNote(ctx.config.get<unknown>(PRIVACY_MODE_KEY)));
   const stale = OBSOLETE_CONFIG_KEYS.filter((key) => ctx.config.get<unknown>(key) !== undefined);
   if (stale.length > 0) log(`config: settings of 0.7.x are still stored and ignored: ${stale.join(', ')}`);

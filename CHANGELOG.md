@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.5
+
+### Fixed
+
+- **A facilitation's lock could stay taken for minutes while nothing ran.**
+  Live, a mention in a meeting chat was not processed ("its lock was not free
+  within 15015 ms", repeatedly, with the engine idle). The lock was a
+  session-level Postgres advisory lock. An instance that reaches Postgres
+  through a pooler in transaction mode runs each statement outside a
+  transaction on whichever server session is free: the lock was taken on one
+  session and its release ran on another, which releases nothing. It stayed
+  held until that session ended, and everybody who landed on another session
+  waited in vain.
+  The lock is now a row with a lease (migration `0002`). Taking it is one
+  statement, the holder renews the lease while it works and deletes the row
+  when it is done, and a holder that died is waited for no longer than one
+  lease (30 s). It means the same on every session, with or without a pooler.
+
 ## 1.0.4
 
 Defects from the supervised live runs on 1.0.1 (Teams meeting chat and

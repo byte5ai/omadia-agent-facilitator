@@ -220,8 +220,8 @@ test('review 4: the close is committed before any mail or calendar call, and no 
   followup.onCall = async (method) => {
     // Looked at from another connection: what is committed, and is the facilitation's lock free?
     const f = await h.facilitation(conv);
-    const lock = await h.db.pool.query<{ free: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 2043)) AS free, pg_advisory_unlock_all()', [f.id]);
-    seen.push({ method, phase: f.phase, lockFree: lock.rows[0]?.free === true });
+    const lock = await h.db.pool.query(`SELECT 1 FROM plg_omadia_agent_facilitator_locks WHERE facilitation_id = $1 AND lease_until > now()`, [f.id]);
+    seen.push({ method, phase: f.phase, lockFree: lock.rows.length === 0 });
   };
   try {
     await closedWithFollowup(conv, { meeting: true });

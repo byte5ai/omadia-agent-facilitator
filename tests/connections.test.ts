@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { LockTimeoutError, lockLimits, withFacilitationLock } from '../src/db/tx.js';
+import { LockTimeoutError, lockLimits } from '../src/db/tx.js';
 import { sendLimits } from '../src/engine/outbox.js';
 import { ANNA, BERT, createHarness, startActive } from './harness.js';
 import { PG_SKIP } from './pg.js';
@@ -46,12 +46,12 @@ test('review 5: a lock somebody else holds is waited for with a bound, not forev
     const f = await startActive(h, conv, VOTE);
     lockLimits.acquireTimeoutMs = 300;
     let release: () => void = () => undefined;
-    const held = withFacilitationLock(h.db.pool, `other-holder:${f.id}`, async (client) => {
-      // Another session (another replica) holds the facilitation's lock.
-      await client.query('SELECT pg_advisory_lock(hashtextextended($1, 2043))', [f.id]);
+    const held = (async () => {
+      // Another process (another replica) holds the facilitation's lock.
+      await h.db.pool.query(`INSERT INTO plg_omadia_agent_facilitator_locks (facilitation_id, owner, lease_until, acquired_at) VALUES ($1, 'other-replica', now() + interval '1 minute', now())`, [f.id]);
       await new Promise<void>((resolve) => (release = resolve));
-      await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 2043))', [f.id]);
-    });
+      await h.db.pool.query(`DELETE FROM plg_omadia_agent_facilitator_locks WHERE facilitation_id = $1 AND owner = 'other-replica'`, [f.id]);
+    })();
     await new Promise((r) => setTimeout(r, 50));
     const started = Date.now();
     await assert.rejects(h.engine.core.work(f.id, async () => undefined), (err: unknown) => err instanceof LockTimeoutError);
