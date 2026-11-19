@@ -241,3 +241,49 @@ test('a facilitation from before execution scopes is taken over: its scopes are 
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   assert.deepEqual(h.kernel.openScopesOf(f.id), []);
 });
+
+// ── 1.5.3: a kernel without the first majors (K6.3) ─────────────────────────
+
+for (const [kernel, arrange] of [
+  ['answers nothing for conversationMessages@1', (k: Harness['kernel']) => void k.absent.add('legacyMessages')],
+  ['answers the name with a service that has no unsubscribe', (k: Harness['kernel']) => void (k.legacyAnswer = { subscribe: async () => ({ outcome: 'subscribed', mode: 'all' }) })],
+] as const) {
+  test(`take-over on a kernel that ${kernel}: no give-back is attempted, nothing fails, the facilitation goes on`, { skip: PG_SKIP }, async () => {
+    const agent = kernel.startsWith('answers nothing') ? 'ines' : 'jana';
+    const conv = h.kernel.conversation(`pb-takeover-${agent}`, [ANNA, BERT]);
+    const f = await startActive(h, conv, VOTE, agent);
+    await say(conv, 'anna', 'A');
+    // As 1.3.0 left it; the kernel has ended the old subscription itself.
+    await h.engine.stop();
+    await h.db.pool.query('DELETE FROM plg_omadia_agent_facilitator_scopes WHERE facilitation_id = $1', [f.id]);
+    await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings - 'scoped' - 'readMode', inbound_cursor = 'evt-of-the-first-major' WHERE id = $1`, [f.id]);
+    h.kernel.forget(f.id, agent, conv);
+    h.kernel.legacySubscriptions.clear();
+    arrange(h.kernel);
+    const logged = h.logs.length;
+    try {
+      await h.restart();
+      const taken = await h.facilitation(conv);
+      assert.equal(taken.settings.scoped, true);
+      assert.equal(taken.phase, 'active');
+      assert.deepEqual(h.kernel.scopes.filter((s) => s.processId === f.id).map((s) => [s.kind, s.state]), [['configuring', 'ended'], ['active', 'open']]);
+      assert.equal(h.kernel.modeOf(f.id, conv), 'all');
+      const since = h.logs.slice(logged);
+      assert.ok(since.some((l) => l.includes(f.id) && l.includes('taken over under execution scopes')));
+      assert.deepEqual(since.filter((l) => /could not be given back|failed|is not a function/i.test(l)), [], 'no error, and no attempt that could fail');
+      // A facilitation started on this kernel, and the one taken over, run as usual.
+      await say(conv, 'bert', 'A');
+      assert.equal((await h.facilitation(conv)).phase, 'closed');
+      const fresh = h.kernel.conversation(`pb-fresh-${agent}`, [ANNA, BERT]);
+      await startActive(h, fresh, VOTE, agent);
+      await say(fresh, 'anna', 'B');
+      await say(fresh, 'bert', 'B');
+      assert.equal((await h.facilitation(fresh)).phase, 'closed');
+      await h.tick();
+      assert.deepEqual(h.logs.slice(logged).filter((l) => /could not be given back|is not a function/i.test(l)), []);
+    } finally {
+      h.kernel.absent.delete('legacyMessages');
+      h.kernel.legacyAnswer = undefined;
+    }
+  });
+}
