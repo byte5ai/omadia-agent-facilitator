@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.0.4
+
+Defects from the supervised live runs on 1.0.1 (Teams meeting chat and
+channel thread, 2026-11-18), D15 to D21 of the rollout.
+
+### Fixed
+
+- **An empty or partial participant list is never "everybody contributed"
+  (D15).** The list was empty at the start: the reminder reminded nobody
+  without a word, the initiator got no report, and the first ballot of
+  anybody would have closed a vote.
+  - Participants named in the request are the list (`participants` on
+    `facilitation_start`): matched to the members the channel lists; a name
+    that matches nobody is kept as named, asked to write once, and waited for.
+  - The initiator always takes part.
+  - Without a member list and without named participants there is no
+    "everybody": a vote needs a deadline and is evaluated there, and the
+    handshake says so. `all_contributed` is refused, also as a change, and a
+    facilitation stored otherwise is evaluated at its deadline all the same.
+    A proposal is not accepted early by "everybody agreed" on such a list.
+  - A reminder still goes to the group when nobody can be counted as missing;
+    one with nobody waiting is put on record instead of ending silently.
+  - A conversation is no longer subscribed to before the set-up is accepted.
+- **Reminders (D16).** `facilitation_start` takes `reminderMinutesBefore`
+  (minutes; an empty list for none); one that does not lie between now and the
+  deadline is refused. Without it the configured offsets are used where they
+  fit, else one reminder in the last quarter, none within ten minutes of the
+  deadline. The handshake lists only reminders that will be sent, or says that
+  there are none and why. The group changes them by consent
+  (`facilitation_propose_change` with `reminders`).
+- **Quiet in a vote (D19).** In a step decided by choosing between announced
+  options, a message that is neither a ballot nor a command gets a model turn
+  only when it is a question, names the facilitator, is about the process or
+  the vote, or may be a ballot in other words. Small talk is on record and not
+  answered.
+- **Settings of 0.7.x and the privacy mode (D20).** `onMigrate` drops the six
+  0.7.x keys. The engine needs the privacy mode `bypass` for its own tools
+  (their answers are what the facilitator works from); the manifest declares
+  it with the reason, the mode in force is logged at every activation, and
+  anything else is a warning. Every setting 1.0.x reads is a manifest field
+  and documented in the README.
+- **Mail addresses (D21).** They come from the channel's member list, read
+  again as the facilitator before a follow-up is planned and before mail and
+  invitation run. Without any, planning a follow-up meeting is refused with
+  the reason, and a protocol mail with nobody to go to says why and puts the
+  protocol in the group. Nobody is asked for an address in the chat.
+
+### Already fixed before, for the record
+
+- D17 (names shown as principal ids): 1.0.2, completed by 1.0.3.
+- D19, first half (a single vote became five steps): 1.0.2.
+- D20, report that cannot arrive privately and the English protocol line:
+  1.0.2.
+- D21, the member list read through the facilitator's own bot: 1.0.3.
+
+### Changed behaviour to know about
+
+- A vote in a conversation whose members the channel cannot list is refused
+  without a deadline or named participants. Before, it started and closed on
+  the first ballot.
+- In such a conversation a proposal waits for its window instead of being
+  accepted when the people known so far agreed.
+
 ## 1.0.3
 
 Uses what the kernel adds with plugin-api 1.57.0. Both are optional: on an
