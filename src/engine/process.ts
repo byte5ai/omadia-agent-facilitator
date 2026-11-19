@@ -77,7 +77,15 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
 
 /** After a step closed: conclude if the definition of done is met, otherwise
  *  open the next step. */
-export async function afterStepClosed(w: Work, _step: Step, ctx: { atDeadline: boolean }): Promise<void> {
+export type StepFinishedHook = (w: Work, step: Step) => Promise<void>;
+const stepFinished: StepFinishedHook[] = [];
+/** A step is over, decided or closed (its card shows the result). */
+export function onStepFinished(hook: StepFinishedHook): void {
+  if (!stepFinished.includes(hook)) stepFinished.push(hook);
+}
+
+export async function afterStepClosed(w: Work, step: Step, ctx: { atDeadline: boolean }): Promise<void> {
+  for (const hook of stepFinished) await hook(w, step);
   if (w.f.phase !== 'active') return;
   if (await dodMet(w)) {
     // Steps that only wrap up are not run after the result is in.

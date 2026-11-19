@@ -1,6 +1,8 @@
 // The engine's vocabulary. Row shapes mirror migrations/0001 with camelCase
 // keys; `db/sql.ts` does the mapping.
 
+import type { CardUpdate, QuestionCard } from './cards/types.js';
+
 export type Phase = 'configuring' | 'active' | 'concluding' | 'closed' | 'aborted';
 export const LIVE_PHASES: readonly Phase[] = ['configuring', 'active', 'concluding'];
 export const TERMINAL_PHASES: readonly Phase[] = ['closed', 'aborted'];
@@ -286,12 +288,34 @@ export interface ProtocolEvent {
   occurredAt: Date;
 }
 
+/** A question card the engine posted, as it was sent. */
+export interface CardRow {
+  cardId: string;
+  facilitationId: string;
+  stepId: string | null;
+  round: number;
+  purpose: 'vote' | 'ideas' | 'questionnaire';
+  proposalId: string;
+  proposalVersion: number;
+  card: QuestionCard;
+  state: 'open' | 'closed' | 'superseded';
+  messageId: string | null;
+  createdAt: Date;
+  closedAt: Date | null;
+}
+
 export interface OutboxPayload {
   text: string;
   mentions?: { user: string; text: string }[];
   /** A poll the channel renders as a card; answers come back as card_answer
    *  events with `cardId` = `pollId`. A channel without polls posts the text. */
   poll?: { pollId: string; question: string; options: { id: string; label: string }[]; hint?: string };
+  /** A question card. `text` goes with it; `cardFallbackText` is what is
+   *  posted alone when the channel refuses the card. */
+  card?: QuestionCard;
+  cardFallbackText?: string;
+  /** Not a post: an update of a card that was posted before. */
+  cardUpdate?: { cardId: string; update: CardUpdate };
 }
 
 export interface OutboxRow {

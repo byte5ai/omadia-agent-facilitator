@@ -41,6 +41,7 @@ const EXPECTED_TABLES = [
   'plg_omadia_agent_facilitator_access_audit',
   'plg_omadia_agent_facilitator_acks',
   'plg_omadia_agent_facilitator_action_items',
+  'plg_omadia_agent_facilitator_cards',
   'plg_omadia_agent_facilitator_clusters',
   'plg_omadia_agent_facilitator_contributions',
   'plg_omadia_agent_facilitator_decisions',
