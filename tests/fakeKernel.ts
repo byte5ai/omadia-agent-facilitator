@@ -1253,6 +1253,10 @@ export class FakeKernel {
     },
   };
 
+  /** What the kernel answers for the bare name `conversationMessages` instead
+   *  of the first major (a kernel on which the name means something else). */
+  legacyAnswer: unknown;
+
   /** The first major, kept for a facilitation from before 1.4.0. */
   private readonly legacyMessagesService: Pick<ConversationMessagesService, 'unsubscribe'> = {
     unsubscribe: async (scope) => {
@@ -1274,7 +1278,7 @@ export class FakeKernel {
       },
       agentTurn: unless('agentTurn', this.turnService),
       conversationSend: unless('conversationSend', this.sendService),
-      legacyMessages: unless('legacyMessages', this.legacyMessagesService),
+      legacyMessages: () => (this.absent.has('legacyMessages') ? undefined : ((this.legacyAnswer as Pick<ConversationMessagesService, 'unsubscribe'> | undefined) ?? this.legacyMessagesService)),
       readiness: unless('readiness', this.readinessService),
       sessionCapabilities: unless('sessionCapabilities', this.capabilitiesService),
       conversationEvents: unless('conversationEvents', this.eventsService),

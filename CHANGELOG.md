@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.3
+
+For a kernel without the first majors of the message, turn and send services
+(K6.3).
+
+The engine has used only the second majors since 1.4.0. The one thing left of
+the first major was giving back the subscription of a facilitation that began
+before 1.4.0, when it is taken over.
+
+### Changed
+
+- **Take-over on a kernel that has no `conversationMessages@1`:** nothing is
+  given back (the kernel ended those subscriptions itself), and nothing is
+  attempted that could fail. This also holds where the kernel answers the
+  bare name with a service that has no `unsubscribe`; before, that attempt
+  was caught and logged as a failure.
+- The activation log no longer reports `conversationMessages` (the first
+  major) as a missing service whose "feature degrades": nothing depends on it.
+
 ## 1.5.2
 
 ### Fixed

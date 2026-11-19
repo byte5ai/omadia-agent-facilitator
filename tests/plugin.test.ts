@@ -71,6 +71,9 @@ test('every missing kernel service is logged once, none of them stops activation
   for (const name of ['executionAuthorization', 'executionGrants', 'conversationMessages@2', 'agentTurn@2', 'conversationSend@2', 'facilitation.followup']) {
     assert.equal(logs.filter((l) => l.includes(`'${name}'`)).length, 1, name);
   }
+  // The first major of the message service is only asked to give back a
+  // subscription from before 1.4.0: a kernel without it lacks nothing.
+  assert.equal(logs.filter((l) => l.includes("'conversationMessages'")).length, 0);
 });
 
 test('a failing migration makes the engine unavailable instead of failing activation', async () => {

@@ -53,7 +53,11 @@ async function takeOver(engine: EngineCore, f: Facilitation): Promise<Facilitati
     return f;
   }
   try {
-    await engine.deps.kernel.legacyMessages()?.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });
+    // A kernel that no longer has the first major (it ended those
+    // subscriptions itself) answers nothing here, or answers the name with a
+    // service that has no `unsubscribe`: then there is nothing to give back.
+    const legacy = engine.deps.kernel.legacyMessages();
+    if (typeof legacy?.unsubscribe === 'function') await legacy.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });
   } catch (err) {
     engine.log(`facilitation ${f.id}: its subscription from before execution scopes could not be given back: ${err instanceof Error ? err.message : String(err)}`);
   }
