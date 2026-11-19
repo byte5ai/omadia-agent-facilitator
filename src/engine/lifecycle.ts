@@ -1,11 +1,16 @@
 // Lifecycle of a facilitation (spec 5.2):
 //
-//   configuring -> active -> concluding -> closed
-//                         \-> aborted (stop, deadline without result, error)
+//   invited -> configuring -> active -> concluding -> closed -> following_up -> ended
+//                                    \-> aborted (stop, deadline without result, error)
 //
 // `invited` is not stored: before somebody asks the facilitator to start there
-// is nothing to keep. The conversation always comes from the kernel's tool
-// call context, never from a tool argument.
+// is nothing to keep. `following_up` and `ended` follow from the follow-up of
+// the action items after the close (`lifecycleOf`). The conversation always
+// comes from the kernel's tool call context, never from a tool argument.
+//
+// Each transition has its execution scope at the kernel (scopes.ts): the
+// start request opens `configuring` and takes the conversation's reservation,
+// the handshake opens `active`, every ending its own `closing`.
 
 import { randomUUID } from 'node:crypto';
 
