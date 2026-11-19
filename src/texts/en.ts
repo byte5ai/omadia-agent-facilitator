@@ -184,6 +184,7 @@ export const en = {
 
   proposalKinds: {
     step_close: (title: string): string => `close "${title}" and move on`,
+    vote_close: (title: string, cast: number, of: number): string => `close the vote on "${title}" now and count the ${String(cast)} of ${String(of)} votes cast`,
     clusters: (lines: readonly string[]): string => `group what was collected like this:\n${lines.map((l) => `- ${l}`).join('\n')}`,
     summary: (text: string): string => `take this summary into the record:\n${text}`,
     decision: (statement: string): string => `record this decision: ${statement}`,
@@ -198,6 +199,12 @@ export const en = {
   proposalObjection: (name: string, reason: string): string =>
     `${name} objects: ${reason}. The proposal does not hold while this stands. ${name}, write "agreed" if it is resolved for you.`,
   proposalBusy: (): string => 'One proposal at a time: the open one is decided first.',
+  voteCloses: (rule: 'all_contributed' | 'at_deadline', when: string | undefined): string =>
+    rule === 'at_deadline'
+      ? `This vote closes at the deadline${when ? ` (${when})` : ''}.`
+      : `This vote closes when everybody has voted${when ? `, at the latest at the deadline (${when})` : ''}.`,
+  voteCloseHow: (): string => 'To close it earlier, write "next": I then ask the group, and it closes when nobody objects.',
+  voteCloseNeedsVotes: (): string => 'Nobody has voted yet, so there is nothing to count. Once votes are in, write "next" to close it earlier; I then ask the group.',
 
   silentInviteDirect: (name: string, title: string): string =>
     `Hello ${name}, we are about to close "${title}". If you would like to add something, the group would value hearing it. Please write it in the group; I cannot take contributions here.`,

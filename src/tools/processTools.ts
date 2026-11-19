@@ -9,7 +9,8 @@ import { proposeActionItem } from '../engine/actionItems.js';
 import { Refusal } from '../engine/core.js';
 import type { Work } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
-import { balanceOf, closeStep, extendStep, inviteSilentVoices, numberedContributions, proposeClusters, setDecision } from '../engine/process.js';
+import { castBallots } from '../engine/decide.js';
+import { balanceOf, closeStep, extendStep, inviteSilentVoices, isChoiceVote, numberedContributions, proposeClusters, proposeVoteClose, setDecision, voteClosesLine } from '../engine/process.js';
 import { openProposal } from '../engine/proposals.js';
 import { protocolFor } from '../engine/governance.js';
 import { buildProtocol } from '../engine/protocol.js';
@@ -50,7 +51,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_step',
         description:
-          'Close or extend the open step. This is the tool when the group wants to move on, skip ahead or go to the vote: "close" ends the open step and opens the next one. "close" on a collecting or discussing step first makes the engine invite whoever has not contributed (privately, and with a neutral line in the group); call it again after they had their chance. A step that is decided by a vote closes by itself.',
+          'Close or extend the open step. This is the tool when the group wants to move on, skip ahead or go to the vote: "close" ends the open step and opens the next one. "close" on a collecting or discussing step first makes the engine invite whoever has not contributed (privately, and with a neutral line in the group); call it again after they had their chance. On a vote (ranked, single, approval) "close" does not close it: it puts "close now and count the votes cast" to the group, which decides by consent; use it when somebody asks to end a vote early. Never tell the group you cannot close a vote: say when it closes and that they can close it earlier together.',
         properties: {
           action: { type: 'string', enum: ['close', 'extend'] },
           minutes: { type: 'number', description: 'For "extend": how many minutes.' },
@@ -68,7 +69,15 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             await extendStep(w, step, minutes, 'facilitator');
             return `Extended by ${String(minutes)} minutes. That was said in the group.`;
           }
-          if (step.method !== null && step.options.length > 0) throw new Refusal('deciding_step', 'This step is decided by its method and closes when the result is in.');
+          if (isChoiceVote(step)) {
+            // Closing a vote early is the group's decision, never the facilitator's.
+            const closes = voteClosesLine(w.f, step);
+            if ((await castBallots(w, step)).length === 0) throw new Refusal('no_votes', `Nobody has voted yet, so there is nothing to count. ${closes} Tell the group that, in your own words. Nothing was changed.`);
+            if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
+            await proposeVoteClose(w, step, ctx.callerPrincipalId ?? 'facilitator');
+            return `Proposed to the group: close this vote now and count the votes cast. It is NOT closed yet: it closes when everybody agreed, or when nobody objected within ${String(w.f.settings.confirmWindowMinutes)} minutes; with an objection it stays open. ${closes} The proposal was posted in the group; do not repeat it and do not say the vote is closed.`;
+          }
+          if (step.method !== null && step.options.length > 0) throw new Refusal('deciding_step', `This step is decided by its method (${step.method}) and closes when its result is in: for consent when nobody objects, for an assignment when every item has an owner who confirmed. Say that to the group. Nothing was changed.`);
           if (step.kind === 'close') throw new Refusal('closing_step', 'The closing step ends when the group confirmed the summary.');
           if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
           const invited = await inviteSilentVoices(w, step);

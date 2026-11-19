@@ -102,6 +102,20 @@ test('S6: a claim that the vote is closed is replaced by what is true', { skip: 
 
 test('S5: a turn whose tool refused does not end in silence: the group reads why', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('tg-refused', FOUR);
+  // An assignment closes when every item has its owner; it cannot be closed on request.
+  await startActive(h, conv, { method: 'assignment', options: ['Notes', 'Room'] });
+  const { buildTools } = await import('../src/tools/index.js');
+  const posted = await turn(conv, 'dave', 'Please close this now', async (request) => {
+    const step = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_step');
+    const answer = await step?.handler({ action: 'close' }, h.kernel.context('mira', conv, 'dave', request.inboundEventId));
+    assert.match(answer ?? '', /^Refused \(deciding_step\)/);
+    return '[silent]';
+  });
+  assert.deepEqual(posted, ['This step is decided by its vote. It closes when the result is in: once everybody has contributed, or at the deadline if that is what was agreed.']);
+});
+
+test('D28: asked to close a vote that waits for its deadline, the tool puts "close now" to the group instead of refusing', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tg-close-now', FOUR);
   await startActive(h, conv, { ...VOTE, deadline: new Date(h.clock.now().getTime() + 5 * 3600_000).toISOString(), closeRule: 'at_deadline' });
   for (const who of ['anna', 'bert', 'cara', 'dave']) await h.kernel.say(conv, who, 'A');
   await h.settle();
@@ -109,10 +123,11 @@ test('S5: a turn whose tool refused does not end in silence: the group reads why
   const posted = await turn(conv, 'dave', 'All four have voted, please close the vote now', async (request) => {
     const step = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_step');
     const answer = await step?.handler({ action: 'close' }, h.kernel.context('mira', conv, 'dave', request.inboundEventId));
-    assert.match(answer ?? '', /^Refused \(deciding_step\)/);
+    assert.match(answer ?? '', /^Proposed to the group/);
     return '[silent]';
   });
-  assert.deepEqual(posted, ['This step is decided by its vote. It closes when the result is in: once everybody has contributed, or at the deadline if that is what was agreed.']);
+  assert.equal(posted.length, 1);
+  assert.match(posted[0] ?? '', /close the vote on .* now and count the 4 of 4 votes cast/);
 });
 
 test('S5: a refusal the model already explained is not said twice, and a turn without a refusal stays silent', { skip: PG_SKIP }, async () => {

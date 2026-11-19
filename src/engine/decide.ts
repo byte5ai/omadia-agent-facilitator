@@ -199,7 +199,8 @@ async function countBallot(w: Work, input: BallotInput, contribution: Contributi
 
 // ── moving on ───────────────────────────────────────────────────────────────
 
-export type Trigger = 'contribution' | 'deadline';
+/** `group`: the group consented to close the vote now, before its rule fires. */
+export type Trigger = 'contribution' | 'deadline' | 'group';
 
 async function decide(w: Work, step: Step, statement: string, result: Record<string, unknown>): Promise<Decision> {
   const decision = await insert<Decision>(w.tx, 'plg_omadia_agent_facilitator_decisions', {
@@ -338,9 +339,13 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   const options = roundOptions(step);
   const participants = await store.listParticipants(w.tx, w.f.id);
   const deadlineReached = trigger === 'deadline';
-  const outcome = await evaluateStep(w, step, deadlineReached);
+  // Closed early by the group: counted as it stands, like at the deadline.
+  // What the deadline would end without a result (a tie, an objection, open
+  // items) stays open instead: the deadline is still to come.
+  const closing = deadlineReached || trigger === 'group';
+  const outcome = await evaluateStep(w, step, closing);
   const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
-  const votesMissing = deadlineReached && (expectedNames(w.f).length > 0 || participants.some((p) => p.status === 'active' && !cast.has(p.principalId)));
+  const votesMissing = closing && (expectedNames(w.f).length > 0 || participants.some((p) => p.status === 'active' && !cast.has(p.principalId)));
   const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, texts(w.f.language).unnamedPerson);
 
   switch (outcome.state) {

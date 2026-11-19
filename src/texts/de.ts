@@ -160,6 +160,7 @@ export const de: Texts = {
 
   proposalKinds: {
     step_close: (title) => `"${title}" abschließen und weitergehen`,
+    vote_close: (title, cast, of) => `die Abstimmung zu "${title}" jetzt schließen und die ${String(cast)} von ${String(of)} abgegebenen Stimmen auszählen`,
     clusters: (lines) => `das Gesammelte so gruppieren:\n${lines.map((l) => `- ${l}`).join('\n')}`,
     summary: (text) => `diese Zusammenfassung ins Protokoll nehmen:\n${text}`,
     decision: (statement) => `diese Entscheidung festhalten: ${statement}`,
@@ -174,6 +175,12 @@ export const de: Texts = {
   proposalObjection: (name, reason) =>
     `${name} hat einen Einwand: ${reason}. Solange er steht, gilt der Vorschlag nicht. ${name}, schreib "einverstanden", wenn er für dich ausgeräumt ist.`,
   proposalBusy: () => 'Ein Vorschlag nach dem anderen: Zuerst wird der offene entschieden.',
+  voteCloses: (rule, when) =>
+    rule === 'at_deadline'
+      ? `Diese Abstimmung schließt zur Deadline${when ? ` (${when})` : ''}.`
+      : `Diese Abstimmung schließt, sobald alle abgestimmt haben${when ? `, spätestens zur Deadline (${when})` : ''}.`,
+  voteCloseHow: () => 'Wenn ihr früher schließen wollt, schreibt "weiter": Dann frage ich die Runde, und sie schließt, wenn niemand widerspricht.',
+  voteCloseNeedsVotes: () => 'Bisher hat niemand abgestimmt, es gibt also nichts auszuzählen. Sobald Stimmen da sind, könnt ihr mit "weiter" früher schließen; dann frage ich die Runde.',
 
   silentInviteDirect: (name, title) =>
     `Hallo ${name}, wir schließen gleich "${title}" ab. Wenn du noch etwas ergänzen möchtest, würde die Gruppe das gern hören. Schreib es bitte in die Gruppe; hier kann ich keine Beiträge annehmen.`,

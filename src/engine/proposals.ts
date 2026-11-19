@@ -154,7 +154,11 @@ const OBJECTION = /^(?:objection|i object|einwand|veto|widerspruch|ich widerspre
 const AGREED = /^(?:agreed|agree|i agree|consent|no objection|einverstanden|zustimmung|ich stimme zu|kein einwand|passt|\+1)$/;
 const EXTEND = /^(?:extend|verlängern|verlaengern|more time|mehr zeit)(?:\s+(\d{1,3}))?(?:\s*(?:min|minutes|minuten|m))?$/;
 
-async function agree(w: Work, proposal: Proposal, author: Participant): Promise<void> {
+/** Words that agree to what is open: "agreed" as well as a plain "yes". */
+export const isAgreement = (command: string): boolean => AGREED.test(command) || isYes(command);
+
+/** Record that somebody agrees to the open proposal; settles it when that was everybody. */
+export async function agree(w: Work, proposal: Proposal, author: Participant): Promise<void> {
   const consents = proposal.consents.includes(author.principalId) ? proposal.consents : [...proposal.consents, author.principalId];
   // Agreeing lifts one's own objection.
   const objections = proposal.objections.filter((o) => o.principal !== author.principalId);
@@ -187,7 +191,7 @@ const proposalAnswers: InboundHandler = async ({ w, record, author, command }) =
   const bound = proposal.announceMessageId !== null && record.replyToMessageId === proposal.announceMessageId;
   if (!bound && (definition.boundOnly === true || (await consentVoteOpen(w)))) return undefined;
 
-  if (AGREED.test(command) || isYes(command)) {
+  if (isAgreement(command)) {
     await agree(w, proposal, author);
     return { outcome: 'proposal_consent' };
   }
