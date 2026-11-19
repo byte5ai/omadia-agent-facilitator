@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.0
+
+The engine answers a mention during the follow-up itself (kernel #2089,
+`onAddressedMessage`, plugin-api 1.73.0).
+
+`compat.core` is unchanged (`>=1.69.0`): the hook is feature-detected. On a
+kernel without it the behaviour is that of 1.4.1.
+
+### Changed
+
+- **In follow-up, "done N" and "status" with a mention are answered by the
+  engine, without a model.** The kernel asks the engine who answers a message
+  that addresses the facilitator where a facilitation listens for such
+  messages. The engine decides from its state at once: it takes "done" of
+  somebody who owns an open item (or names an item by its number) and
+  "status" of a participant, and declines everything else, which the
+  facilitator's ordinary turn then answers. Exactly one of the two answers.
+  In 1.4.1 closing an item by a mention depended on the model calling a tool.
+- The work happens after the kernel got its answer, through the same inbound
+  path as every other message. The stored event of the same message is not
+  answered a second time, however it arrives: named on the turn, pushed (a
+  reply that also mentions), read on a later pass, or after a restart
+  (`left_to_hook` in the inbound ledger).
+- With several follow-ups in one conversation the message goes to the one it
+  is about (the item's number, an item of the author), otherwise to the most
+  recent one.
+
+### Kept
+
+- `facilitation_action_done` stays for the ordinary turn: for a message the
+  engine declined ("the second one is finished") and for kernels without the
+  hook.
+- On a kernel without `onAddressedMessage` a mention in follow-up is left to
+  the ordinary turn (`left_to_turn`), as in 1.4.1.
+
 ## 1.4.1
 
 One mention, one reply.

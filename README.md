@@ -229,11 +229,14 @@ What follows from it:
   `followup_scheduling` under the scheduling scope. A grant is issued with the
   current recipients before each use and revoked when its work is done.
 - **One mention, one reply.** While a facilitation runs the engine answers
-  and the kernel suppresses the turn a mention would start. In follow-up it
-  is the other way round: a mention is answered by the facilitator's
-  ordinary turn, which closes an action item through
-  `facilitation_action_done`; the engine itself answers a reply to one of its
-  messages, a card button and a private message.
+  and the kernel suppresses the turn a mention would start. In follow-up the
+  kernel asks the engine who answers a mention (plugin-api 1.73.0): the
+  engine takes "done 2" and "status" and answers them without a model, and
+  declines everything else, which the facilitator's ordinary turn answers
+  (it can close an item through `facilitation_action_done`). On a kernel
+  that does not ask, every mention in follow-up is the ordinary turn's. A
+  reply to one of the facilitation's messages, a card button and a private
+  message are always the engine's.
 - **A participant can ask for the status privately.** "status" in a private
   chat with the facilitator answers with the status of their facilitation and
   nothing else; with several, the facilitator asks which. An owner can report
