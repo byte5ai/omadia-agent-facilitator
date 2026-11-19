@@ -46,7 +46,7 @@ async function lostByEvidence(engine: EngineCore, f: Facilitation, listed: numbe
   if (listed > 0) return false;
   const now = engine.now();
   const since = f.settings.subscribedAt ? new Date(f.settings.subscribedAt) : f.createdAt;
-  const seen = await engine.pool().query(
+  const seen = await engine.db().query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_inbound WHERE facilitation_id = $1 AND processed_at > $2 AND processed_at > $3 LIMIT 1`,
     [f.id, since, new Date(now.getTime() - EVENT_EVIDENCE_MS)],
   );
@@ -112,7 +112,7 @@ export async function reconcileSubscription(engine: EngineCore, f: Facilitation)
   });
   if (ended) {
     engine.log(`facilitation ${f.id}: ended, the kernel does not let it read its conversation (${reason})`);
-    const after = await store.getFacilitation(engine.pool(), f.id);
+    const after = await store.getFacilitation(engine.db(), f.id);
     if (after) await releaseConversation(engine, after);
   } else {
     engine.log(`facilitation ${f.id}: the kernel refuses its subscription (${reason})`);
@@ -124,7 +124,7 @@ export async function reconcileSubscription(engine: EngineCore, f: Facilitation)
  *  stop the others. Returns the ids that can be read. */
 export async function reconcileAll(engine: EngineCore): Promise<Set<string>> {
   const readable = new Set<string>();
-  for (const f of await store.listSubscribed(engine.pool())) {
+  for (const f of await store.listSubscribed(engine.db())) {
     try {
       const result = await reconcileSubscription(engine, f);
       if (result.state !== 'refused') readable.add(f.id);

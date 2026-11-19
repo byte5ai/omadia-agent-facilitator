@@ -52,7 +52,7 @@ export function resolveContext(context: NativeToolCallContext | undefined): Reso
 
 /** The live facilitation of the calling turn's conversation. */
 export async function liveFacilitation(engine: FacilitationEngine, ctx: ResolvedContext): Promise<Facilitation> {
-  const f = await store.findLiveByConversation(engine.core.pool(), ctx.channelType, ctx.conversationId);
+  const f = await store.findLiveByConversation(engine.core.db(), ctx.channelType, ctx.conversationId);
   if (!f || f.facilitatorAgent !== ctx.agentSlug) {
     throw new Refusal('no_facilitation', 'There is no facilitation in this conversation. Start one with facilitation_start when somebody in the group asks for it.');
   }
@@ -135,6 +135,8 @@ export function defineTool(
       try {
         const ctx = resolveContext(context);
         await engine.ensureReady();
+        // No database, or one whose tables are not migrated: nothing is started on it.
+        if (!engine.available()) throw new EngineUnavailableError('The facilitation engine is not available: its database is missing or not migrated (see the activation log).');
         engine.ensureAttached(ctx.agentSlug);
         return await engine.core.inToolCall(ctx.inboundEventId, () => run(asObject(input), ctx));
       } catch (err) {

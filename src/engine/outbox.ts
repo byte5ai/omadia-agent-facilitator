@@ -10,7 +10,7 @@
 //     the channel confirmed, accepting a rare duplicate.
 
 import type { CardSendMembers } from '../cards/types.js';
-import type { PoolClientLike, Queryable } from '../db/pool.js';
+import type { Db, Queryable } from '../db/pool.js';
 import { rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
@@ -178,7 +178,7 @@ export const retryDelayMs = (attempts: number): number => Math.min(RETRY_BASE_MS
  * is dropped as well: that process is gone, and what it wanted to say was
  * computed before the restart.
  */
-async function recover(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
+async function recover(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
   await client.query(
     `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'outcome of an earlier attempt is unknown; droppable messages are not retried'
       WHERE facilitation_id = $1 AND status = 'sending' AND delivery_class = 'droppable'`,
@@ -197,7 +197,7 @@ async function recover(engine: EngineCore, client: PoolClientLike, facilitationI
 }
 
 /** Deliver every pending row of one facilitation, oldest first. */
-export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
+export async function dispatchOutbox(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
   await recover(engine, client, facilitationId);
   const pending = await rows<OutboxRow>(
     client,
@@ -216,7 +216,7 @@ export async function dispatchOutbox(engine: EngineCore, client: PoolClientLike,
 const drop = (q: Queryable, row: OutboxRow, reason: string): Promise<unknown> =>
   update(q, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', dropReason: reason });
 
-async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow): Promise<void> {
+async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: OutboxRow): Promise<void> {
   // Re-check under the lock: the state the message was computed from must
   // still hold.
   if (row.requiredPhases && !row.requiredPhases.includes(f.phase)) {
@@ -338,7 +338,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 }
 
 /** A private message that names its group form: said there instead. */
-async function fallbackToGroup(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow): Promise<void> {
+async function fallbackToGroup(engine: EngineCore, client: Db, f: Facilitation, row: OutboxRow): Promise<void> {
   const fallback = (row.payload as StoredPayload).fallback;
   if (!fallback) return;
   await engine.workOn(client, f.id, async (w) => {
@@ -348,7 +348,7 @@ async function fallbackToGroup(engine: EngineCore, client: PoolClientLike, f: Fa
 
 /** A private message did not arrive. The group is told once, neutrally and
  *  without a name; from then on reminders simply stay in the group. */
-async function noteUnreachable(engine: EngineCore, client: PoolClientLike, f: Facilitation, row: OutboxRow, code: string): Promise<void> {
+async function noteUnreachable(engine: EngineCore, client: Db, f: Facilitation, row: OutboxRow, code: string): Promise<void> {
   await store.appendEvent(client, {
     facilitationId: f.id,
     kind: 'direct_unreachable',

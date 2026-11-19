@@ -9,60 +9,66 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { PoolClientLike, PoolLike, QueryResult } from '../src/db/pool.js';
+import { FacilitationEngine } from '../src/engine/engine.js';
+import { ANNA, BERT, createHarness, startActive } from './harness.js';
+
+import type pg from 'pg';
+
+import { dbOf } from '../src/db/pool.js';
+import type { Db } from '../src/db/pool.js';
 import { LockTimeoutError, lockLimits, withFacilitationLock } from '../src/db/tx.js';
-import { openTestDb } from './pg.js';
+import { kernelSql, openTestDb } from './pg.js';
 import { PG_SKIP } from './pg.js';
 
-/** A pool that hands every statement outside a transaction to the next of
- *  three server sessions, as a pooler in transaction mode may. */
-async function transactionPooled(pool: PoolLike): Promise<{ pool: PoolLike; close(): void }> {
-  const sessions = [await pool.connect(), await pool.connect(), await pool.connect()];
+/**
+ * The kernel's accessor behind a pooler in transaction mode: three server
+ * sessions, and every statement outside a transaction goes to the next one.
+ * A transaction stays on the session it began on.
+ */
+async function transactionPooled(runtime: pg.Pool, schema: string): Promise<{ db: Db; sessions: number[]; close(): void }> {
+  const clients = [await runtime.connect(), await runtime.connect(), await runtime.connect()];
+  const sessions: number[] = [];
   let next = 0;
-  const pick = (): PoolClientLike => sessions[next++ % sessions.length] as PoolClientLike;
-  const client = (): PoolClientLike => {
-    let pinned: PoolClientLike | undefined;
-    return {
-      async query<R>(text: string, params?: readonly unknown[]): Promise<QueryResult<R>> {
-        const begins = /^\s*BEGIN\b/i.test(text);
-        const ends = /^\s*(COMMIT|ROLLBACK)\b/i.test(text);
-        if (begins) pinned = pick();
-        const session = pinned ?? pick();
-        if (ends) pinned = undefined;
-        return session.query<R>(text, params);
-      },
-      release: () => undefined,
-    };
+  const pick = (): pg.PoolClient => {
+    const index = next++ % clients.length;
+    sessions.push(index);
+    return clients[index] as pg.PoolClient;
   };
-  return {
-    pool: { query: (text, params) => client().query(text, params), connect: async () => client() },
-    close: () => sessions.forEach((s) => s.release()),
-  };
+  const rotating = {
+    query: (text: string, params?: unknown[]) => pick().query(text, params),
+    connect: async () => {
+      const pinned = pick();
+      return { query: (text: string, params?: unknown[]) => pinned.query(text, params), release: () => undefined };
+    },
+  } as unknown as pg.Pool;
+  const db = dbOf(kernelSql(rotating, schema));
+  if (!db) throw new Error('incomplete accessor');
+  return { db, sessions, close: () => clients.forEach((c) => c.release()) };
 }
 
 test('the lock is released for everybody, whichever server session a statement lands on', { skip: PG_SKIP, timeout: 30_000 }, async () => {
   const db = await openTestDb();
-  await db.runMigrations();
-  const pooled = await transactionPooled(db.pool);
+  const pooled = await transactionPooled(db.runtime, db.schema);
   const before = { ...lockLimits };
   lockLimits.acquireTimeoutMs = 500;
   try {
     const ran: number[] = [];
     for (let i = 0; i < 6; i += 1) {
-      await withFacilitationLock(pooled.pool, 'facilitation-behind-a-pooler', async (client) => {
-        await client.query('BEGIN');
-        await client.query('SELECT 1');
-        await client.query('COMMIT');
+      await withFacilitationLock(pooled.db, 'facilitation-behind-a-pooler', async (locked) => {
+        await locked.transaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
         // A different number of statements each time: which session the
         // release lands on is not for the engine to rely on.
-        for (let n = 0; n <= i; n += 1) await client.query('SELECT 1');
+        for (let n = 0; n <= i; n += 1) await locked.query('SELECT 1');
         ran.push(i);
       });
     }
     assert.deepEqual(ran, [0, 1, 2, 3, 4, 5]);
+    assert.equal(new Set(pooled.sessions).size, 3, 'the statements really went over all three server sessions');
     // Nothing is left behind on any server session: a lock that stays there
     // blocks everybody who lands on another one, until that session ends.
-    const leaked = await db.pool.query<{ n: string }>(`SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
+    const leaked = await db.admin.query<{ n: string }>(`SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
     assert.equal(Number(leaked.rows[0]?.n ?? 0), 0, 'no session-level lock is left on a server session');
     const rows = await db.pool.query(`SELECT 1 FROM plg_omadia_agent_facilitator_locks WHERE facilitation_id = 'facilitation-behind-a-pooler'`);
     assert.equal(rows.rows.length, 0, 'and the lock is free');
@@ -73,9 +79,34 @@ test('the lock is released for everybody, whichever server session a statement l
   }
 });
 
+test('a whole facilitation runs behind a pooler in transaction mode', { skip: PG_SKIP, timeout: 30_000 }, async () => {
+  const h = await createHarness();
+  const pooled = await transactionPooled(h.db.runtime, h.db.schema);
+  try {
+    // A second engine on the same database, reaching it through the pooler.
+    await h.engine.stop();
+    const kernel = h.kernel.kernel();
+    const engine = new FacilitationEngine({ kernel: { ...kernel, db: () => pooled.db }, config: h.engine.core.config, clock: h.clock, log: () => undefined });
+    await engine.start();
+    h.engine = engine;
+    const conv = h.kernel.conversation('behind-a-pooler', [ANNA, BERT]);
+    await startActive(h, conv, { method: 'single', options: ['Thai', 'Pizza'] });
+    await h.kernel.say(conv, 'anna', 'A');
+    await h.kernel.say(conv, 'bert', 'A');
+    await h.settle();
+    await h.tick();
+    assert.equal((await h.facilitation(conv)).phase, 'closed');
+    assert.equal(h.kernel.groupPosts(conv).filter((p) => p.text.startsWith('Result for')).length, 1);
+    const left = await h.db.pool.query('SELECT 1 FROM plg_omadia_agent_facilitator_locks');
+    assert.equal(left.rows.length, 0, 'no lock row is left');
+  } finally {
+    pooled.close();
+    await h.close();
+  }
+});
+
 test('a holder that died is not waited for forever: its lease runs out', { skip: PG_SKIP, timeout: 30_000 }, async () => {
   const db = await openTestDb();
-  await db.runMigrations();
   const before = { ...lockLimits };
   Object.assign(lockLimits, { acquireTimeoutMs: 3000, leaseMs: 400, renewMs: 100 });
   try {
@@ -100,7 +131,6 @@ test('a holder that died is not waited for forever: its lease runs out', { skip:
 
 test('work that takes longer than a lease keeps its lock', { skip: PG_SKIP, timeout: 30_000 }, async () => {
   const db = await openTestDb();
-  await db.runMigrations();
   const before = { ...lockLimits };
   Object.assign(lockLimits, { leaseMs: 300, renewMs: 80, acquireTimeoutMs: 150 });
   try {

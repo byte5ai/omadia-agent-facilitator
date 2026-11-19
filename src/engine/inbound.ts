@@ -320,14 +320,14 @@ const ledgerRow = (facilitationId: string, record: ConversationMessageRecord, no
  * be processed, so nobody waits for an echo that will not come.
  */
 export async function processRecord(engine: EngineCore, agentSlug: string, record: ConversationMessageRecord): Promise<{ facilitationId: string; result: InboundResult } | undefined> {
-  const f = await store.findRoutableByConversation(engine.pool(), record.channelType, record.conversationId);
+  const f = await store.findRoutableByConversation(engine.db(), record.channelType, record.conversationId);
   if (!f || f.facilitatorAgent !== agentSlug) return undefined;
   try {
     const result = await engine.work(f.id, (w) => handleInbound(w, record));
     return { facilitationId: f.id, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const failure = await store.recordInboundFailure(engine.pool(), ledgerRow(f.id, record, engine.now()), message);
+    const failure = await store.recordInboundFailure(engine.db(), ledgerRow(f.id, record, engine.now()), message);
     engine.log(`facilitation ${f.id}: message ${record.messageId} could not be processed (attempt ${String(failure.attempts)}): ${message}`);
     if (failure.gaveUp) await tellUnprocessed(engine, f.id, record);
     return { facilitationId: f.id, result: { outcome: failure.gaveUp ? 'gave_up' : 'failed' } };

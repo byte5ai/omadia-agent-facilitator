@@ -7,7 +7,7 @@
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { HOUR_MS } from '../clock.js';
-import type { PoolClientLike } from '../db/pool.js';
+import type { Db } from '../db/pool.js';
 import { insert, rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { parseBallot, summariseBallot } from '../methods/ballot.js';
@@ -273,7 +273,7 @@ export function onClosed(hook: AfterClose): void {
 
 /** concluding -> closed once the group has its result. Runs after every
  *  delivery, under the lock. */
-export async function closeWhenResultDelivered(engine: EngineCore, client: PoolClientLike, facilitationId: string): Promise<void> {
+export async function closeWhenResultDelivered(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
   const f = await store.getFacilitation(client, facilitationId);
   if (!f) return;
   if (f.phase === 'concluding') {
@@ -300,7 +300,7 @@ export async function closeWhenResultDelivered(engine: EngineCore, client: PoolC
  * not stay `concluding`: it ends, with a record of why, a retention date, and
  * the result kept for the operator and for the initiator's report.
  */
-export async function endUndelivered(engine: EngineCore, client: PoolClientLike, facilitationId: string, error: string): Promise<void> {
+export async function endUndelivered(engine: EngineCore, client: Db, facilitationId: string, error: string): Promise<void> {
   await engine.workOn(client, facilitationId, async (w) => {
     if (w.f.phase !== 'concluding') return;
     const t = texts(w.f.language);
@@ -314,10 +314,10 @@ export async function endUndelivered(engine: EngineCore, client: PoolClientLike,
 }
 
 /** After the lock is released: stop reading a conversation whose facilitation
- *  has ended. Runs outside the lock because it queries the pool and calls the
+ *  has ended. Runs outside the lock because it queries the db and calls the
  *  kernel. */
 export async function releaseWhenEnded(engine: EngineCore, facilitationId: string): Promise<void> {
-  const f = await store.getFacilitation(engine.pool(), facilitationId);
+  const f = await store.getFacilitation(engine.db(), facilitationId);
   if (f && (f.phase === 'closed' || f.phase === 'aborted')) await releaseConversation(engine, f);
 }
 

@@ -74,14 +74,14 @@ const real = <S extends Pick<SessionCapabilitySnapshot, 'outputs'>>(engine: Pick
  *  offers there. */
 async function createChatSession(engine: EngineCore, f: Facilitation): Promise<void> {
   const snapshot = await fetchSnapshot(engine, f);
-  const pool = engine.pool();
-  if ((await store.listSessions(pool, f.id)).some((s) => s.kind === 'async')) return;
-  await insert<Session>(pool, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'running', startedAt: engine.now(), createdAt: engine.now() });
+  const db = engine.db();
+  if ((await store.listSessions(db, f.id)).some((s) => s.kind === 'async')) return;
+  await insert<Session>(db, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'running', startedAt: engine.now(), createdAt: engine.now() });
   // A meeting may already be running: the kernel reports a start, not a
   // state, so the conversation's snapshot is what tells. The session is on
   // record from the first moment; the handshake says what is perceived in it.
   if (snapshot.modality === 'online' || snapshot.modality === 'hybrid') {
-    await insert<Session>(pool, 'plg_omadia_agent_facilitator_sessions', {
+    await insert<Session>(db, 'plg_omadia_agent_facilitator_sessions', {
       facilitationId: f.id,
       kind: 'live',
       meetingRef: snapshot.sessionRef ?? null,
@@ -112,10 +112,10 @@ async function ensureChatSession(w: Work): Promise<Session> {
 
 /** What a session start needs from the kernel, fetched before its unit of work. */
 export async function prepareSessionStart(engine: EngineCore, facilitationId: string, sessionId?: string): Promise<SessionCapabilitySnapshot | undefined> {
-  const pool = engine.pool();
-  const f = await store.getFacilitation(pool, facilitationId);
+  const db = engine.db();
+  const f = await store.getFacilitation(db, facilitationId);
   if (!f) return undefined;
-  const sessions = (await store.listSessions(pool, f.id)).filter((s) => s.kind === 'live');
+  const sessions = (await store.listSessions(db, f.id)).filter((s) => s.kind === 'live');
   const session = sessionId ? sessions.find((s) => s.id === sessionId) : sessions.find((s) => s.status === 'scheduled');
   if (!session || session.status !== 'scheduled') return undefined;
   return fetchSnapshot(engine, f, session.meetingRef ?? undefined);

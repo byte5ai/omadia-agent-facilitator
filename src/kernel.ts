@@ -1,9 +1,14 @@
 // The kernel services the engine consumes, behind one accessor.
 //
-// Every service (the required pool included) is resolved PER CALL, never
-// cached: an optional dependency contributes no activation edge, so a service
-// may be published after this plugin activated. A missing service is a
-// supported state; each caller carries its own degradation message.
+// Every service is resolved PER CALL, never cached: an optional dependency
+// contributes no activation edge, so a service may be published after this
+// plugin activated. A missing service is a supported state; each caller
+// carries its own degradation message.
+//
+// The database is not among them. It is `ctx.sql`: the plugin's own schema,
+// reached as the plugin's own database role (kernel #2088). The shared pool
+// (`graphPool`) is never asked for; the kernel refuses it to an archetype
+// plugin.
 
 import {
   AGENT_TURN_SERVICE_NAME,
@@ -24,9 +29,9 @@ import type {
   TargetedSendService,
 } from '@omadia/plugin-api';
 
-import type { PoolLike } from './db/pool.js';
+import { dbOf } from './db/pool.js';
+import type { Db, KernelSql } from './db/pool.js';
 
-export const GRAPH_POOL_SERVICE_NAME = 'graphPool';
 export const CONVERSATION_EVENTS_SERVICE_NAME = 'conversationEvents';
 export const CONVERSATION_ROSTERS_SERVICE_NAME = 'conversationRosters';
 
@@ -97,7 +102,8 @@ export interface ConversationRostersService {
 }
 
 export interface Kernel {
-  pool(): PoolLike | undefined;
+  /** The engine's own database (`ctx.sql`), absent without the operator's grant. */
+  db(): Db | undefined;
   messages(): ConversationMessagesService | undefined;
   agentTurn(): AgentTurnService | undefined;
   conversationSend(): ConversationSendService | undefined;
@@ -111,7 +117,6 @@ export interface Kernel {
 
 /** The names behind {@link Kernel}, in the order the manifest declares them. */
 export const KERNEL_SERVICE_NAMES = [
-  GRAPH_POOL_SERVICE_NAME,
   CONVERSATION_MESSAGES_SERVICE_NAME,
   AGENT_TURN_SERVICE_NAME,
   CONVERSATION_SEND_SERVICE_NAME,
@@ -138,10 +143,16 @@ export function resolveService<T>(services: ServiceLookup, name: string): T | un
   }
 }
 
-export function createKernel(services: ServiceLookup): Kernel {
+/**
+ * The kernel as the engine uses it. Services are looked up on every call.
+ * The database is not a service: it is the plugin's own accessor, which the
+ * kernel builds before activation and which does not change afterwards.
+ */
+export function createKernel(services: ServiceLookup, sql?: KernelSql): Kernel {
+  const db = dbOf(sql);
   const lookup = <T>(name: string) => (): T | undefined => resolveService<T>(services, name);
   return {
-    pool: lookup<PoolLike>(GRAPH_POOL_SERVICE_NAME),
+    db: () => db,
     messages: lookup<ConversationMessagesService>(CONVERSATION_MESSAGES_SERVICE_NAME),
     agentTurn: lookup<AgentTurnService>(AGENT_TURN_SERVICE_NAME),
     conversationSend: lookup<ConversationSendService>(CONVERSATION_SEND_SERVICE_NAME),

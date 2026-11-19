@@ -12,7 +12,6 @@ import { isValidTimezone } from '../config.js';
 import type { Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
-import { poolTransaction } from '../db/tx.js';
 import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
 import { lifetimeEnd } from './lifetime.js';
@@ -291,7 +290,7 @@ async function storeRoll(tx: Queryable, facilitationId: string, roll: Roll, lang
 
 /** Create a facilitation in `configuring`, or adjust the one being set up. */
 export async function configureFacilitation(engine: EngineCore, input: ConfigureInput): Promise<ConfigureResult> {
-  const pool = engine.pool();
+  const db = engine.db();
   const now = engine.now();
   const { kernel, config } = engine.deps;
   const notes: string[] = [];
@@ -318,7 +317,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   const protocolMail = mailAsked && kernel.followup() !== undefined;
   if (mailAsked && !protocolMail) notes.push('Sending the protocol by mail is not available on this instance (no mail integration is installed). The protocol goes to the participants privately, or into this group where that is not possible.');
 
-  const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
+  const existing = await store.findLiveByConversation(db, input.channelType, input.conversationId);
   // Reminders somebody asked for are kept as asked; the others follow from
   // the time to the deadline, so that none is announced that cannot happen.
   const askedHours =
@@ -387,7 +386,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
           : {}),
       });
     });
-    return { facilitation, created: false, participants: await store.listParticipants(pool, existing.id), expected: [...expectedNames(facilitation)], notes };
+    return { facilitation, created: false, participants: await store.listParticipants(db, existing.id), expected: [...expectedNames(facilitation)], notes };
   }
 
   // Name and language come from the kernel's record of the facilitator, not
@@ -450,7 +449,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
 
   // The subscription is this facilitation's. What an earlier facilitation of
   // this conversation could not post while it had none stays unsent.
-  await pool.query(
+  await db.query(
     `UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"orphaned": true}'::jsonb
       WHERE facilitator_agent = $1 AND channel_type = $2 AND conversation_id = $3
         AND phase IN ('closed', 'aborted') AND coalesce((settings->>'subscriptionLost')::boolean, false)`,
@@ -458,7 +457,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   );
 
   try {
-    const result = await poolTransaction(pool, async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
         facilitatorAgent: input.agentSlug,
         channelType: input.channelType,
@@ -525,11 +524,11 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     // The conversation may still be read for an earlier facilitation (its
     // follow-up). What the kernel stored so far is not this one's to read.
     const cursor = await headOfStored(engine, input);
-    if (cursor !== undefined) await pool.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [result.facilitation.id, cursor]);
+    if (cursor !== undefined) await db.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [result.facilitation.id, cursor]);
     return result;
   } catch (err) {
     // Nothing was created: do not keep reading a conversation we do not moderate.
-    if (!(await store.findLiveByConversation(pool, input.channelType, input.conversationId))) await messages.unsubscribe(input);
+    if (!(await store.findLiveByConversation(db, input.channelType, input.conversationId))) await messages.unsubscribe(input);
     if (err instanceof Error && err.message.includes('one_active_per_conversation')) {
       throw new Refusal('already_active', 'This conversation already has a facilitation.');
     }
@@ -663,29 +662,29 @@ export async function abortFacilitation(engine: EngineCore, facilitationId: stri
  *  outside the lock. Idempotent. */
 export async function releaseConversation(engine: EngineCore, f: Facilitation): Promise<void> {
   if (f.followupState === 'active' || f.settings.released === true) return;
-  const pool = engine.pool();
+  const db = engine.db();
   // Posting as the facilitator rides on the subscription: keep it until the
   // report is out.
-  const undelivered = await pool.query(
+  const undelivered = await db.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND delivery_class = 'essential' AND status IN ('pending', 'sending') LIMIT 1`,
     [f.id],
   );
   if (undelivered.rows.length > 0) return;
   // Mail and invitation run after the close; what they have to tell the group
   // needs the subscription too.
-  const working = await pool.query(
+  const working = await db.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('protocol_mail', 'followup_meeting') LIMIT 1`,
     [f.id],
   );
   if (working.rows.length > 0) return;
-  const others = await pool.query(
+  const others = await db.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_facilitations
       WHERE id <> $1 AND facilitator_agent = $2 AND channel_type = $3 AND conversation_id = $4
         AND (phase IN ('configuring', 'active', 'concluding') OR followup_state = 'active' OR NOT coalesce((settings->>'released')::boolean, false))
       LIMIT 1`,
     [f.id, f.facilitatorAgent, f.channelType, f.conversationId],
   );
-  await pool.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"released": true}'::jsonb WHERE id = $1`, [f.id]);
+  await db.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"released": true}'::jsonb WHERE id = $1`, [f.id]);
   if (others.rows.length > 0) return;
   try {
     await engine.deps.kernel.messages()?.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });

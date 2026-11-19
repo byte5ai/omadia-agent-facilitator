@@ -64,7 +64,7 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
         // Free/busy and the invitation go by mail address, and addresses come
         // from the channel's member list only.
         const addresses = await refreshAddresses(engine.core, f.id);
-        const invited = (await store.listStakeholders(engine.core.pool(), f.id)).filter((s) => s.confirmed && s.role === 'invited_to_followups' && s.address).length;
+        const invited = (await store.listStakeholders(engine.core.db(), f.id)).filter((s) => s.confirmed && s.role === 'invited_to_followups' && s.address).length;
         if (addresses.withAddress + invited === 0) {
           throw new Refusal(
             'no_addresses',

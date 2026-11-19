@@ -8,7 +8,7 @@
  *
  * Every kernel service is resolved lazily, the database included. Without it
  * the engine cannot keep state: it says why, starts nothing, and keeps looking
- * until the pool is there.
+ * until it is there.
  */
 
 import { FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
@@ -16,6 +16,7 @@ import type { PluginContext } from '@omadia/plugin-api';
 
 import { systemClock } from './clock.js';
 import { CONFIG_KEYS, OBSOLETE_CONFIG_KEYS, isKernelKey, parseConfig } from './config.js';
+import type { KernelSql } from './db/pool.js';
 import { lockLog } from './db/tx.js';
 import type { EngineConfig } from './config.js';
 import { ARCHETYPE_PROCESSES_SERVICE_NAME } from './engine/endOfService.js';
@@ -26,7 +27,7 @@ import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js'
 import { buildTools } from './tools/index.js';
 
 export const PLUGIN_ID = '@omadia/agent-facilitator' as const;
-export const ENGINE_VERSION = '1.2.0' as const;
+export const ENGINE_VERSION = '1.3.0' as const;
 /** `facilitationEngine@1` without the version suffix: the registry key. */
 export const ENGINE_SERVICE_NAME = FACILITATION_ENGINE_CAPABILITY.split('@')[0] ?? 'facilitationEngine';
 
@@ -60,6 +61,10 @@ export const NAV_LABEL = { en: 'Facilitations', de: 'Moderationen' } as const;
 
 export const NO_DATABASE_REASON =
   'The facilitation engine has no database: grant this plugin its SQL permission and run the middleware with Postgres.';
+/** `ctx.sql` is there, but without the statement and transaction accessors of
+ *  plugin-api 1.62.0: this kernel cannot give an archetype plugin its own database. */
+export const OLD_KERNEL_REASON =
+  'The facilitation engine has no database: this kernel does not give an archetype plugin its own schema (ctx.sql.query and ctx.sql.transaction, plugin-api 1.62.0). Update the kernel.';
 
 /** The kernel's setting for how the Privacy Shield treats what this plugin's
  *  tools answer. Operator-owned; the manifest recommends 'bypass' and says why. */
@@ -116,7 +121,13 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   if (stale.length > 0) log(`config: settings of 0.7.x are still stored and ignored: ${stale.join(', ')}`);
   const pluginId = ctx.agentId || PLUGIN_ID;
   const config = parseConfig(<T,>(key: string) => ctx.config.get<T>(key), log);
-  const kernel = createKernel(ctx.services);
+  // The engine's database is the plugin's own accessor, in its own schema.
+  // The shared pool is not asked for: an archetype plugin never gets it.
+  // `schema`, `query` and `transaction` are plugin-api 1.62.0; read
+  // structurally, so the plugin also builds against an older contract.
+  const sql = ctx.sql as (NonNullable<typeof ctx.sql> & KernelSql) | undefined;
+  const kernel = createKernel(ctx.services, sql);
+  if (sql?.schema !== undefined) log(`database: schema '${sql.schema}', reached as the plugin's own role; table names are unqualified`);
   const disposers: Array<() => void> = [];
 
   for (const name of KERNEL_SERVICE_NAMES) {
@@ -127,10 +138,10 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
 
   const engine = new FacilitationEngine({ kernel, config, clock: systemClock, log });
 
-  // Whether the engine is up is not decided once. The pool may be published
-  // after this plugin activated (a provider that activates later, a grant
-  // that arrives later): the engine looks again until it is there, and then
-  // resumes what was running.
+  // Whether the engine is up is not decided once: a migration that failed is
+  // tried again, and then the engine resumes what was running. The accessor
+  // itself is fixed for this activation; the kernel activates the plugin anew
+  // when the operator grants the database.
   let unavailableReason: string | undefined = NO_DATABASE_REASON;
   let closed = false;
   let rising: Promise<boolean> | undefined;
@@ -138,12 +149,14 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
 
   const rise = async (): Promise<boolean> => {
     let reason: string | undefined;
-    if (!ctx.sql || !kernel.pool()) {
+    if (!ctx.sql) {
       reason = NO_DATABASE_REASON;
+    } else if (!kernel.db()) {
+      reason = OLD_KERNEL_REASON;
     } else {
-      // The kernel applies `permissions.sql.migrations` before activate(); the
-      // call here is the same idempotent pass and covers a pool that was not
-      // there at that moment.
+      // The kernel applies `permissions.sql.migrations` before activate(), as
+      // the plugin's migration role; the call here is the same idempotent
+      // pass and covers a first attempt that failed.
       try {
         const report = await ctx.sql.runMigrations();
         if (report.applied.length > 0) log(`applied migrations: ${report.applied.join(', ')}`);
@@ -211,6 +224,8 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   // answers "not available, and why" instead of having no tools at all. A
   // tool call is also a moment to look for the database again.
   engine.setReadiness(ensureUp);
+  // A database whose migrations did not go through is not one to work on.
+  engine.setUsable(() => unavailableReason === undefined);
   for (const tool of buildTools(engine)) disposers.push(ctx.tools.register(tool.spec, tool.handler));
   // Operator API, behind the kernel's session gate.
   disposers.push(

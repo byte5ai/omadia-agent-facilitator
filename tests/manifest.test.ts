@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
@@ -9,6 +9,13 @@ import { KERNEL_SERVICE_NAMES } from '../src/kernel.js';
 import { ENGINE_VERSION } from '../src/plugin.js';
 
 const root = process.cwd();
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? walk(path) : [path];
+  });
+}
 const manifest = readFileSync(join(root, 'manifest.yaml'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version: string; files: string[] };
 
@@ -21,7 +28,7 @@ test('version is the same in package.json, manifest.yaml and the engine', () => 
 test('the manifest is of kind archetype and keeps the engine capability for kernels that find it by that', () => {
   assert.match(manifest, new RegExp(`provides:\\n\\s+- "${FACILITATION_ENGINE_CAPABILITY}"`));
   assert.match(manifest, /^\s{2}kind: "archetype"$/m);
-  assert.match(manifest, /^\s{2}core: ">=1\.60\.0 <2\.0"$/m);
+  assert.match(manifest, /^\s{2}core: ">=1\.62\.0 <2\.0"$/m);
 });
 
 /** The entries of one list of the `archetype:` block. */
@@ -51,11 +58,23 @@ test('the German manifest texts use the product terms', () => {
   assert.match(manifest, /Kanalidentität/);
 });
 
-test('every kernel service the engine resolves is declared: the pool as required, the others as optional', () => {
+test('every kernel service the engine resolves is declared as optional, and the shared pool is not asked for', () => {
   const block = /optional_requires:\n((?:\s+- "[^"]+"\n)+)/.exec(manifest)?.[1] ?? '';
   const declared = [...block.matchAll(/- "([^"@]+)@/g)].map((m) => m[1]);
-  assert.deepEqual([...declared, 'graphPool'].sort(), [...KERNEL_SERVICE_NAMES].sort());
-  assert.match(manifest, /^requires:\n\s+- "graphPool@\^1"$/m);
+  assert.deepEqual([...declared].sort(), [...KERNEL_SERVICE_NAMES].sort());
+  // No `graphPool` anywhere among the requirements: this is what tells the
+  // kernel that the plugin works in its own schema.
+  assert.match(manifest, /^requires: \[\]$/m);
+  assert.ok(!/^\s*- "graphPool/m.test(manifest));
+});
+
+test('no statement and no migration names a schema', () => {
+  const sources = [...readdirSync(join(root, 'migrations')).map((f) => join(root, 'migrations', f)), ...walk(join(root, 'src'))];
+  for (const file of sources) {
+    const text = readFileSync(file, 'utf8');
+    assert.ok(!/\bpublic\./.test(text), `${file} names the schema public`);
+    assert.ok(!/SET search_path|CREATE EXTENSION|pg_advisory_lock|\bLISTEN [a-z_"]/.test(text.replace(/^\s*(--|\/\/|\*).*$/gm, '')), `${file} relies on a session or on something outside its schema`);
+  }
 });
 
 test('permissions.sql names a ledger inside the plugin namespace and the shipped migrations directory', () => {

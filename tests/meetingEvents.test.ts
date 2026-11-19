@@ -175,7 +175,7 @@ test('the one-time cleanup ends the sessions that facilitations before 1.1.1 lef
   // As 1.1.0 and older left it.
   await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'running', ended_at = NULL WHERE facilitation_id = $1`, [f.id]);
   await h.db.pool.query(`INSERT INTO plg_omadia_agent_facilitator_sessions (facilitation_id, kind, modality, status, created_at) VALUES ($1, 'live', 'online', 'scheduled', now())`, [f.id]);
-  await h.db.pool.query(readFileSync(join(MIGRATIONS_DIR, '0004_close_left_sessions.sql'), 'utf8'));
+  await h.db.asMigrationRole(readFileSync(join(MIGRATIONS_DIR, '0004_close_left_sessions.sql'), 'utf8'));
   const rows = await sessionsOf(ended);
   assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'ended'], ['live', 'cancelled']]);
   assert.equal(rows.find((s) => s.kind === 'async')?.endedAt?.getTime(), f.closedAt?.getTime(), 'ended when its facilitation ended');

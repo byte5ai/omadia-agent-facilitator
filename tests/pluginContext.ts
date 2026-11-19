@@ -1,6 +1,8 @@
 // A plugin context over the fake kernel, for tests of activation: the
 // services are looked up by name on every call, and a test decides when the
-// database is there.
+// database is there. The database is `ctx.sql`, as the kernel builds it for an
+// archetype plugin: the migration runner plus one statement and one
+// transaction as the plugin's runtime role. It is fixed for an activation.
 
 import type { PluginContext } from '@omadia/plugin-api';
 
@@ -10,7 +12,7 @@ import type { FakeKernel } from './fakeKernel.js';
 import type { TestDb } from './pg.js';
 
 // Same order as KERNEL_SERVICE_NAMES.
-const ACCESSORS: readonly (keyof Kernel)[] = ['pool', 'messages', 'agentTurn', 'conversationSend', 'targetedSend', 'readiness', 'sessionCapabilities', 'conversationEvents', 'rosters', 'followup'];
+const ACCESSORS: readonly (keyof Kernel)[] = ['messages', 'agentTurn', 'conversationSend', 'targetedSend', 'readiness', 'sessionCapabilities', 'conversationEvents', 'rosters', 'followup'];
 
 export interface KernelContext {
   ctx: PluginContext;
@@ -20,7 +22,16 @@ export interface KernelContext {
   jobs: Map<string, () => Promise<void>>;
 }
 
-export function kernelContext(kernel: FakeKernel, db: TestDb): KernelContext {
+export interface KernelContextOptions {
+  /** No grant by the operator: the context has no `sql` at all. */
+  granted?: boolean;
+  /** A kernel before plugin-api 1.62.0: migrations, but no `query` / `transaction`. */
+  oldKernel?: boolean;
+  /** Migration passes fail while `failing` is true; a test flips it. */
+  migrations?: { failing: boolean };
+}
+
+export function kernelContext(kernel: FakeKernel, db: TestDb, opts: KernelContextOptions = {}): KernelContext {
   const logs: string[] = [];
   const provided = new Map<string, unknown>();
   const jobs = new Map<string, () => Promise<void>>();
@@ -34,14 +45,18 @@ export function kernelContext(kernel: FakeKernel, db: TestDb): KernelContext {
     agentId: '@omadia/agent-facilitator',
     log: (...args: unknown[]) => logs.push(args.join(' ')),
     config: { get: (key: string) => (key === 'language' ? 'en' : undefined) },
-    sql: {
-      ledger: 'plg_omadia_agent_facilitator_migrations',
-      // As the kernel does: no pool, no migrations.
-      runMigrations: async () => {
-        if (!kernel.kernel().pool()) throw new Error("no 'graphPool' is registered");
-        return db.runMigrations();
-      },
-    },
+    ...(opts.granted === false
+      ? {}
+      : {
+          sql: {
+            ledger: 'plg_omadia_agent_facilitator_migrations',
+            ...(opts.oldKernel ? {} : db.sql),
+            runMigrations: async () => {
+              if (opts.migrations?.failing) throw new Error('lock timeout');
+              return db.runMigrations();
+            },
+          },
+        }),
     routes: { register: nothing },
     jobs: {
       register: (spec: { name: string }, run: () => Promise<void>) => {

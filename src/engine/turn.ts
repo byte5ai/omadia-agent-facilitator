@@ -66,8 +66,8 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
 
 /** Run one turn for a free-text message and post the answer. */
 export async function runFacilitatorTurn(engine: EngineCore, facilitationId: string, record: ConversationMessageRecord): Promise<void> {
-  const pool = engine.pool();
-  const f = await store.getFacilitation(pool, facilitationId);
+  const db = engine.db();
+  const f = await store.getFacilitation(db, facilitationId);
   if (!f || (f.phase !== 'configuring' && f.phase !== 'active')) return;
   const agentTurn = engine.deps.kernel.agentTurn();
   if (!agentTurn) {
@@ -81,7 +81,7 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     conversationId: f.conversationId,
     inboundEventId: record.eventId,
     input: `From: ${record.author.displayName ?? record.author.id} (message id: ${record.messageId})\n${record.text ?? ''}`,
-    engineContext: await buildEngineContext(pool, f),
+    engineContext: await buildEngineContext(db, f),
   });
   // What the tools of this turn did. If one already made the facilitator post
   // (the handshake, a step, a question to somebody), that was the answer:

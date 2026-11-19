@@ -34,9 +34,9 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 | What | Version |
 |---|---|
-| omadia kernel | with archetype plugins (#2088) and `@omadia/plugin-api` >= 1.60.0, the first kernel that knows the manifest kind `archetype`. The manifest says so (`compat.core: >=1.60.0 <2.0`), so the Hub does not offer the package to an older kernel. Everything newer (the process service of 1.61.0) is feature-detected |
+| omadia kernel | with archetype plugins and their own database (#2088) and `@omadia/plugin-api` >= 1.62.0, the first kernel that gives an archetype plugin its own schema and role. The manifest says so (`compat.core: >=1.62.0 <2.0`), so the Hub does not offer the package to an older kernel |
 | Model of the facilitator | Sonnet-class or stronger (see "Which model") |
-| Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
+| Postgres | required. The plugin declares `permissions.sql`; an operator grants it. The kernel then creates the schema `plg_omadia_agent_facilitator` and two roles for it (one that runs the migrations, one the engine works as) and hands the engine `ctx.sql`. The shared pool (`graphPool`) is not used |
 | Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |
 | Follow-up (optional) | an integration that provides `facilitation.followup`. Microsoft 365: `@omadia/m365-connector` >= 0.9.0 |
 
@@ -98,10 +98,16 @@ report in the group.
   within the window (12 h by default, never past the deadline). While a
   consent vote is open, and always for consent to processing speech, only a
   reply to the proposal's own message answers the proposal.
-- **On a shared pool.** The engine holds at most two connections for locked
-  work, takes a facilitation's lock with a deadline, and never keeps a
-  transaction open across a call into the channel or an integration. Mail and
-  calendar calls run after the close is committed, at most once.
+- **In its own schema, without a connection of its own.** The engine reaches
+  the database through one statement or one transaction at a time
+  (`ctx.sql.query`, `ctx.sql.transaction`), as a role that can read and write
+  the tables of its schema and nothing else. It relies on no state of a
+  database session, so it works behind a pooler in transaction mode. A
+  facilitation's lock is a row with a lease, taken, renewed and released by
+  single statements and with a deadline. At most two units of locked work run
+  at the same time, and no transaction is open across a call into the channel
+  or an integration. Mail and calendar calls run after the close is
+  committed, at most once.
 - **Every outgoing text** passes one guard: no tool fragments, no raw JSON, no
   unrestored privacy placeholders.
 
@@ -185,6 +191,25 @@ set is kept and stated in the log.
   disabled) is taken up again with a line to the group, or, when the kernel
   keeps refusing for two minutes, ended as aborted with the reason in its
   protocol. It is never left active.
+
+## Upgrading to 1.3.0 (own database)
+
+Up to 1.2.0 the tables lived in the shared schema `public` and the engine used
+the kernel's pool. From 1.3.0 the plugin has its own schema.
+
+- The kernel decides from the manifest: an archetype plugin that does not
+  require `graphPool` gets its own database. At the first activation of 1.3.0
+  it moves the `plg_omadia_agent_facilitator_*` tables (the migration ledger
+  included) out of `public` into the schema `plg_omadia_agent_facilitator`.
+  Functions, types, sequences and views under the same prefix move with
+  them. Rows are not touched.
+- Migration `0005` is the safety net for the trigger function of the event
+  log: it makes sure the function the append-only trigger calls is the one
+  inside the schema.
+- **There is no way back.** 1.2.0 and earlier look for the tables in `public`
+  and would create empty ones there. Do not install an older version after
+  1.3.0 was active.
+- Needs a kernel with `@omadia/plugin-api` >= 1.62.0.
 
 ## Upgrading from 0.7.x
 
