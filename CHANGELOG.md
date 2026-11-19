@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.3.0
+
+The plugin's own database (kernel #2088, K3).
+
+**Needs kernel `@omadia/plugin-api` >= 1.62.0** (`compat.core: >=1.62.0 <2.0`).
+**There is no way back to 1.2.0 or earlier** once this version was active: its
+first activation makes the kernel move the tables out of `public`.
+
+### Changed
+
+- **The engine works in its own schema, as its own database role.** Every
+  access goes through `ctx.sql.query` (one statement) or
+  `ctx.sql.transaction` (one transaction). The shared pool is gone from the
+  manifest (`requires: []`) and from the code; no connection is held anywhere.
+  Table names were and stay unqualified.
+- **The facilitation lock holds no connection.** It was already a row with a
+  lease; taking, renewing and releasing it are now single statements, and the
+  work under it uses a transaction or single statements. At most two units of
+  locked work run at the same time, as before.
+- **A database whose migrations failed is not worked on.** The tools answer
+  "not available" until a later pass applied them; before, a tool call could
+  reach tables of an older state.
+- The log names the schema in use at activation, and a kernel that cannot
+  give an archetype plugin its own database is named as the reason the engine
+  is down.
+
+### Added
+
+- **Migration `0005`**: after the kernel moved the tables, the trigger that
+  keeps the event log append-only still called a function in `public`, owned
+  by the kernel's database user. The function is created in the plugin's
+  schema and the trigger bound to it. Nothing changes on a fresh
+  installation.
+
+### Tests
+
+- The Postgres-backed tests run as a role that owns nothing: no attribute,
+  member of no role, `search_path` set on the role, only SELECT, INSERT,
+  UPDATE and DELETE on its schema, and a pool of four as the kernel opens it.
+  Migrations run as a separate role that owns the schema.
+
 ## 1.2.0
 
 The plugin becomes an archetype plugin (kernel #2088, P1 of the spec
