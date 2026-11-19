@@ -77,6 +77,21 @@ async function createChatSession(engine: EngineCore, f: Facilitation): Promise<v
   const pool = engine.pool();
   if ((await store.listSessions(pool, f.id)).some((s) => s.kind === 'async')) return;
   await insert<Session>(pool, 'plg_omadia_agent_facilitator_sessions', { facilitationId: f.id, kind: 'async', modality: 'chat', capabilitySnapshot: snapshot, status: 'running', startedAt: engine.now(), createdAt: engine.now() });
+  // A meeting may already be running: the kernel reports a start, not a
+  // state, so the conversation's snapshot is what tells. The session is on
+  // record from the first moment; the handshake says what is perceived in it.
+  if (snapshot.modality === 'online' || snapshot.modality === 'hybrid') {
+    await insert<Session>(pool, 'plg_omadia_agent_facilitator_sessions', {
+      facilitationId: f.id,
+      kind: 'live',
+      meetingRef: snapshot.sessionRef ?? null,
+      modality: snapshot.modality,
+      capabilitySnapshot: snapshot,
+      status: 'running',
+      startedAt: engine.now(),
+      createdAt: engine.now(),
+    });
+  }
 }
 
 /** The chat session inside a unit of work. If it is missing it is created
@@ -172,17 +187,31 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
   if (!adHoc) await sendAgenda(w, session);
   w.bump();
   await w.event('session_started', 'engine', { sessionId: session.id });
-  // The facilitator says what it perceives in THIS session, so nobody assumes more.
-  w.post({
-    purpose: 'session_started',
-    key: session.id,
-    to: 'group',
-    deliveryClass: 'essential',
-    requiredPhases: ['configuring', 'active'],
-    text: adHoc
-      ? t.meetingStarted(perceptionStatement(perceived, t))
-      : t.sessionStarted(session.title ?? w.f.goal, session.scheduledEnd ? formatWhen(session.scheduledEnd, w.f.timezone, w.f.language) : undefined, perceptionStatement(perceived, t)),
-  });
+  if (adHoc) {
+    // A meeting nobody scheduled here is not narrated. The facilitator speaks
+    // only when it perceives something else in it than in the chat, in one line.
+    const diff = diffSnapshots(chat, snapshot);
+    if (diff.gained.length > 0 || diff.lost.length > 0) {
+      w.post({
+        purpose: 'session_started',
+        key: session.id,
+        to: 'group',
+        deliveryClass: 'essential',
+        requiredPhases: ['configuring', 'active'],
+        text: t.meetingDiffers(diff.gained.map((c) => t.perceive[c]), diff.lost.map((c) => t.perceive[c])),
+      });
+    }
+  } else {
+    // The facilitator says what it perceives in THIS session, so nobody assumes more.
+    w.post({
+      purpose: 'session_started',
+      key: session.id,
+      to: 'group',
+      deliveryClass: 'essential',
+      requiredPhases: ['configuring', 'active'],
+      text: t.sessionStarted(session.title ?? w.f.goal, session.scheduledEnd ? formatWhen(session.scheduledEnd, w.f.timezone, w.f.language) : undefined, perceptionStatement(perceived, t)),
+    });
+  }
   if (snapshot.inputs.includes('transcribed_speech')) await askMediaConsent(w, started);
   return started;
 }
@@ -192,8 +221,9 @@ export async function endSession(w: Work, session: Session): Promise<void> {
   await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'ended', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
   w.bump();
   await w.event('session_ended', 'engine', { sessionId: session.id });
-  const t = texts(w.f.language);
-  w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: session.title === null && session.scheduledStart === null ? t.meetingEnded() : t.sessionEnded(session.title ?? w.f.goal) });
+  // The end of a meeting nobody scheduled here is not announced either.
+  if (session.title === null && session.scheduledStart === null) return;
+  w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).sessionEnded(session.title ?? w.f.goal) });
 }
 
 /**
@@ -209,6 +239,13 @@ export async function meetingStarted(w: Work, sessionRef: string, snapshot: Sess
   const scheduled = live.find((s) => s.meetingRef === sessionRef) ?? live.find((s) => s.status === 'scheduled' && s.meetingRef === null);
   if (scheduled) {
     await startSession(w, scheduled, snapshot);
+    return;
+  }
+  // A meeting was already running when the facilitation started (its session
+  // has no reference yet): this is its start, reported late.
+  const known = live.find((s) => s.status === 'running' && s.meetingRef === null);
+  if (known) {
+    await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: known.id }, { meetingRef: sessionRef });
     return;
   }
   // Another meeting is on record as running: only one is, at a time.

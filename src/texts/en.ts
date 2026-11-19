@@ -433,9 +433,10 @@ export const en = {
     [`Agenda for "${title}" on ${when}:`, ...agenda, 'Topics and pre-reads you want to bring: write them here beforehand, one point per message.'].join('\n'),
   sessionStarted: (title: string, until: string | undefined, perception: string): string =>
     [`"${title}" starts now.${until ? ` We have until ${until}.` : ''}`, perception].join('\n'),
-  /** A meeting nobody scheduled through the facilitator started in the conversation. */
-  meetingStarted: (perception: string): string => ['A meeting is running in this conversation now.', perception].join('\n'),
-  meetingEnded: (): string => 'The meeting has ended. What is still open continues here in the chat.',
+  /** A meeting nobody scheduled here is running, and it offers something else
+   *  than the chat: what changes for what the facilitator perceives. */
+  meetingDiffers: (gained: readonly string[], lost: readonly string[]): string =>
+    ['A meeting is running in this conversation.', ...(gained.length > 0 ? [`In it I also perceive: ${gained.join(', ')}.`] : []), ...(lost.length > 0 ? [`I no longer perceive: ${lost.join(', ')}.`] : [])].join(' '),
   sessionEnded: (title: string): string => `"${title}" has ended. What is still open continues here in the chat.`,
   timeNotice: (title: string, minutes: number): string => `Time check: ${String(minutes)} minutes left for "${title}".`,
   speakingOrder: (names: readonly string[], remoteFirst: boolean): string =>
