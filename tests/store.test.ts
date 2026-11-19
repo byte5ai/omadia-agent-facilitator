@@ -49,6 +49,7 @@ const EXPECTED_TABLES = [
   'plg_omadia_agent_facilitator_facilitations',
   'plg_omadia_agent_facilitator_inbound',
   'plg_omadia_agent_facilitator_jobs',
+  'plg_omadia_agent_facilitator_locks',
   'plg_omadia_agent_facilitator_outbox',
   'plg_omadia_agent_facilitator_participants',
   'plg_omadia_agent_facilitator_proposals',
@@ -194,11 +195,11 @@ test('the facilitation lock serialises work across connections and a transaction
   // The database lock itself, not only the in-process queue: a second session
   // cannot take it while the first holds it.
   await withFacilitationLock(db.pool, f.id, async () => {
-    const other = await db.pool.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 2043)) AS locked', [f.id]);
-    assert.equal(other.rows[0]?.locked, false);
+    const other = await db.pool.query(`SELECT 1 FROM plg_omadia_agent_facilitator_locks WHERE facilitation_id = $1 AND lease_until > now()`, [f.id]);
+    assert.equal(other.rows.length, 1);
   });
-  const free = await db.pool.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 2043)) AS locked, pg_advisory_unlock_all()', [f.id]);
-  assert.equal(free.rows[0]?.locked, true, 'released afterwards');
+  const free = await db.pool.query(`SELECT 1 FROM plg_omadia_agent_facilitator_locks WHERE facilitation_id = $1`, [f.id]);
+  assert.equal(free.rows.length, 0, 'released afterwards');
 
   await withFacilitationLock(db.pool, f.id, async (client) => {
     await assert.rejects(
