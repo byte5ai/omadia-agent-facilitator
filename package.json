@@ -1,6 +1,6 @@
 {
   "name": "@omadia/agent-facilitator",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "license": "MIT",
   "private": true,
   "type": "module",

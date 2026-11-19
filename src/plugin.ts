@@ -11,7 +11,7 @@
  * until it is there.
  */
 
-import { FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
+import { CONVERSATION_MESSAGES_SERVICE_NAME, FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
 import type { PluginContext } from '@omadia/plugin-api';
 
 import { systemClock } from './clock.js';
@@ -27,7 +27,7 @@ import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js'
 import { buildTools } from './tools/index.js';
 
 export const PLUGIN_ID = '@omadia/agent-facilitator' as const;
-export const ENGINE_VERSION = '1.5.2' as const;
+export const ENGINE_VERSION = '1.5.3' as const;
 /** `facilitationEngine@1` without the version suffix: the registry key. */
 export const ENGINE_SERVICE_NAME = FACILITATION_ENGINE_CAPABILITY.split('@')[0] ?? 'facilitationEngine';
 
@@ -131,6 +131,9 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   const disposers: Array<() => void> = [];
 
   for (const name of KERNEL_SERVICE_NAMES) {
+    // The first major of the message service is only asked to give back a
+    // subscription from before 1.4.0. A kernel without it lacks nothing.
+    if (name === CONVERSATION_MESSAGES_SERVICE_NAME) continue;
     if (resolveService(ctx.services, name) === undefined) {
       log(`kernel service '${name}' is not published (yet) — the matching feature degrades until it appears`);
     }
