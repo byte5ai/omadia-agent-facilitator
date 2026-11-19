@@ -167,25 +167,7 @@ operator-owned). It decides what the model sees of a tool's **answer**:
   (`OMADIA_PRIVACY_FORCE_GUARDED`) cannot run facilitators reliably until the
   kernel exempts the facilitation tools.
 
-### Upgrading to 1.3.0 (own database)
-
-Up to 1.2.0 the tables lived in the shared schema `public` and the engine used
-the kernel's pool. From 1.3.0 the plugin has its own schema.
-
-- The kernel decides from the manifest: an archetype plugin that does not
-  require `graphPool` gets its own database. At the first activation of 1.3.0
-  it moves the `plg_omadia_agent_facilitator_*` tables (the migration ledger
-  included) out of `public` into the schema `plg_omadia_agent_facilitator`.
-  Rows are not touched.
-- Migration `0005` then binds the append-only rule of the event log to a
-  function inside the schema. The function of the same name that 0001 created
-  in `public` stays behind, unused; the plugin's roles may not drop it.
-- **There is no way back.** 1.2.0 and earlier look for the tables in `public`
-  and would create empty ones there. Do not install an older version after
-  1.3.0 was active.
-- Needs a kernel with `@omadia/plugin-api` >= 1.62.0.
-
-## Upgrading from 0.7.x
+### Upgrading from 0.7.x
 
 The settings of 0.7.x (`facilitator_agent_slug`, `initiator_role_key`,
 `reporting_mode`, `moderation_style`, `auto_setup`, `disclose_report_target`)
@@ -219,10 +201,11 @@ the kernel's pool. From 1.3.0 the plugin has its own schema.
   require `graphPool` gets its own database. At the first activation of 1.3.0
   it moves the `plg_omadia_agent_facilitator_*` tables (the migration ledger
   included) out of `public` into the schema `plg_omadia_agent_facilitator`.
-  Rows are not touched.
-- Migration `0005` then binds the append-only rule of the event log to a
-  function inside the schema. The function of the same name that 0001 created
-  in `public` stays behind, unused; the plugin's roles may not drop it.
+  Functions, types, sequences and views under the same prefix move with
+  them. Rows are not touched.
+- Migration `0005` is the safety net for the trigger function of the event
+  log: it makes sure the function the append-only trigger calls is the one
+  inside the schema.
 - **There is no way back.** 1.2.0 and earlier look for the tables in `public`
   and would create empty ones there. Do not install an older version after
   1.3.0 was active.

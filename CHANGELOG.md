@@ -28,11 +28,11 @@ first activation makes the kernel move the tables out of `public`.
 
 ### Added
 
-- **Migration `0005`**: after the kernel moved the tables, the trigger that
-  keeps the event log append-only still called a function in `public`, owned
-  by the kernel's database user. The function is created in the plugin's
-  schema and the trigger bound to it. Nothing changes on a fresh
-  installation.
+- **Migration `0005`**, a safety net: the trigger that keeps the event log
+  append-only must call a function inside the plugin's schema. The kernel
+  moves that function together with the tables; the migration creates it in
+  the schema and binds the trigger to it in case it is not there. Nothing
+  changes where it already is.
 
 ### Tests
 

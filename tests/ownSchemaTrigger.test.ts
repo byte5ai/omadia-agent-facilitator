@@ -20,9 +20,9 @@ after(async () => {
 
 const VOTE = { method: 'single', options: ['Thai', 'Pizza'] };
 
-test('0005: after the kernel moved the tables, the append-only rule no longer hangs on a function outside the schema', { skip: PG_SKIP }, async () => {
-  // The state after the move of an installation that ran 1.2.0: the trigger
-  // came along with its table, the function it calls stayed in public.
+test('0005, the safety net: a trigger that came along with its table but still calls a function outside the schema is bound to the one inside', { skip: PG_SKIP }, async () => {
+  // What a move that takes only the tables leaves: the trigger came along
+  // with its table, the function it calls stayed in public.
   const fn = `fac_test_left_behind_${h.db.schema}`;
   await h.db.admin.query(`CREATE FUNCTION public.${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'plg_omadia_agent_facilitator_events is append-only'; END; $$`);
   await h.db.admin.query(`DROP TRIGGER plg_omadia_agent_facilitator_events_no_update ON ${h.db.schema}.plg_omadia_agent_facilitator_events`);
