@@ -334,6 +334,9 @@ export const de: Texts = {
   guardFallback: () => 'Ich konnte meine Antwort gerade nicht in Worte fassen. Fragt nach dem "Status", um zu sehen, wo wir stehen.',
   abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
   abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
+  abortAgentDisabled: () => 'dieser Facilitator wurde von einem Operator deaktiviert und kann nicht mehr moderieren',
+  abortAgentDeleted: () => 'dieser Facilitator wird von einem Operator gelöscht',
+  abortArchetypeRemoved: () => 'der Archetyp Facilitator wird von dieser Instanz entfernt, deshalb kann hier kein Facilitator mehr moderieren',
   notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',
 
   // ── Sessions und Medien ──────────────────────────────────────────────────

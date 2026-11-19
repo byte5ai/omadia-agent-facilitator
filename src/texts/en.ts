@@ -403,6 +403,9 @@ export const en = {
   guardFallback: (): string => 'I could not put my answer into words just now. Ask "status" for where we stand.',
   abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
   abortOperator: (reason: string): string => `an operator ended it (${reason})`,
+  abortAgentDisabled: (): string => 'this facilitator was disabled by an operator and can no longer moderate',
+  abortAgentDeleted: (): string => 'this facilitator is being deleted by an operator',
+  abortArchetypeRemoved: (): string => 'the facilitator archetype is being removed from this instance, so no facilitator can moderate here any more',
   notVisible: (): string => 'You are not a participant of this facilitation, so its protocol is not available to you.',
 
   // ── sessions and media ───────────────────────────────────────────────────

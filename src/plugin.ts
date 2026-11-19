@@ -18,6 +18,8 @@ import { systemClock } from './clock.js';
 import { CONFIG_KEYS, OBSOLETE_CONFIG_KEYS, isKernelKey, parseConfig } from './config.js';
 import { lockLog } from './db/tx.js';
 import type { EngineConfig } from './config.js';
+import { ARCHETYPE_PROCESSES_SERVICE_NAME } from './engine/endOfService.js';
+import type { ArchetypeProcessesService } from './engine/endOfService.js';
 import { FacilitationEngine } from './engine/engine.js';
 import { OPERATOR_API_PREFIX, router as operatorRouter } from './http/operatorApi.js';
 import { KERNEL_SERVICE_NAMES, createKernel, resolveService } from './kernel.js';
@@ -198,6 +200,12 @@ export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
     },
   };
   disposers.push(ctx.services.provide(ENGINE_SERVICE_NAME, info));
+
+  // End of service (plugin-api 1.61.0): before the kernel disables or deletes
+  // a facilitator, or removes this plugin, it asks here to end that agent's
+  // facilitations with their reports. A kernel that never asks ignores it.
+  const processes: ArchetypeProcessesService = { endProcessesOfAgent: (request) => engine.endProcessesOfAgent(request) };
+  disposers.push(ctx.services.provide(ARCHETYPE_PROCESSES_SERVICE_NAME, processes));
 
   // The tools are registered even without a database: a facilitator then
   // answers "not available, and why" instead of having no tools at all. A

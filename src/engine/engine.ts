@@ -15,6 +15,8 @@ import { closeWhenResultDelivered, installDecisionMethods, releaseWhenEnded } fr
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
 import { installGovernance, purgeExpired } from './governance.js';
+import { endProcessesOfAgent } from './endOfService.js';
+import type { ProcessEndReport, ProcessEndRequest } from './endOfService.js';
 import { processRecord } from './inbound.js';
 import { onOpened, releaseConversation } from './lifecycle.js';
 import { installScheduler, scheduleDeadlineJobs, tick } from './scheduler.js';
@@ -106,6 +108,14 @@ export class FacilitationEngine {
       this.attach(f.facilitatorAgent);
       await this.replay(f);
     }
+  }
+
+  /** The kernel ends this facilitator's service: every facilitation of it
+   *  ends with its report, within the kernel's wait. */
+  async endProcessesOfAgent(request: ProcessEndRequest, budgetMs?: number): Promise<ProcessEndReport> {
+    await this.ensureReady();
+    if (!this.available()) return { ended: [] };
+    return endProcessesOfAgent(this.core, request, budgetMs);
   }
 
   /** Before a tool acts on a facilitation: can it still be read? */
