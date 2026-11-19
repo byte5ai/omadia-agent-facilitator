@@ -55,6 +55,52 @@ test('a lost subscription is taken again on the next pass; the group is told onc
   assert.equal(await valid(f.id), 2, 'it records again');
 });
 
+test('K6.4: turning the subscription back up to every message can be refused as not ready; it is on record, retried, and never taken as read', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-not-ready', FOUR);
+  const f = await startActive(h, conv, VOTE);
+  const told = (): number => h.kernel.groupPosts(conv).filter((p) => /continues/.test(p.text)).length;
+  const refusals = async (): Promise<string[]> =>
+    (await h.db.pool.query<{ payload: { reason: string } }>(`SELECT payload FROM plg_omadia_agent_facilitator_events WHERE facilitation_id = $1 AND kind = 'subscription_refused'`, [f.id])).rows.map((r) => r.payload.reason);
+  h.kernel.takeReservation(conv);
+  h.kernel.subscribeRefusals.set('mira', { code: 'not_ready', message: 'the channel cannot deliver every message here' });
+  try {
+    await h.tick();
+    assert.equal(h.kernel.modeOf(f.id, conv), 'addressed', 'the subscription keeps its mode');
+    assert.deepEqual(await refusals(), ['not_ready: the channel cannot deliver every message here']);
+    assert.equal(told(), 0, 'nothing says that it continues');
+    assert.equal((await h.facilitation(conv)).settings.subscriptionLost ?? false, false);
+    assert.ok((await h.facilitation(conv)).settings.refusedSince, 'the gap is on record');
+    assert.ok(h.logs.some((l) => l.includes('the kernel refuses its subscription (not_ready: ')));
+    await h.tick();
+    assert.equal((await refusals()).length, 1, 'recorded once, asked again on every pass');
+    assert.equal((await h.facilitation(conv)).phase, 'active', 'a refusal may pass');
+  } finally {
+    h.kernel.subscribeRefusals.delete('mira');
+  }
+  await h.tick();
+  assert.equal(h.kernel.modeOf(f.id, conv), 'all');
+  assert.equal(told(), 1, 'said once it really reads everything again');
+  assert.equal((await h.facilitation(conv)).settings.refusedSince, undefined);
+});
+
+test('K6.4: a channel that stays not ready ends the facilitation with that reason, never left active on what is addressed', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('or-not-ready-stays', FOUR);
+  const f = await startActive(h, conv, VOTE);
+  h.kernel.takeReservation(conv);
+  h.kernel.subscribeRefusals.set('mira', { code: 'not_ready', message: 'the channel cannot deliver every message here' });
+  try {
+    await h.tick();
+    h.clock.advance(5 * MINUTE_MS);
+    await h.tick();
+  } finally {
+    h.kernel.subscribeRefusals.delete('mira');
+  }
+  assert.equal((await h.facilitation(conv)).phase, 'aborted');
+  const events = await h.db.pool.query<{ payload: { subscription?: string } }>(`SELECT payload FROM plg_omadia_agent_facilitator_events WHERE facilitation_id = $1 AND kind = 'aborted'`, [f.id]);
+  assert.match(events.rows[0]?.payload.subscription ?? '', /^not_ready: /);
+  assert.equal(h.kernel.groupPosts(conv).filter((p) => /ends without a result/.test(p.text)).length, 1, 'the group reads that it ended');
+});
+
 test('a subscription that is still there is left alone: nothing is said', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('or-fine', FOUR);
   await startActive(h, conv, VOTE);
