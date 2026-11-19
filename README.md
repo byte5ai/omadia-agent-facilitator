@@ -1,7 +1,14 @@
 # omadia Facilitator (`@omadia/agent-facilitator`)
 
-The facilitation engine for native facilitators
-([byte5ai/omadia#2043](https://github.com/byte5ai/omadia/issues/2043)).
+The archetype plugin for facilitators
+([byte5ai/omadia#2043](https://github.com/byte5ai/omadia/issues/2043),
+archetype plugins [#2088](https://github.com/byte5ai/omadia/issues/2088)).
+
+Since 1.2.0 the manifest is of kind `archetype`: its `archetype:` block is the
+descriptor of the archetype `facilitator` that the kernel enforces (what a
+facilitator never gets, which kernel services the plugin may use for it, what
+it requires, and the neutrality contract that closes its identity). Installing
+it needs the operator's explicit confirmation.
 
 A facilitator is a kind of agent the kernel owns: its identity, the neutrality
 block in its prompt, its own channel identity, the stored inbound messages and
@@ -27,7 +34,7 @@ the model turn. Everything a facilitation is made of lives in this plugin:
 
 | What | Version |
 |---|---|
-| omadia kernel | with native facilitators (#2043) and `@omadia/plugin-api` >= 1.55.0. The manifest says so (`compat.core: >=1.55.0 <2.0`), so the Hub does not offer the package to an older kernel. With 1.56.0 the engine asks the kernel whether a subscription still stands (`isSubscribed`); on 1.55 it infers it |
+| omadia kernel | with archetype plugins (#2088) and `@omadia/plugin-api` >= 1.60.0, the first kernel that knows the manifest kind `archetype`. The manifest says so (`compat.core: >=1.60.0 <2.0`), so the Hub does not offer the package to an older kernel. Everything newer (the process service of 1.61.0) is feature-detected |
 | Model of the facilitator | Sonnet-class or stronger (see "Which model") |
 | Postgres | required (`requires: graphPool`). The plugin declares `permissions.sql`; an operator grants it. A pool or a grant that arrives after activation is picked up without a restart |
 | Channel | one that gives each facilitator its own identity and delivers every message of a moderated conversation. Teams: `@omadia/channel-teams` >= 0.36.0 |

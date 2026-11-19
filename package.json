@@ -27,7 +27,7 @@
     "clean": "rm -rf dist out .test-build *.tsbuildinfo"
   },
   "peerDependencies": {
-    "@omadia/plugin-api": ">=1.55.0"
+    "@omadia/plugin-api": ">=1.60.0"
   },
   "devDependencies": {
     "@omadia/plugin-api": "file:../odoo-bot/middleware/packages/plugin-api",

@@ -19,8 +19,8 @@ const root = process.cwd();
 const manifest = readFileSync(join(root, 'manifest.yaml'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name: string; version: string; peerDependencies: Record<string, string> };
 const zipPath = join(root, 'out', `${pkg.name.replace(/^@/, '').replace(/\//g, '-')}-${pkg.version}.zip`);
-/** The lowest host contract the engine runs on (`isSubscribed` of 1.56 is feature-detected). */
-const FLOOR = '1.55.0';
+/** The lowest host contract the plugin runs on: the first kernel that knows the manifest kind `archetype`. */
+const FLOOR = '1.60.0';
 const FILE = 0o100644;
 
 let entries: ZipEntry[] = [];
