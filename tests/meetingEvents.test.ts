@@ -43,7 +43,8 @@ test('a meeting that starts in a moderated chat opens a session with a fresh sna
   assert.equal(live?.meetingRef, 'meeting-7');
   assert.equal(live?.modality, 'online');
   assert.deepEqual((live?.capabilitySnapshot as { inputs: string[] }).inputs, ['text', 'card_answers']);
-  assert.match(posts(conv).at(-1) ?? '', /^A meeting is running in this conversation now\.\nWhat I perceive here: I read the chat, the polls\./);
+  // One line, and only because the meeting offers something the chat did not.
+  assert.equal(posts(conv).at(-1), 'A meeting is running in this conversation. In it I also perceive: the polls.');
   assert.ok(!posts(conv).some((p) => p.startsWith('Agenda for')), 'no agenda mail-out for a meeting nobody scheduled here');
   assert.equal((await currentSession(h.db.pool, (await h.facilitation(conv)).id))?.id, live?.id);
 
@@ -106,4 +107,77 @@ test('no session stays open when its facilitation has ended', { skip: PG_SKIP },
   await h.kernel.sessionEvent('mira', aborted, 'meeting-10', 'session_started');
   await h.settle();
   assert.equal((await sessionsOf(aborted)).length, 1);
+});
+
+// 1.1.2: the facilitator states what it perceives; it does not narrate meetings.
+test('a meeting that offers what the chat offers starts and ends without a word', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('me-silent', [ANNA, BERT]);
+  h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls']);
+  h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls'], { sessionRef: 'meeting-20', modality: 'online' });
+  await tool(conv, 'facilitation_start', TALK);
+  const count = posts(conv).length;
+  await h.kernel.sessionEvent('mira', conv, 'meeting-20', 'session_started');
+  await h.settle();
+  assert.equal(posts(conv).length, count, 'nothing is posted');
+  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'running'], ['live', 'running']], 'the session is on record all the same');
+  await h.kernel.sessionEvent('mira', conv, 'meeting-20', 'session_ended');
+  await h.settle();
+  assert.equal(posts(conv).length, count);
+  assert.deepEqual((await sessionsOf(conv)).map((s) => [s.kind, s.status]).sort(), [['async', 'running'], ['live', 'ended']]);
+
+  // What the meeting takes away is said as well, in the same single line.
+  const less = h.kernel.conversation('me-less', [ANNA, BERT]);
+  h.kernel.capabilities(less, ['text', 'message_edits', 'card_answers'], ['text', 'polls']);
+  h.kernel.capabilities(less, ['text', 'card_answers', 'presence'], ['text', 'polls'], { sessionRef: 'meeting-21', modality: 'online' });
+  await tool(less, 'facilitation_start', TALK);
+  await h.kernel.sessionEvent('mira', less, 'meeting-21', 'session_started');
+  await h.settle();
+  assert.equal(posts(less).at(-1), 'A meeting is running in this conversation. In it I also perceive: who joins and leaves. I no longer perceive: edited messages.');
+});
+
+test('a facilitation that starts while a meeting already runs knows the meeting from the start', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('me-already', [ANNA, BERT]);
+  // The conversation's own snapshot says that a meeting is on.
+  h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls'], { modality: 'online' });
+  await tool(conv, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
+  const rows = await sessionsOf(conv);
+  assert.deepEqual(rows.map((s) => [s.kind, s.status, s.modality]).sort(), [['async', 'running', 'chat'], ['live', 'running', 'online']]);
+  assert.equal(h.kernel.groupPosts(conv).filter((p) => p.poll !== undefined).length, 1, 'the vote uses what the meeting offers');
+  assert.ok(!posts(conv).some((p) => /A meeting is running/.test(p)), 'the handshake says what is perceived; no extra line');
+  // The start event for that meeting arrives late: it is the same session.
+  const count = posts(conv).length;
+  await h.kernel.sessionEvent('mira', conv, 'meeting-30', 'session_started');
+  await h.settle();
+  assert.equal((await sessionsOf(conv)).filter((s) => s.kind === 'live').length, 1);
+  assert.equal((await sessionsOf(conv)).find((s) => s.kind === 'live')?.meetingRef, 'meeting-30');
+  assert.equal(posts(conv).length, count);
+  await h.kernel.sessionEvent('mira', conv, 'meeting-30', 'session_ended');
+  await h.settle();
+  assert.equal((await sessionsOf(conv)).find((s) => s.kind === 'live')?.status, 'ended');
+
+  // A plain chat has no live session.
+  const chat = h.kernel.conversation('me-chat', [ANNA, BERT]);
+  h.kernel.capabilities(chat, ['text'], ['text']);
+  await tool(chat, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
+  assert.deepEqual((await sessionsOf(chat)).map((s) => s.kind), ['async']);
+});
+
+test('the one-time cleanup ends the sessions that facilitations before 1.1.1 left running', { skip: PG_SKIP }, async () => {
+  const { readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { MIGRATIONS_DIR } = await import('./pg.js');
+  const ended = h.kernel.conversation('me-cleanup-ended', [ANNA, BERT]);
+  await tool(ended, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
+  await say(ended, 'anna', 'stop');
+  const running = h.kernel.conversation('me-cleanup-live', [ANNA, BERT]);
+  await tool(running, 'facilitation_start', { goal: 'Pick', method: 'single', options: ['Alpha', 'Bravo'], open: true });
+  const f = await h.facilitation(ended);
+  // As 1.1.0 and older left it.
+  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'running', ended_at = NULL WHERE facilitation_id = $1`, [f.id]);
+  await h.db.pool.query(`INSERT INTO plg_omadia_agent_facilitator_sessions (facilitation_id, kind, modality, status, created_at) VALUES ($1, 'live', 'online', 'scheduled', now())`, [f.id]);
+  await h.db.pool.query(readFileSync(join(MIGRATIONS_DIR, '0004_close_left_sessions.sql'), 'utf8'));
+  const rows = await sessionsOf(ended);
+  assert.deepEqual(rows.map((s) => [s.kind, s.status]).sort(), [['async', 'ended'], ['live', 'cancelled']]);
+  assert.equal(rows.find((s) => s.kind === 'async')?.endedAt?.getTime(), f.closedAt?.getTime(), 'ended when its facilitation ended');
+  assert.deepEqual((await sessionsOf(running)).map((s) => [s.kind, s.status]), [['async', 'running']], 'a facilitation that is going on is not touched');
 });

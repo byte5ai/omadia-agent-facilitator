@@ -362,8 +362,8 @@ export const de: Texts = {
   sessionAgenda: (title, when, agenda) =>
     [`Agenda für "${title}" am ${when}:`, ...agenda, 'Themen und Unterlagen, die ihr einbringen wollt: schreibt sie vorab hier hinein, ein Punkt pro Nachricht.'].join('\n'),
   sessionStarted: (title, until, perception) => [`"${title}" beginnt jetzt.${until ? ` Wir haben Zeit bis ${until}.` : ''}`, perception].join('\n'),
-  meetingStarted: (perception) => ['In dieser Unterhaltung läuft jetzt ein Meeting.', perception].join('\n'),
-  meetingEnded: () => 'Das Meeting ist beendet. Was noch offen ist, geht hier im Chat weiter.',
+  meetingDiffers: (gained, lost) =>
+    ['In dieser Unterhaltung läuft ein Meeting.', ...(gained.length > 0 ? [`Darin nehme ich zusätzlich wahr: ${gained.join(', ')}.`] : []), ...(lost.length > 0 ? [`Nicht mehr wahr nehme ich: ${lost.join(', ')}.`] : [])].join(' '),
   sessionEnded: (title) => `"${title}" ist beendet. Was noch offen ist, geht hier im Chat weiter.`,
   timeNotice: (title, minutes) => `Zeit-Check: noch ${String(minutes)} Minuten für "${title}".`,
   speakingOrder: (names, remoteFirst) =>
