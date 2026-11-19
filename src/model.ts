@@ -56,6 +56,9 @@ export interface FollowupPolicy {
   leadHours: number;
   /** ISO time at which the status of the action items is posted to the group. */
   statusAt?: string;
+  /** The facilitation was set up so that the closing protocol also goes out
+   *  by mail (the request asked for it). */
+  protocolMail?: boolean;
   /** A follow-up meeting the group agreed on; scheduled after the close. */
   meeting?: FollowupMeetingPlan;
 }

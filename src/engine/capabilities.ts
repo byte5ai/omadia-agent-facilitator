@@ -239,6 +239,11 @@ const protocolMail: ExternalJob = async (engine, job) => {
     if (outcome.ok && claim.state === 'go') say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), claim.plan.recipients.length));
     else if (!outcome.ok && outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
     else if (!outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[outcome.code]));
+    // What became of the mail, per recipient. "Sent" is said of nobody the
+    // integration did not confirm.
+    const recipients = claim.state === 'go' ? claim.plan.recipients : uniqueMail((await peopleOf(w)).participants.map((p) => p.email));
+    const each = outcome.ok ? 'sent' : outcome.code === 'unknown_outcome' ? 'unknown' : 'not_sent';
+    await w.event('protocol_mail', 'engine', { outcome: outcome.ok ? 'sent' : outcome.code, recipients: recipients.map((address) => ({ address, outcome: each })) });
     await finishJob(w, job, outcome.ok ? { outcome: 'sent' } : { outcome: outcome.code });
   });
 };
@@ -418,7 +423,9 @@ export function installCapabilities(): void {
 
     // Scheduled even when no address is known yet: the job reads the member
     // list again, and says so when there is still nobody to mail to.
-    if (w.config.protocolMailEnabled) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
+    // By mail when the facilitation was set up for it, or the operator
+    // switched it on for every facilitation.
+    if (w.f.followupPolicy.protocolMail === true || w.config.protocolMailEnabled) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
     if (w.f.followupPolicy.meeting) await scheduleJob(w, 'followup_meeting', 'once', w.now, {});
     // With action items the grant ends with their follow-up; otherwise after
     // a fixed time.

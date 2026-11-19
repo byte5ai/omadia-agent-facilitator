@@ -286,6 +286,8 @@ export const en = {
      *  deadline when that is why, `null` when the group wants none. */
     noReminders?: number | null;
     followUp: boolean;
+    /** The protocol also goes out by mail after the close. */
+    protocolMail: boolean;
     changeWindowHours: number;
     perception?: string;
     notes: string[];
@@ -309,6 +311,7 @@ export const en = {
       h.followUp
         ? 'Action items: I remind each owner before the due date and stop when everything is done or past due.'
         : 'Action items: no follow-up after the close, unless you ask for it.',
+      ...(h.protocolMail ? ['Protocol: after the close it also goes by mail to the participants whose address the channel knows.'] : []),
       `Changes: anyone can propose to change the definition of done, the method or the deadline. A change holds when nobody objects within ${String(h.changeWindowHours)} hours (never past the deadline), and I announce it with its new version.`,
       ...(h.perception ? [h.perception] : []),
       ...h.notes,
