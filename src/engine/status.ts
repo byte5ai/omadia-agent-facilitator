@@ -64,7 +64,33 @@ export function tallyOf(f: Facilitation, participation: Participation, hasOpenPr
   return undefined;
 }
 
+/** The status once a facilitation has ended: what it reached, who took part
+ *  in reaching it, and the action items with their owners. */
+async function statusAfterClose(q: Queryable, f: Facilitation): Promise<string> {
+  const t = texts(f.language);
+  const participants = await store.listParticipants(q, f.id);
+  const name = (principal: string): string => participants.find((p) => p.principalId === principal)?.displayName ?? principal;
+  // Everybody whose contribution counted, over all steps: the step that was
+  // open when it ended is not what the question is about any more.
+  const counted = new Set((await store.listContributions(q, f.id)).filter((c) => c.status === 'valid').map((c) => c.participantPrincipal));
+  const items = (await store.listActionItems(q, f.id)).filter((a) => a.status !== 'declined');
+  // Taking on an action item is a contribution as well.
+  for (const item of items) if (item.status === 'confirmed' || item.status === 'done') counted.add(item.ownerPrincipal);
+  const decisions = Array.isArray(f.result?.['decisions']) ? (f.result['decisions'] as unknown[]).filter((d): d is string => typeof d === 'string') : [];
+  return t.statusAfterClose({
+    phase: t.phase[lifecycleOf(f)],
+    goal: f.goal,
+    ...(f.phase === 'aborted' && f.closeReason ? { reason: f.closeReason } : {}),
+    decisions,
+    contributed: participants.filter((p) => counted.has(p.principalId)).map((p) => p.displayName),
+    actions: items.map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), formatWhen(a.dueDate, f.timezone, f.language), t.actionStatusWords[a.status])),
+    open: items.filter((a) => a.status === 'confirmed').length,
+    ...(f.followupState === 'active' && f.followupEndsAt ? { until: formatWhen(f.followupEndsAt, f.timezone, f.language) } : {}),
+  });
+}
+
 export async function statusText(q: Queryable, f: Facilitation): Promise<string> {
+  if (f.phase === 'closed' || f.phase === 'aborted') return statusAfterClose(q, f);
   const t = texts(f.language);
   const participation = await participationOf(q, f);
   const dod = await store.currentDod(q, f.id);
