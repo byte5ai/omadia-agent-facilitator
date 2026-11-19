@@ -447,6 +447,9 @@ export const en = {
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
   protocolSent: (channel: number, mail: number): string =>
     `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}` : ''}.`,
+  /** Nobody to mail to. With the protocol when the group does not have it yet. */
+  protocolMailNoAddresses: (protocol: string | undefined): string =>
+    `I cannot mail the protocol: this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat. ${protocol === undefined ? 'The protocol is in this group.' : `Here it is instead:\n\n${protocol}`}`,
   protocolMailUnavailable: (reason: string): string => `The protocol could not be mailed (${reason}). It is in this group, and participants got it privately where I can reach them.`,
   followupCreated: (subject: string, when: string, link: boolean, unknown: number): string =>
     `Follow-up meeting "${subject}" is in the calendars for ${when}.${link ? '' : ' The invitation went out without a meeting link.'}${unknown > 0 ? ` For ${String(unknown)} ${unknown === 1 ? 'person' : 'people'} I could not see availability, so please check the time.` : ''}`,
@@ -461,7 +464,7 @@ export const en = {
     provider_error: 'the calendar service reported an error',
     grant_revoked: 'the follow-up of this facilitation has ended',
     unknown_outcome: 'the service did not answer',
-    no_addresses: 'I have no mail addresses for the participants',
+    no_addresses: 'this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat',
   },
   invitationBody: (goal: string, summary: string): string => `Follow-up to "${goal}".\n\n${summary}`,
 

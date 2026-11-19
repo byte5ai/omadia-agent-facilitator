@@ -2,7 +2,8 @@
 // meeting. Both are agreed by the group before anything is sent or read.
 
 import type { StakeholderRole } from '../model.js';
-import { proposeFollowupMeeting, proposeStakeholder } from '../engine/capabilities.js';
+import * as store from '../db/store.js';
+import { proposeFollowupMeeting, proposeStakeholder, refreshAddresses } from '../engine/capabilities.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
@@ -60,9 +61,24 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
         const duration = optionalNumber(args, 'durationMinutes');
         if (!from || !to) throw new Refusal('bad_input', 'earliest and latest must be ISO 8601 date-times with an offset.');
         if (!duration || duration < 15 || duration > 480) throw new Refusal('bad_input', 'durationMinutes must be between 15 and 480.');
+        // Free/busy and the invitation go by mail address, and addresses come
+        // from the channel's member list only.
+        const addresses = await refreshAddresses(engine.core, f.id);
+        const invited = (await store.listStakeholders(engine.core.pool(), f.id)).filter((s) => s.confirmed && s.role === 'invited_to_followups' && s.address).length;
+        if (addresses.withAddress + invited === 0) {
+          throw new Refusal(
+            'no_addresses',
+            'This channel does not provide the mail addresses of the participants, so I can neither look for a common free time nor send an invitation. Tell the group exactly that, and that they can set the meeting up themselves. Do not ask anybody for an address: addresses are never collected in the chat. Nothing was put to the group.',
+          );
+        }
+        const total = addresses.withAddress + addresses.without;
+        const partial =
+          addresses.without > 0
+            ? ` ${String(addresses.without)} of ${String(total)} participants ${addresses.without === 1 ? 'has' : 'have'} no mail address here and will not get the invitation; say so, without naming anybody and without asking for addresses.`
+            : '';
         return engine.core.work(f.id, async (w) => {
           await proposeFollowupMeeting(w, { subject: requiredString(args, 'subject'), durationMinutes: duration, from: from.toISOString(), to: to.toISOString(), online: args['online'] !== false });
-          return 'Put to the group. If nobody objects, it is scheduled after the close and the group is told the time. Do not schedule or announce anything yourself.';
+          return `Put to the group. If nobody objects, it is scheduled after the close and the group is told the time. Do not schedule or announce anything yourself.${partial}`;
         });
       },
     ),

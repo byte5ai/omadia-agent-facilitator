@@ -382,6 +382,8 @@ export const de: Texts = {
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
   protocolSent: (channel, mail) =>
     `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}` : ''}.`,
+  protocolMailNoAddresses: (protocol) =>
+    `Ich kann das Protokoll nicht mailen: Dieser Kanal liefert mir keine Mail-Adressen der Teilnehmenden, und im Chat sammle ich keine Adressen ein. ${protocol === undefined ? 'Das Protokoll steht in dieser Gruppe.' : `Hier ist es stattdessen:\n\n${protocol}`}`,
   protocolMailUnavailable: (reason) => `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe, und die Teilnehmenden haben es privat erhalten, wo ich sie erreiche.`,
   followupCreated: (subject, when, link, unknown) =>
     `Der Folgetermin "${subject}" steht für ${when} in den Kalendern.${link ? '' : ' Die Einladung ging ohne Meeting-Link raus.'}${unknown > 0 ? ` Für ${String(unknown)} ${unknown === 1 ? 'Person' : 'Personen'} konnte ich keine Verfügbarkeit sehen, prüft die Zeit bitte.` : ''}`,
@@ -396,7 +398,7 @@ export const de: Texts = {
     provider_error: 'der Kalenderdienst hat einen Fehler gemeldet',
     grant_revoked: 'die Nachverfolgung dieser Moderation ist beendet',
     unknown_outcome: 'der Dienst hat nicht geantwortet',
-    no_addresses: 'ich habe keine Mail-Adressen der Teilnehmenden',
+    no_addresses: 'dieser Kanal liefert mir keine Mail-Adressen der Teilnehmenden, und im Chat sammle ich keine Adressen ein',
   },
   invitationBody: (goal, summary) => `Folgetermin zu "${goal}".\n\n${summary}`,
 

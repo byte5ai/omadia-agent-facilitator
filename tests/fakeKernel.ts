@@ -211,7 +211,9 @@ export class FakeKernel {
   conversation(id: string, members: FakeUser[], opts: { partialRoster?: boolean; noRoster?: boolean } = {}): string {
     this.members.set(id, [...members]);
     if (opts.partialRoster) this.partialRosters.add(id);
+    // Registering a conversation again says what the channel can do now.
     if (opts.noRoster) this.noRosters.add(id);
+    else this.noRosters.delete(id);
     return id;
   }
 
