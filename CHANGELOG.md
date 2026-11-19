@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.4
+
+Finding O1 of the rollout: during a vote a participant asked which options
+there are, and the facilitator answered that its state holds only the goal.
+
+This was not a regression of the move to `agentTurn@2`: the state a turn gets
+has never held the question or the options of a step, only its title and who
+contributed.
+
+### Fixed
+
+- **A turn knows what is asked.** The state of a turn now holds, for the open
+  step, the question, how it is decided (and the round of a runoff), every
+  option with its key (`A = Samstag, B = Sonntag`), until when the step is
+  open where it has its own end, and how the group was told to answer. A rule
+  of the turn says to answer questions about it from that state.
+- **Before the opening** the same is stated for what is set up to be asked.
+- **The status lists the options** with their keys, above the tally
+  (`Options: …` / `Optionen: …`), in a step that has options.
+
 ## 1.5.3
 
 For a kernel without the first majors of the message, turn and send services

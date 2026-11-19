@@ -366,9 +366,9 @@ test('9. several facilitators: two facilitators in two chats and one facilitator
   await say(two, 'bert', 'B');
   await say(one, 'bert', 'C');
   await say(three, 'bert', 'C');
-  assert.match(await status(one), /Goal: Venue for the summer party\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nProvisional tally: Harbour 3, Old Town 2, Castle Hill 3/);
-  assert.match(await status(two), /Goal: Name of the new product\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nProvisional tally: Nova 1, Atlas 1/);
-  assert.match(await tool(three, 'facilitation_status', {}, 'jonas'), /Goal: Budget round\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nProvisional tally: Tools 1, Travel 0, Training 2/);
+  assert.match(await status(one), /Goal: Venue for the summer party\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Harbour 3, Old Town 2, Castle Hill 3/);
+  assert.match(await status(two), /Goal: Name of the new product\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Nova 1, Atlas 1/);
+  assert.match(await tool(three, 'facilitation_status', {}, 'jonas'), /Goal: Budget round\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Tools 1, Travel 0, Training 2/);
 
   // Every post comes from the right bot.
   assert.ok(h.kernel.groupPosts(one).every((p) => p.as === 'mira') && h.kernel.groupPosts(two).every((p) => p.as === 'mira'));

@@ -10,10 +10,11 @@ import type { ConversationMessageRecord, ScopedAgentTurnOutcome } from '@omadia/
 
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
-import type { Facilitation } from '../model.js';
+import type { Facilitation, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { isSilent } from './guard.js';
+import { rulesOf } from './lifecycle.js';
 import { playbook } from './playbook.js';
 import { recordRefusal } from './refusals.js';
 import { TURN_MODEL_CALLS, scopeForAction } from './scopes.js';
@@ -30,6 +31,29 @@ export function registerContextSection(section: ContextSection): void {
   if (!sections.includes(section)) sections.push(section);
 }
 
+/** What is asked in a step: the question, how it is decided, every option
+ *  with its key, until when, and how the group was told to answer. Without
+ *  it the facilitator cannot say what the vote is about. */
+function questionLines(f: Facilitation, step: Step, heading: string): string[] {
+  if (!step.method) return [];
+  const options = step.roundOptions ?? step.options;
+  const until = step.roundDeadline ?? step.timeboxEndsAt;
+  const statement = step.methodConfig['statement'];
+  return [
+    `${heading}: "${step.method === 'consent' && typeof statement === 'string' && statement !== '' ? statement : step.title}" (decided by: ${step.method}${step.round > 1 ? `, round ${String(step.round)}` : ''})`,
+    ...(options.length > 0 ? [`Options, each with its key: ${options.map((o) => `${o.key} = ${o.label}`).join(', ')}`] : []),
+    ...(until ? [`This step is open until: ${formatWhen(until, f.timezone, 'en')}`] : []),
+    ...rulesOf(f, step).map((rule, i) => (i === 0 ? `How the group was told to answer: ${rule}` : rule)),
+  ];
+}
+
+/** Before the opening no step is open; what will be asked is set up already. */
+async function plannedQuestion(q: Queryable, f: Facilitation): Promise<string[]> {
+  if (f.phase !== 'configuring') return [];
+  const planned = (await store.listSteps(q, f.id)).find((s) => s.status !== 'closed' && s.method !== null);
+  return planned ? questionLines(f, planned, 'Set up to be asked once opened') : [];
+}
+
 export async function buildEngineContext(q: Queryable, f: Facilitation): Promise<string> {
   const dod = await store.currentDod(q, f.id);
   const participation = await participationOf(q, f);
@@ -43,10 +67,11 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
     ...(participation.step
       ? [
           `Open step: "${participation.step.title}" (${participation.step.kind})`,
+          ...questionLines(f, participation.step, 'Asked in the open step'),
           `Contributed to it: ${participation.contributed.map((p) => p.displayName).join(', ') || 'nobody yet'}`,
           `Not yet: ${participation.missing.map((p) => p.displayName).join(', ') || 'nobody'}`,
         ]
-      : []),
+      : await plannedQuestion(q, f)),
   ];
   for (const section of sections) {
     const text = await section(q, f);
@@ -61,6 +86,7 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
     '- To record what a person said, call facilitation_record_contribution with the message id from the input. It records it for the AUTHOR of that message only and asks them to confirm; it does not count before they did. You cannot record anything for somebody else.',
     '- If a message is unclear, call facilitation_clarify once for that message.',
     '- Never name in the group who has not contributed.',
+    '- When somebody asks what is being decided, which options there are or how to answer, say it from the state above: the question and every option with its key, as listed there. Never answer that you do not know them while they are listed.',
     `- If nothing needs to be said, answer exactly ${SILENT}. Your answer is posted to the group as it is, unless a tool you called in this turn already posted there: then your answer is not posted.`,
   );
   return lines.join('\n');

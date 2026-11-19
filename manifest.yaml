@@ -31,7 +31,7 @@ identity:
   kind: "archetype"
   domain: "facilitation"
   name: "Facilitator archetype"
-  version: "1.5.3"
+  version: "1.5.4"
   description:
     en: "Delivers the archetype facilitator, an impartial moderator of group processes, and runs its facilitations: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Liefert den Archetyp Facilitator, einen unparteiischen Moderator von Gruppenprozessen, und führt seine Moderationen: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."

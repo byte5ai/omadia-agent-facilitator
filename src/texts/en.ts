@@ -355,6 +355,8 @@ export const en = {
     definitionOfDone: string;
     contributed: string[];
     missing: string[];
+    /** What can be chosen in the open step, each option with its key. */
+    options?: string;
     tally?: string;
     provisional: boolean;
     proposal?: string;
@@ -366,6 +368,7 @@ export const en = {
       `Definition of done (version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
       `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody yet'}`,
       `Still open: ${s.missing.length > 0 ? s.missing.join(', ') : 'nobody'}`,
+      ...(s.options ? [`Options: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Provisional tally' : 'Tally'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Open proposal: ${s.proposal}`] : []),
       s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: none',
