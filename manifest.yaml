@@ -23,7 +23,7 @@ identity:
   kind: "extension"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "1.1.0"
+  version: "1.1.1"
   description:
     en: "Facilitation engine for native facilitators: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Facilitation-Engine für native Facilitatoren: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
