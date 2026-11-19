@@ -17,6 +17,7 @@ import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
 import { lifetimeEnd } from './lifetime.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
+import { askedOffsets, reminderOffsetsFor } from './reminders.js';
 import { buildRoll, effectiveCloseRule, expectedNames } from './roll.js';
 import type { Roll } from './roll.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
@@ -58,6 +59,9 @@ export interface ConfigureInput extends ConversationRef {
   language?: 'de' | 'en';
   closeRule?: CloseRule;
   reminderOffsetsHours?: number[];
+  /** Reminders the request asked for: minutes before the deadline, an empty
+   *  list for none. Validated here, against the deadline. */
+  reminderMinutesBefore?: unknown;
   /** The decision the facilitation is about, when it is one vote. */
   decision?: DecisionSetup;
   /** An agenda of its own instead of the format's template. */
@@ -307,6 +311,11 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   }
 
   const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
+  // Reminders somebody asked for are kept as asked; the others follow from
+  // the time to the deadline, so that none is announced that cannot happen.
+  const askedHours =
+    input.reminderMinutesBefore !== undefined ? askedOffsets(input.reminderMinutesBefore, deadline ?? existing?.deadline, now) : input.reminderOffsetsHours ? [...input.reminderOffsetsHours].sort((a, b) => b - a) : undefined;
+  const derivedHours = deadline ? reminderOffsetsFor(deadline.getTime() - now.getTime(), config.reminderOffsetsHours) : undefined;
   // The handshake states both the definition of done and when the engine
   // evaluates. The two must not say opposite things.
   if ((input.closeRule ?? existing?.closeRule) === 'at_deadline' && input.definitionOfDone !== undefined && DONE_WHEN_ALL.test(input.definitionOfDone)) {
@@ -364,7 +373,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         // The rule that only the missing list had forced goes with it.
         ...(forced ? { closeRule: forced } : roll && existing.settings.openRoster === true ? { closeRule: 'all_contributed' as const } : {}),
         ...(roll ? { settings } : {}),
-        ...(input.reminderOffsetsHours ? { reminderPolicy: { offsetsHours: [...input.reminderOffsetsHours].sort((a, b) => b - a) } } : {}),
+        ...(askedHours ? { reminderPolicy: { offsetsHours: askedHours, asked: true } } : derivedHours && existing.reminderPolicy.asked !== true ? { reminderPolicy: { offsetsHours: derivedHours } } : {}),
         ...(input.followUp !== undefined || statusAt
           ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) } }
           : {}),
@@ -453,7 +462,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         language,
         timezone: input.timezone ?? config.timezone,
         closeRule,
-        reminderPolicy: { offsetsHours: [...(input.reminderOffsetsHours ?? config.reminderOffsetsHours)].sort((a, b) => b - a) },
+        reminderPolicy: askedHours ? { offsetsHours: askedHours, asked: true } : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a) },
         followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) },
         settings: {
           changeWindowHours: config.changeWindowHours,

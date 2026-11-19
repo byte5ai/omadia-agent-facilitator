@@ -44,6 +44,8 @@ export interface StepOption {
 
 export interface ReminderPolicy {
   offsetsHours: number[];
+  /** The group asked for these; otherwise they follow from the deadline. */
+  asked?: boolean;
 }
 
 export interface FollowupPolicy {

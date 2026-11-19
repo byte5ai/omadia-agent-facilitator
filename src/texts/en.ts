@@ -263,6 +263,9 @@ export const en = {
     atDeadlineOnly: boolean;
     deadline?: string;
     reminders?: string;
+    /** There is a deadline and no reminder will be sent: the minutes to the
+     *  deadline when that is why, `null` when the group wants none. */
+    noReminders?: number | null;
     followUp: boolean;
     changeWindowHours: number;
     perception?: string;
@@ -283,6 +286,7 @@ export const en = {
       ...(h.atDeadlineOnly ? ['I cannot see who belongs to this conversation, so I cannot tell when everybody has voted. I evaluate at the deadline.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
       ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
+      ...(h.noReminders !== undefined ? [h.noReminders === null ? 'Reminders: none.' : `Reminders: none, the deadline is in ${String(h.noReminders)} minute${h.noReminders === 1 ? '' : 's'}.`] : []),
       h.followUp
         ? 'Action items: I remind each owner before the due date and stop when everything is done or past due.'
         : 'Action items: no follow-up after the close, unless you ask for it.',
@@ -294,7 +298,9 @@ export const en = {
         : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.',
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
-  reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),
+  reminderTimes: (hours: readonly number[]): string =>
+    // Whole hours in hours, everything else in minutes.
+    hours.map((h) => (Number.isInteger(h) ? `${String(h)} h` : `${String(Math.max(1, Math.round(h * 60)))} min`)).join(', '),
 
   status: (s: {
     phase: string;
@@ -331,6 +337,7 @@ export const en = {
     close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
       rule === 'at_deadline' ? 'evaluate at the deadline instead of when everybody has contributed' : 'evaluate as soon as everybody has contributed instead of at the deadline',
     method: (title: string, rules: string): string => `change how "${title}" is decided. ${rules}`,
+    reminders: (times: string): string => (times === '' ? 'send no reminders before the deadline' : `remind ${times} before the deadline`),
     dod_met: (summary: string): string => `the definition of done is met, and we close with this:\n${summary}`,
   },
   changed: {
@@ -339,6 +346,7 @@ export const en = {
     close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
       rule === 'at_deadline' ? 'From now on the result is evaluated at the deadline.' : 'From now on the result is evaluated as soon as everybody has contributed.',
     method: (title: string, rules: string): string => `"${title}" is now decided like this. ${rules}`,
+    reminders: (times: string): string => (times === '' ? 'No reminders are sent before the deadline any more.' : `Reminders are now sent ${times} before the deadline.`),
   },
   actAgain: (names: string): string => `Contributions made under the old rules no longer fit. Please contribute again: ${names}.`,
 

@@ -238,6 +238,7 @@ export const de: Texts = {
       ...(h.atDeadlineOnly ? ['Ich sehe nicht, wer alles zu dieser Unterhaltung gehört, und kann deshalb nicht erkennen, wann alle abgestimmt haben. Ich werte zur Deadline aus.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: keine vereinbart',
       ...(h.reminders ? [`Erinnerungen: ${h.reminders} vor der Deadline, nur solange Beiträge offen sind; in der Gruppe ohne Namen und privat an die Betroffenen, wo ich sie erreiche.`] : []),
+      ...(h.noReminders !== undefined ? [h.noReminders === null ? 'Erinnerungen: keine.' : `Erinnerungen: keine, die Deadline ist in ${String(h.noReminders)} ${h.noReminders === 1 ? 'Minute' : 'Minuten'}.`] : []),
       h.followUp
         ? 'Aufgaben: Ich erinnere die Verantwortlichen vor der Fälligkeit und höre auf, wenn alles erledigt oder überfällig ist.'
         : 'Aufgaben: keine Nachverfolgung nach dem Abschluss, außer ihr wünscht sie.',
@@ -249,7 +250,9 @@ export const de: Texts = {
         : 'Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an die Person, die diese Moderation gestartet hat. Sie erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.',
       'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
     ].join('\n'),
-  reminderTimes: (hours) => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} Min.` : `${String(h)} Std.`)).join(', '),
+  reminderTimes: (hours) =>
+    // Whole hours in hours, everything else in minutes.
+    hours.map((h) => (Number.isInteger(h) ? `${String(h)} Std.` : `${String(Math.max(1, Math.round(h * 60)))} Min.`)).join(', '),
 
   status: (s) =>
     [
@@ -273,6 +276,7 @@ export const de: Texts = {
     close_rule: (rule) =>
       rule === 'at_deadline' ? 'zur Deadline auswerten statt sobald alle beigetragen haben' : 'auswerten, sobald alle beigetragen haben, statt zur Deadline',
     method: (title, rules) => `ändern, wie "${title}" entschieden wird. ${rules}`,
+    reminders: (times) => (times === '' ? 'vor der Deadline nicht mehr erinnern' : `${times} vor der Deadline erinnern`),
     dod_met: (summary) => `die Definition of Done ist erfüllt, und wir schließen damit ab:\n${summary}`,
   },
   changed: {
@@ -281,6 +285,7 @@ export const de: Texts = {
     close_rule: (rule) =>
       rule === 'at_deadline' ? 'Ab jetzt wird das Ergebnis zur Deadline ausgewertet.' : 'Ab jetzt wird ausgewertet, sobald alle beigetragen haben.',
     method: (title, rules) => `"${title}" wird jetzt so entschieden. ${rules}`,
+    reminders: (times) => (times === '' ? 'Vor der Deadline wird nicht mehr erinnert.' : `Erinnert wird jetzt ${times} vor der Deadline.`),
   },
   actAgain: (names) => `Beiträge nach den alten Regeln passen nicht mehr. Bitte tragt noch einmal bei: ${names}.`,
 

@@ -7,6 +7,7 @@ import { principalKey } from '../kernel.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
+import { askedOffsets } from '../engine/reminders.js';
 import { proposeChange, proposeDodMet } from '../engine/transparency.js';
 import type { ChangeRequest } from '../engine/transparency.js';
 import { toOptions } from '../methods/ballot.js';
@@ -15,7 +16,7 @@ import { defineTool, liveFacilitation, numberList, oneOf, optionalNumber, option
 import type { ToolDefinition } from './toolkit.js';
 
 const METHODS: readonly MethodId[] = ['ranked', 'single', 'approval', 'consent', 'assignment'];
-const CHANGES = ['definition_of_done', 'deadline', 'close_rule', 'method'] as const;
+const CHANGES = ['definition_of_done', 'deadline', 'close_rule', 'reminders', 'method'] as const;
 
 export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
@@ -24,13 +25,14 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
       {
         name: 'facilitation_propose_change',
         description:
-          'Put a change of the RULES to the group when somebody proposes one: the definition of done, the deadline, the close rule, or the method of a step that is decided by a vote. This is not how the group moves on: to close the open step, skip ahead or go to the vote, use facilitation_step. Anyone may propose: when a participant proposes a change, pass it on with this tool in the same turn; do not question it, do not decide it yourself and do not answer it from memory. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
+          'Put a change of the RULES to the group when somebody proposes one: the definition of done, the deadline, the close rule, the reminders, or the method of a step that is decided by a vote. This is not how the group moves on: to close the open step, skip ahead or go to the vote, use facilitation_step. Anyone may propose: when a participant proposes a change, pass it on with this tool in the same turn; do not question it, do not decide it yourself and do not answer it from memory. It takes effect when no active participant objects within the window announced at the start (never past the deadline); the engine announces the outcome with the new version. Pass the message id of the person who proposed it.',
         properties: {
           change: { type: 'string', enum: [...CHANGES] },
           messageId: { type: 'string', description: 'The message in which a participant proposed the change (from the turn input).' },
           definitionOfDone: { type: 'string', description: 'For definition_of_done: the new wording.' },
           deadline: { type: 'string', description: 'For deadline: ISO 8601 with offset.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'] },
+          reminderMinutesBefore: { type: 'array', items: { type: 'number' }, description: 'For reminders: when to remind, in minutes before the deadline (e.g. [1440, 120]); an empty list for no reminders.' },
           step: { type: 'number', description: 'For method: position of the step that is decided by a vote (never a collecting or discussing step). Default: the open one.' },
           method: { type: 'string', enum: [...METHODS] },
           options: { type: 'array', items: { type: 'string' }, description: "For method: leave out to keep the step's options. Other options are accepted only with replaceOptions." },
@@ -60,6 +62,8 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
             const closeRule = oneOf(args, 'closeRule', ['all_contributed', 'at_deadline'] as const);
             if (!closeRule) throw new Refusal('bad_input', "'closeRule' is required.");
             change = { type, closeRule };
+          } else if (type === 'reminders') {
+            change = { type, offsetsHours: askedOffsets(args['reminderMinutesBefore'] ?? null, w.f.deadline, w.now) };
           } else {
             const steps = await store.listSteps(w.tx, w.f.id);
             const position = optionalNumber(args, 'step');

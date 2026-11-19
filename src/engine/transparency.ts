@@ -5,6 +5,7 @@
 // complete every time. Everything the initiator receives was said in the group
 // first.
 
+import { MINUTE_MS } from '../clock.js';
 import * as store from '../db/store.js';
 import type { CloseRule, DodVersion, MethodId, Proposal, Step, StepOption } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
@@ -14,6 +15,7 @@ import { Refusal } from './core.js';
 import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake } from './lifecycle.js';
 import { initiatorName, isPlaceholderName } from './names.js';
+import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
 import { expectedNames, listKnown } from './roll.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
@@ -40,6 +42,7 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
     notes.push(...(extra.notes ?? []));
   }
   const named = initiatorName(f, participants);
+  const upcoming = upcomingOffsets(f, w.now);
   // Every decision method that is already fixed is announced with its rules.
   const deciding = onlyStep ? [onlyStep] : steps.filter((s) => s.method !== null && (s.method === 'consent' || s.options.length > 0));
   return t.handshakeFull({
@@ -56,7 +59,11 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
     unmatched: [...expectedNames(f)],
     atDeadlineOnly: !listKnown(f) && deciding.length > 0,
     ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
-    ...(f.deadline && f.reminderPolicy.offsetsHours.length > 0 ? { reminders: t.reminderTimes(f.reminderPolicy.offsetsHours) } : {}),
+    // Only reminders that will be sent are announced.
+    ...(upcoming.length > 0 ? { reminders: t.reminderTimes(upcoming) } : {}),
+    ...(f.deadline && upcoming.length === 0
+      ? { noReminders: f.reminderPolicy.asked === true && f.reminderPolicy.offsetsHours.length === 0 ? null : Math.max(1, Math.round((f.deadline.getTime() - w.now.getTime()) / MINUTE_MS)) }
+      : {}),
     followUp: f.followupPolicy.actionItems,
     changeWindowHours: f.settings.changeWindowHours,
     ...(perception ? { perception } : {}),
@@ -85,6 +92,8 @@ export type ChangeRequest =
   | { type: 'definition_of_done'; text: string }
   | { type: 'deadline'; deadline: Date }
   | { type: 'close_rule'; closeRule: CloseRule }
+  /** Hours before the deadline; empty for no reminders. */
+  | { type: 'reminders'; offsetsHours: number[] }
   | { type: 'method'; stepId: string; method: MethodId; options: StepOption[]; points?: number[]; statement?: string };
 
 const ballotsFit = (before: Step, after: Pick<Step, 'method' | 'options'>): boolean =>
@@ -122,6 +131,8 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
       }
       return openProposal(w, { ...base, kind: 'change', summary: t.change.close_rule(change.closeRule), payload: { type: change.type, closeRule: change.closeRule } });
     }
+    case 'reminders':
+      return openProposal(w, { ...base, kind: 'change', summary: t.change.reminders(t.reminderTimes(change.offsetsHours)), payload: { type: change.type, offsetsHours: change.offsetsHours } });
     case 'method': {
       const step = await store.getStep(w.tx, change.stepId);
       if (!step || step.status === 'closed') throw new Refusal('bad_input', 'That step is not open or still to come.');
@@ -153,9 +164,17 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
     }
     case 'deadline': {
       const deadline = new Date(String(payload['deadline']));
-      await w.patch({ deadline });
+      // Reminders nobody asked for follow the new deadline.
+      await w.patch({ deadline, ...(w.f.reminderPolicy.asked === true ? {} : { reminderPolicy: { offsetsHours: reminderOffsetsFor(deadline.getTime() - w.now.getTime(), w.config.reminderOffsetsHours) } }) });
       await scheduleDeadlineJobs(w);
       announce(t.changed.deadline(formatWhen(deadline, w.f.timezone, w.f.language)));
+      return;
+    }
+    case 'reminders': {
+      const offsetsHours = (payload['offsetsHours'] as number[]).filter((h) => typeof h === 'number');
+      await w.patch({ reminderPolicy: { offsetsHours, asked: true } });
+      await scheduleDeadlineJobs(w);
+      announce(t.changed.reminders(t.reminderTimes(offsetsHours)));
       return;
     }
     case 'close_rule': {
