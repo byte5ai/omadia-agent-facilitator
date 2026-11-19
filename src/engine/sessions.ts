@@ -442,6 +442,11 @@ export function installSessions(): void {
     const snapshot = snapshotOf(session);
     if (!session || !snapshot) return undefined;
     const lines = [`# Means in this session (${session.kind === 'live' ? `meeting, ${session.modality}` : 'chat'})`, ...describeMeans(planMeans(snapshot))];
+    // A question card that is open is how people answer right now.
+    const openCard = (await store.listCards(q, f.id)).find((c) => c.state === 'open');
+    if (openCard) {
+      lines[1] = `Answers: a question card is open ("${openCard.card.title}"). People answer on the card or in the chat, and the newest answer of a person counts. Do not ask anybody to repeat an answer in the other form, and do not read the card's questions out again.`;
+    }
     if (snapshot.inputs.includes('transcribed_speech')) lines.push(`Consent to process speech: ${session.mediaConsent}.`);
     const balance = await roomBalance(q, f);
     if (balance) {

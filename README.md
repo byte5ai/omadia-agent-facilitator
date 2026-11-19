@@ -101,6 +101,17 @@ report in the group.
 Contributions count only from the group conversation. A private message to a
 facilitator is not a turn, so private reminders ask to answer in the group.
 
+## Question cards
+
+Where the channel declares question cards (Teams from 0.38.0, kernel with
+plugin-api 1.59.0), a vote, a consent, an assignment and a collecting step are
+posted as a card, and `facilitation_questionnaire` asks up to five structured
+questions on one. A chat ballot stays valid next to a card and the newest
+answer of a person wins. Without cards everything is a chat ballot as before.
+Every answer is checked against the card the engine sent; only participants
+can answer, and an answer the platform did not verify waits for its owner's
+confirmation in the group.
+
 ## Configuration
 
 All fields are optional; defaults in brackets.

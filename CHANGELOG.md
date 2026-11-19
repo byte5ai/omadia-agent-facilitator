@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+
+- **Question cards.** Where the channel declares them (kernel contract
+  byte5ai/omadia#2105, plugin-api 1.59.0; Teams from 0.38.0), a step is put to
+  the group as a card with typed answers:
+  - ranked, single-choice and approval votes, consent with a reason for an
+    objection, and assignment (one question per item, the participants as
+    candidates, volunteering allowed);
+  - a text field for a collecting step, one idea per submission;
+  - `facilitation_questionnaire`: up to five structured questions on one
+    card, read back with `facilitation_questionnaire_answers`.
+- **Per channel capability, with chat ballots as the fallback.** The engine
+  asks `conversationSend.capabilities()` and posts a card only for a kind the
+  channel lists. Without cards, without the kind, for more options than a
+  card holds, or when the channel refuses the card, the step is a chat ballot
+  exactly as before. A kernel without the contract changes nothing.
+- **Card and chat count next to each other.** Both are valid in one step and
+  the newest answer of a person wins, whichever way it came.
+
+### How an answer is checked
+
+- Every card that was sent is stored (migration `0003`). An answer is checked
+  against it: card id, proposal id and version, question, kind, every option
+  id, bounds of text and numbers. What does not fit is dropped and put on
+  record; nothing a client sends back is trusted.
+- Only a participant can answer, and only a participant can be named in an
+  assignment.
+- An answer counts at once only when the platform verified who gave it.
+  Otherwise it is recorded as unconfirmed and its owner is asked to confirm in
+  the group.
+- When a step is over its card is updated to the result. A runoff or a method
+  changed by consent posts a new version of the card and marks the old one as
+  replaced; an answer on the old card never counts.
+
+### Limits
+
+- No cards in private messages (the kernel's contract has none).
+- A questionnaire answer that is not verified is on record and not read back;
+  there is no confirmation round for it.
+- `number` and `date` questions only where the channel lists them (Teams does
+  not): ask those in the chat.
+
 ## 1.0.5
 
 ### Fixed
