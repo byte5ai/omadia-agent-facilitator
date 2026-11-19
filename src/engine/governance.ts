@@ -124,25 +124,25 @@ function requireReason(reason: string | undefined): string {
 }
 
 async function audit(engine: EngineCore, facilitationId: string, action: AccessAudit['action'], actor: string, reason: string): Promise<void> {
-  await insert<AccessAudit>(engine.pool(), 'plg_omadia_agent_facilitator_access_audit', { facilitationId, action, actor, reason, occurredAt: engine.now() });
+  await insert<AccessAudit>(engine.db(), 'plg_omadia_agent_facilitator_access_audit', { facilitationId, action, actor, reason, occurredAt: engine.now() });
 }
 
 /** Contents and protocol for an operator: audited, with a stated reason, and
  *  noted in the facilitation's own protocol. */
 export async function operatorContent(engine: EngineCore, facilitationId: string, actor: string, reason: string | undefined): Promise<{ protocol: string; goal: string }> {
   const stated = requireReason(reason);
-  const f = await store.getFacilitation(engine.pool(), facilitationId);
+  const f = await store.getFacilitation(engine.db(), facilitationId);
   if (!f) throw new Refusal('not_found', 'No such facilitation.');
   // The audit row is written before anything is returned.
   await audit(engine, f.id, 'content_read', actor, stated);
-  await store.appendEvent(engine.pool(), { facilitationId: f.id, kind: 'operator_access', actor: 'operator', occurredAt: engine.now(), payload: { reason: stated } });
-  return { protocol: await buildProtocol(engine.pool(), f), goal: f.goal };
+  await store.appendEvent(engine.db(), { facilitationId: f.id, kind: 'operator_access', actor: 'operator', occurredAt: engine.now(), payload: { reason: stated } });
+  return { protocol: await buildProtocol(engine.db(), f), goal: f.goal };
 }
 
 /** An operator ends a facilitation: audited, and reported in the group. */
 export async function operatorTerminate(engine: EngineCore, facilitationId: string, actor: string, reason: string | undefined): Promise<Facilitation> {
   const stated = requireReason(reason);
-  const f = await store.getFacilitation(engine.pool(), facilitationId);
+  const f = await store.getFacilitation(engine.db(), facilitationId);
   if (!f) throw new Refusal('not_found', 'No such facilitation.');
   if (!LIVE_PHASES.includes(f.phase)) throw new Refusal('not_live', `The facilitation is already ${f.phase}.`);
   await audit(engine, f.id, 'terminate', actor, stated);
@@ -157,7 +157,7 @@ export const listAudit = (q: Queryable, facilitationId: string): Promise<AccessA
 /** May this facilitator start another facilitation? Refuses with the system
  *  notice the facilitator passes on to the conversation. */
 export async function checkStartQuota(engine: EngineCore, facilitatorAgent: string, language: 'de' | 'en'): Promise<void> {
-  const q = engine.pool();
+  const q = engine.db();
   const { config } = engine;
   const t = texts(language).system;
   if ((await store.countByPhase(q, LIVE_PHASES, facilitatorAgent)) >= config.maxActivePerFacilitator) throw new Refusal('quota_active', t.activeQuota(config.maxActivePerFacilitator));
@@ -181,7 +181,7 @@ export const PURGE_MAX_BATCHES = 8;
 export async function purgeExpired(engine: EngineCore, opts: { maxBatches?: number } = {}): Promise<string[]> {
   const purged: string[] = [];
   for (let batch = 0; batch < (opts.maxBatches ?? PURGE_MAX_BATCHES); batch += 1) {
-    const deleted = await engine.pool().query<{ id: string }>(
+    const deleted = await engine.db().query<{ id: string }>(
       `DELETE FROM plg_omadia_agent_facilitator_facilitations
         WHERE id IN (
           SELECT id FROM plg_omadia_agent_facilitator_facilitations

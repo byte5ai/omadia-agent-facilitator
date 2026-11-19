@@ -81,9 +81,17 @@ export class FacilitationEngine {
     await this.readiness?.();
   }
 
-  /** Whether the engine can keep state at all. */
+  private usable: (() => boolean) | undefined;
+
+  /** What else has to hold before the engine may work (its tables are migrated). */
+  setUsable(usable: () => boolean): void {
+    this.usable = usable;
+  }
+
+  /** Whether the engine can keep state at all: it has its database, and the
+   *  tables in it are the ones this version expects. */
   available(): boolean {
-    return this.core.deps.kernel.pool() !== undefined;
+    return this.core.deps.kernel.db() !== undefined && (this.usable?.() ?? true);
   }
 
   /** Attach to the kernel and catch up on what arrived while we were down. */
@@ -92,7 +100,7 @@ export class FacilitationEngine {
     if (!this.available()) return;
     this.attachMembership();
     // What a previous process left undelivered is settled first.
-    const waiting = await this.core.pool().query<{ facilitation_id: string }>(
+    const waiting = await this.core.db().query<{ facilitation_id: string }>(
       `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_outbox WHERE status IN ('pending', 'sending')`,
     );
     for (const row of waiting.rows) await this.core.flush(row.facilitation_id);
@@ -103,7 +111,7 @@ export class FacilitationEngine {
    *  conversation, then read what the kernel stored for those that still can. */
   private async catchUp(): Promise<void> {
     const readable = await reconcileAll(this.core);
-    for (const f of await store.listSubscribed(this.core.pool())) {
+    for (const f of await store.listSubscribed(this.core.db())) {
       if (!readable.has(f.id)) continue;
       this.attach(f.facilitatorAgent);
       await this.replay(f);
@@ -166,7 +174,7 @@ export class FacilitationEngine {
     await this.track(
       (async () => {
         try {
-          const f = await store.findLiveByConversation(this.core.pool(), snapshot.channelType, snapshot.conversationId);
+          const f = await store.findLiveByConversation(this.core.db(), snapshot.channelType, snapshot.conversationId);
           if (f && f.facilitatorAgent === agentSlug) await this.core.work(f.id, (w) => applySnapshot(w, snapshot));
         } catch (err) {
           this.core.log(`capability change failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -180,7 +188,7 @@ export class FacilitationEngine {
     await this.track(
       (async () => {
         try {
-          const live = (await store.listSubscribed(this.core.pool())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
+          const live = (await store.listSubscribed(this.core.db())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
           if (!live) return;
           if (event.kind === 'participant_joined' || event.kind === 'participant_left') {
             await this.core.work(live.id, (w) => w.event('session_presence', 'engine', { kind: event.kind, sessionRef: event.sessionRef, participants: event.participants ?? [] }));
@@ -240,7 +248,7 @@ export class FacilitationEngine {
   }
 
   async release(facilitationId: string): Promise<void> {
-    const f = await store.getFacilitation(this.core.pool(), facilitationId);
+    const f = await store.getFacilitation(this.core.db(), facilitationId);
     if (f) await releaseConversation(this.core, f);
   }
 
@@ -282,7 +290,7 @@ export class FacilitationEngine {
    *  may have been lost after the result went out, or the result may have
    *  finally failed. Either way it does not stay concluding. */
   private async finishConcluding(): Promise<void> {
-    const concluding = await this.core.pool().query<{ id: string }>(`SELECT id FROM plg_omadia_agent_facilitator_facilitations WHERE phase = 'concluding' ORDER BY concluded_at LIMIT 50`);
+    const concluding = await this.core.db().query<{ id: string }>(`SELECT id FROM plg_omadia_agent_facilitator_facilitations WHERE phase = 'concluding' ORDER BY concluded_at LIMIT 50`);
     for (const row of concluding.rows) {
       try {
         await this.core.flush(row.id);
@@ -295,7 +303,7 @@ export class FacilitationEngine {
   /** A release that could not happen when a facilitation ended (a report was
    *  still going out) is tried again here. */
   private async releaseEnded(): Promise<void> {
-    const ended = await this.core.pool().query<{ id: string }>(
+    const ended = await this.core.db().query<{ id: string }>(
       `SELECT id FROM plg_omadia_agent_facilitator_facilitations
         WHERE phase IN ('closed', 'aborted') AND followup_state <> 'active' AND NOT coalesce((settings->>'released')::boolean, false)
         ORDER BY closed_at LIMIT 50`,

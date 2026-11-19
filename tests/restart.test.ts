@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { ENGINE_SERVICE_NAME, NO_DATABASE_REASON, activate } from '../src/plugin.js';
+import { ENGINE_SERVICE_NAME, NO_DATABASE_REASON, OLD_KERNEL_REASON, activate } from '../src/plugin.js';
 import type { FacilitationEngineInfo } from '../src/plugin.js';
 import { FOUR, createHarness, startActive } from './harness.js';
 import type { Harness } from './harness.js';
@@ -23,37 +23,36 @@ after(async () => {
   if (!PG_SKIP) await h.close();
 });
 
-test('the manifest orders activation after the pool provider', () => {
+test('the manifest asks for no shared pool: the database is the plugin\'s own accessor', () => {
   const manifest = readFileSync(join(process.cwd(), 'manifest.yaml'), 'utf8');
-  assert.match(manifest, /^requires:\n\s+- "graphPool@\^1"$/m);
-  const optional = /optional_requires:\n((?:\s+- "[^"]+"\n)+)/.exec(manifest)?.[1] ?? '';
-  assert.ok(!optional.includes('graphPool'), 'graphPool is a hard requirement, not an optional one');
+  assert.ok(!/^\s*- "graphPool/m.test(manifest), 'graphPool is not required, not even optionally');
+  assert.match(manifest, /^requires: \[\]$/m);
+  assert.match(manifest, /ledger: "plg_omadia_agent_facilitator_migrations"/);
 });
 
-test('a pool that is published after activation brings the engine up, and the running facilitation goes on', { skip: PG_SKIP }, async () => {
-  const conv = h.kernel.conversation('rs-late-pool', FOUR);
+test('without the operator\'s grant the engine is down; the activation that follows the grant resumes the running facilitation', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('rs-late-grant', FOUR);
   const f = await startActive(h, conv, VOTE);
   await h.kernel.say(conv, 'anna', 'A');
   await h.settle();
-  // The middleware restarts; the pool provider activates after the engine.
+  // The middleware restarts, and the grant is not on record.
   await h.engine.stop();
-  h.kernel.absent.add('pool');
-  const { ctx, provided, jobs } = kernelContext(h.kernel, h.db);
-  const handle = await activate(ctx);
+  const down = kernelContext(h.kernel, h.db, { granted: false });
+  const first = await activate(down.ctx);
+  const info = down.provided.get(ENGINE_SERVICE_NAME) as FacilitationEngineInfo;
+  assert.equal(info.available, false);
+  assert.equal(info.unavailableReason, NO_DATABASE_REASON);
+  // A ballot arrives while the engine is down.
+  await h.kernel.say(conv, 'bert', 'B');
+  await first.close();
+
+  // The operator grants the database; the kernel activates the plugin anew.
+  const up = kernelContext(h.kernel, h.db);
+  const handle = await activate(up.ctx);
   try {
-    const info = provided.get(ENGINE_SERVICE_NAME) as FacilitationEngineInfo;
-    assert.equal(info.available, false);
-    assert.equal(info.unavailableReason, NO_DATABASE_REASON);
-    // A ballot arrives while the engine is down.
-    await h.kernel.say(conv, 'bert', 'B');
-
-    h.kernel.absent.delete('pool');
-    // Nobody re-activates the plugin: the scheduler's next pass finds the pool.
-    await jobs.get('facilitation-tick')?.();
     await handle.engine.idle();
-    assert.equal(info.available, true, 'the published state follows without a new activation');
-    assert.equal(info.unavailableReason, undefined);
-
+    assert.equal(handle.info.available, true);
+    assert.ok(up.logs.some((l) => l.includes(`schema '${h.db.schema}'`)), 'the schema in use is in the log');
     const ballots = await h.db.pool.query<{ participant_principal: string }>(
       `SELECT participant_principal FROM plg_omadia_agent_facilitator_contributions WHERE facilitation_id = $1 AND status = 'valid' ORDER BY participant_principal`,
       [f.id],
@@ -70,19 +69,35 @@ test('a pool that is published after activation brings the engine up, and the ru
   }
 });
 
-test('a tool call also finds a database that appeared after activation', { skip: PG_SKIP }, async () => {
-  const conv = h.kernel.conversation('rs-tool', FOUR);
-  h.kernel.absent.add('pool');
-  const { ctx } = kernelContext(h.kernel, h.db);
+test('a kernel that cannot give an archetype plugin its own database is named as the reason', { skip: PG_SKIP }, async () => {
+  const { ctx } = kernelContext(h.kernel, h.db, { oldKernel: true });
   const handle = await activate(ctx);
   try {
+    assert.equal(handle.info.available, false);
+    assert.equal(handle.info.unavailableReason, OLD_KERNEL_REASON);
+  } finally {
+    await handle.close();
+  }
+});
+
+test('migrations that failed at activation are tried again: the next pass of the scheduler, or a tool call, brings the engine up', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('rs-tool', FOUR);
+  const migrations = { failing: true };
+  const { ctx, jobs } = kernelContext(h.kernel, h.db, { migrations });
+  const handle = await activate(ctx);
+  try {
+    assert.equal(handle.info.available, false);
+    assert.match(handle.info.unavailableReason ?? '', /could not be migrated: lock timeout/);
     const { buildTools } = await import('../src/tools/index.js');
     const start = buildTools(handle.engine).find((t) => t.spec.name === 'facilitation_start');
     const args = { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen' };
     assert.match((await start?.handler(args, h.kernel.context('mira', conv, 'anna'))) ?? '', /^Not available/);
-    h.kernel.absent.delete('pool');
-    assert.doesNotMatch((await start?.handler(args, h.kernel.context('mira', conv, 'anna'))) ?? '', /^Not available/);
+    await jobs.get('facilitation-tick')?.();
+    assert.equal(handle.info.available, false, 'still failing');
+    migrations.failing = false;
+    await jobs.get('facilitation-tick')?.();
     assert.equal(handle.info.available, true);
+    assert.doesNotMatch((await start?.handler(args, h.kernel.context('mira', conv, 'anna'))) ?? '', /^Not available/);
   } finally {
     await handle.close();
   }

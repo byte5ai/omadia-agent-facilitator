@@ -3,7 +3,7 @@ import { after, before, test } from 'node:test';
 
 import * as store from '../src/db/store.js';
 import { insert } from '../src/db/sql.js';
-import { inTransaction, withFacilitationLock } from '../src/db/tx.js';
+import { withFacilitationLock } from '../src/db/tx.js';
 import type { Facilitation } from '../src/model.js';
 import { PG_SKIP, openTestDb } from './pg.js';
 import type { TestDb } from './pg.js';
@@ -204,7 +204,7 @@ test('the facilitation lock serialises work across connections and a transaction
 
   await withFacilitationLock(db.pool, f.id, async (client) => {
     await assert.rejects(
-      inTransaction(client, async (tx) => {
+      client.transaction(async (tx) => {
         await store.bumpStateVersion(tx, f.id);
         throw new Error('boom');
       }),
@@ -225,6 +225,6 @@ test('review 10: every table is inside the kernel-reserved plg_<plugin>_ namespa
   for (const { indexname } of indexes.rows) assert.ok(indexname.length <= 63 && indexname.startsWith('plg_omadia_agent_facilitator_'), indexname);
   // Idempotent: the same bytes applied again, without the ledger in between.
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
-    await db.pool.query(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
+    await db.asMigrationRole(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
   }
 });

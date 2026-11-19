@@ -73,8 +73,8 @@ async function applyMembership(w: Work, event: ConversationMembershipEvent): Pro
 
 export async function processMembership(engine: EngineCore, event: ConversationMembershipEvent): Promise<void> {
   if (event.kind !== 'members_added' && event.kind !== 'members_removed') return;
-  const pool = engine.pool();
-  const candidates = (await store.listSubscribed(pool)).filter(
+  const db = engine.db();
+  const candidates = (await store.listSubscribed(db)).filter(
     (f) => f.conversationId === event.conversationId && (event.channelType === undefined || event.channelType === f.channelType),
   );
   for (const f of candidates) {

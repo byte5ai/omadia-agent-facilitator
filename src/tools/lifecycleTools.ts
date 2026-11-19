@@ -46,7 +46,7 @@ export async function storedMessage(engine: FacilitationEngine, ctx: ResolvedCon
 async function openAndReport(engine: FacilitationEngine, facilitationId: string): Promise<{ posted: boolean; text: string }> {
   await openFacilitation(engine.core, facilitationId);
   const handshake = (
-    await engine.core.pool().query<{ status: string; last_error: string | null }>(
+    await engine.core.db().query<{ status: string; last_error: string | null }>(
       `SELECT status, last_error FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'handshake' ORDER BY seq DESC LIMIT 1`,
       [facilitationId],
     )
@@ -137,7 +137,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           : undefined;
         if (closeRule === 'at_deadline' && !deadline) throw new Refusal('bad_input', "closeRule 'at_deadline' needs a deadline.");
         // A setup that is adjusted must be one the engine can still read.
-        const existing = await store.findLiveByConversation(engine.core.pool(), ctx.channelType, ctx.conversationId);
+        const existing = await store.findLiveByConversation(engine.core.db(), ctx.channelType, ctx.conversationId);
         if (existing && existing.facilitatorAgent === ctx.agentSlug) await requireReadable(engine, existing);
         const result = await configureFacilitation(engine.core, {
           ...ctx,
@@ -200,7 +200,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
-        return statusText(engine.core.pool(), f);
+        return statusText(engine.core.db(), f);
       },
     ),
 

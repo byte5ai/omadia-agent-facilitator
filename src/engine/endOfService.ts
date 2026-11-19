@@ -62,7 +62,7 @@ export function endOfServiceReason(language: Facilitation['language'], reason: A
 }
 
 async function reportPosted(engine: EngineCore, facilitationId: string, purpose: string): Promise<boolean> {
-  const sent = await engine.pool().query(
+  const sent = await engine.db().query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = $2 AND status = 'sent' LIMIT 1`,
     [facilitationId, purpose],
   );
@@ -98,7 +98,7 @@ async function endOne(engine: EngineCore, f: Facilitation, reason: AgentEndOfSer
  *  closed ones whose action items are still followed up. */
 export function listProcessesOf(engine: EngineCore, agentSlug: string): Promise<Facilitation[]> {
   return rows<Facilitation>(
-    engine.pool(),
+    engine.db(),
     `SELECT * FROM plg_omadia_agent_facilitator_facilitations
       WHERE facilitator_agent = $1 AND (phase = ANY($2::text[]) OR followup_state = 'active')
       ORDER BY created_at`,

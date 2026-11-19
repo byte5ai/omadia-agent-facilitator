@@ -69,7 +69,7 @@ export function cardTools(engine: FacilitationEngine): ToolDefinition[] {
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
-        return questionnaireAnswers(engine.core.pool(), f);
+        return questionnaireAnswers(engine.core.db(), f);
       },
     ),
   ];

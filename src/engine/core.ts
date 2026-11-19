@@ -11,10 +11,10 @@ import { randomUUID } from 'node:crypto';
 
 import type { Clock } from '../clock.js';
 import type { EngineConfig } from '../config.js';
-import type { PoolClientLike, PoolLike, Queryable } from '../db/pool.js';
+import type { Db, Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
-import { inTransaction, withFacilitationLock } from '../db/tx.js';
+import { withFacilitationLock } from '../db/tx.js';
 import type { Kernel } from '../kernel.js';
 import type { DeliveryClass, Facilitation, Job, OutboxPayload, OutboxRow, Phase } from '../model.js';
 import { texts } from '../texts/index.js';
@@ -116,12 +116,12 @@ export interface Work {
   event(kind: string, actor: string, payload?: Record<string, unknown>): Promise<void>;
 }
 
-/** Runs after the lock was released; may use the pool and call the kernel. */
+/** Runs after the lock was released; may use the db and call the kernel. */
 export type AfterRelease = (engine: EngineCore, facilitationId: string) => Promise<void>;
 
 /** Runs after delivery, still under the facilitation's lock. It gets the
  *  locked connection and must not take another one. */
-export type AfterDispatch = (engine: EngineCore, client: PoolClientLike, facilitationId: string) => Promise<void>;
+export type AfterDispatch = (engine: EngineCore, client: Db, facilitationId: string) => Promise<void>;
 
 /** What a tool call did, seen from the units of work that ran inside it. */
 interface ToolCallScope {
@@ -197,7 +197,7 @@ export class EngineCore {
     this.afterDispatch.push(hook);
   }
 
-  private async delivered(client: PoolClientLike, facilitationId: string): Promise<void> {
+  private async delivered(client: Db, facilitationId: string): Promise<void> {
     await dispatchOutbox(this, client, facilitationId);
     for (const hook of this.afterDispatch) await hook(this, client, facilitationId);
     // A hook may have queued more (the report that follows the result).
@@ -220,19 +220,19 @@ export class EngineCore {
     this.deps.log(msg);
   }
 
-  pool(): PoolLike {
-    const pool = this.deps.kernel.pool();
-    if (!pool) {
+  db(): Db {
+    const db = this.deps.kernel.db();
+    if (!db) {
       throw new EngineUnavailableError(
         'The facilitation engine has no database: grant this plugin its SQL permission and run the middleware with Postgres.',
       );
     }
-    return pool;
+    return db;
   }
 
   /** One locked unit of work on a facilitation, followed by delivery. */
   async work<T>(facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
-    const result = await withFacilitationLock(this.pool(), facilitationId, async (client) => {
+    const result = await withFacilitationLock(this.db(), facilitationId, async (client) => {
       const value = await this.workOn(client, facilitationId, fn);
       await this.delivered(client, facilitationId);
       return value;
@@ -243,8 +243,8 @@ export class EngineCore {
 
   /** The transaction of a unit of work, on a connection that already holds
    *  the facilitation's lock. Queues messages; the caller delivers. */
-  async workOn<T>(client: PoolClientLike, facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
-    return inTransaction(client, async (tx) => {
+  async workOn<T>(client: Db, facilitationId: string, fn: (w: Work) => Promise<T>): Promise<T> {
+    return client.transaction(async (tx) => {
       const loaded = await store.getFacilitation(tx, facilitationId);
       if (!loaded) throw new Refusal('unknown_facilitation', `Facilitation ${facilitationId} does not exist (any more).`);
       const now = this.now();
@@ -287,7 +287,7 @@ export class EngineCore {
 
   /** Deliver whatever is pending for a facilitation, under its lock. */
   async flush(facilitationId: string): Promise<void> {
-    await withFacilitationLock(this.pool(), facilitationId, (client) => this.delivered(client, facilitationId));
+    await withFacilitationLock(this.db(), facilitationId, (client) => this.delivered(client, facilitationId));
     await this.released(facilitationId);
   }
 

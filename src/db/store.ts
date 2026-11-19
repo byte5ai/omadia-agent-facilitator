@@ -1,5 +1,5 @@
 // Queries of the facilitation tables. Plain functions over a `Queryable`, so
-// the same code runs on the pool, on a locked connection and inside a
+// the same code runs on the db, on a locked connection and inside a
 // transaction. Nothing here decides anything; it reads and writes rows.
 
 import type {

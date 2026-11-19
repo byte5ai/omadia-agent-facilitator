@@ -74,12 +74,13 @@ test('every missing kernel service is logged once, none of them stops activation
 });
 
 test('a failing migration makes the engine unavailable instead of failing activation', async () => {
-  const provide = () => () => undefined;
   const { ctx } = bareContext({
-    // The pool is there; the migration is what fails.
-    services: { get: (name: string) => (name === 'graphPool' ? {} : undefined), getOptional: (name: string) => (name === 'graphPool' ? {} : undefined), has: () => false, provide },
+    // The database is there; the migration is what fails.
     sql: {
       ledger: 'plg_omadia_agent_facilitator_migrations',
+      schema: 'plg_omadia_agent_facilitator',
+      query: async () => ({ rows: [], rowCount: 0 }),
+      transaction: async () => undefined,
       runMigrations: async () => {
         throw new Error('lock timeout');
       },

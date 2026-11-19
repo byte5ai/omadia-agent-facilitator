@@ -66,10 +66,10 @@ const isAddress = (a: string | null | undefined): a is string => typeof a === 's
  * asked for one in the chat. Called outside any unit of work.
  */
 export async function refreshAddresses(engine: EngineCore, facilitationId: string): Promise<{ withAddress: number; without: number }> {
-  const pool = engine.pool();
-  const f = await store.getFacilitation(pool, facilitationId);
+  const db = engine.db();
+  const f = await store.getFacilitation(db, facilitationId);
   if (!f) return { withAddress: 0, without: 0 };
-  const active = (await store.listParticipants(pool, f.id)).filter((p) => p.status === 'active');
+  const active = (await store.listParticipants(db, f.id)).filter((p) => p.status === 'active');
   const missing = active.filter((p) => !isAddress(p.email));
   let found = 0;
   if (missing.length > 0) {
@@ -112,10 +112,10 @@ const recordEvent = (engine: EngineCore, facilitationId: string, kind: string, a
  * every call, refusal and unknown outcome is written to the protocol.
  */
 export async function scoped(engine: EngineCore, facilitationId: string) {
-  const pool = engine.pool();
-  const f = await store.getFacilitation(pool, facilitationId);
+  const db = engine.db();
+  const f = await store.getFacilitation(db, facilitationId);
   if (!f) throw new Refusal('unknown_facilitation', 'No such facilitation.');
-  const grant = await grantOf({ tx: pool, f });
+  const grant = await grantOf({ tx: db, f });
   const service: FacilitationFollowupService | undefined = engine.deps.kernel.followup();
 
   // The protocol is read by the group: every line is in its language.
@@ -279,7 +279,7 @@ const followupMeeting: ExternalJob = async (engine, job) => {
       await finishJob(w, job, result);
     });
   if (claim.state === 'unknown') {
-    const f = await store.getFacilitation(engine.pool(), job.facilitationId);
+    const f = await store.getFacilitation(engine.db(), job.facilitationId);
     const subject = f?.followupPolicy.meeting?.subject ?? '';
     await finish(texts(f?.language ?? 'en').followupUnknown(subject), { outcome: 'unknown_outcome' });
     return;

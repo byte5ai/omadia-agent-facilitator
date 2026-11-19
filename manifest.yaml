@@ -16,9 +16,13 @@ schema_version: "1"
 # outbox, process, transparency, visibility, retention, quotas, sessions and
 # the facilitations view. An archetype plugin runs in the extension runtime,
 # which hands it `ctx.sql` and the granted pool.
-# The database pool is a hard `requires`: a plugin publishes it, and the kernel
-# orders activation by `requires` only, so the engine activates after it. The
-# other kernel services are `optional_requires`: each one is resolved lazily
+# The database is the plugin's own (kernel #2088, K3): its tables live in the
+# schema `plg_omadia_agent_facilitator`, reached through `ctx.sql.query` and
+# `ctx.sql.transaction` as the plugin's own database role. The shared pool
+# (`graphPool`) is not required and never asked for; that is also what makes
+# the kernel move tables of an earlier version out of `public` at the first
+# activation of this one. Table names are unqualified everywhere.
+# The kernel services are `optional_requires`: each one is resolved lazily
 # and its absence degrades with a clear message.
 # ===========================================================================
 
@@ -27,7 +31,7 @@ identity:
   kind: "archetype"
   domain: "facilitation"
   name: "Facilitator archetype"
-  version: "1.2.0"
+  version: "1.3.0"
   description:
     en: "Delivers the archetype facilitator, an impartial moderator of group processes, and runs its facilitations: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Liefert den Archetyp Facilitator, einen unparteiischen Moderator von Gruppenprozessen, und führt seine Moderationen: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -42,10 +46,11 @@ identity:
 
 compat:
   # Compared as a semver range against the host's @omadia/plugin-api version.
-  # 1.60.0 is the first kernel that knows the manifest kind `archetype`; an
-  # older kernel does not offer this version. What later kernels add (the
-  # process service of 1.61.0, question cards) is feature-detected.
-  core: ">=1.60.0 <2.0"
+  # 1.62.0 is the first kernel that gives an archetype plugin its own schema
+  # and role (`ctx.sql.schema`, `ctx.sql.query`, `ctx.sql.transaction`). An
+  # older kernel is not offered this version. There is no way back to a
+  # version that expects the shared pool once the tables have moved.
+  core: ">=1.62.0 <2.0"
   node: ">=20"
 
 # The archetype this plugin delivers. Read strictly by the kernel.
@@ -123,11 +128,9 @@ depends_on: []
 provides:
   - "facilitationEngine@1"
 
-requires:
-  - "graphPool@^1"
+requires: []
 
 # Least privilege: exactly what the engine consumes.
-#   graphPool             the granted Postgres pool (gated by permissions.sql)
 #   conversationMessages  every human message of a moderated conversation,
 #                         with authorship the kernel states
 #   agentTurn             the kernel runs the facilitator turn, returns text

@@ -41,7 +41,7 @@ const field = (body: unknown, key: string): string | undefined =>
 
 export async function handle(engine: FacilitationEngine, request: ApiRequest): Promise<ApiResponse> {
   if (!engine.available()) return fail(503, 'engine_unavailable', 'The facilitation engine has no database.');
-  const pool = engine.core.pool();
+  const db = engine.core.db();
   const segments = request.path.split('/').filter((s) => s !== '');
   const method = request.method.toUpperCase();
   try {
@@ -53,7 +53,7 @@ export async function handle(engine: FacilitationEngine, request: ApiRequest): P
       const phase = text(request.query['phase']);
       if (phase !== undefined && !PHASES.includes(phase)) return fail(400, 'bad_phase', `phase must be one of: ${PHASES.join(', ')}`);
       const facilitator = text(request.query['facilitator']);
-      const data = await listMetadata(pool, { ...(phase ? { phase } : {}), ...(facilitator ? { facilitator } : {}) });
+      const data = await listMetadata(db, { ...(phase ? { phase } : {}), ...(facilitator ? { facilitator } : {}) });
       return ok(data, { total: data.length });
     }
 
@@ -61,12 +61,12 @@ export async function handle(engine: FacilitationEngine, request: ApiRequest): P
 
     if (action === undefined) {
       if (method !== 'GET') return fail(405, 'method_not_allowed', 'Use GET.');
-      const [data] = await listMetadata(pool, { id });
+      const [data] = await listMetadata(db, { id });
       return data ? ok(data) : fail(404, 'not_found', 'No such facilitation.');
     }
 
     if (action === 'audit' && method === 'GET') {
-      const audit = await listAudit(pool, id);
+      const audit = await listAudit(db, id);
       return ok(audit.map((a) => ({ action: a.action, actor: a.actor, reason: a.reason, occurredAt: a.occurredAt.toISOString() })));
     }
 

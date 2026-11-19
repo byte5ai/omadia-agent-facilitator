@@ -41,7 +41,7 @@ export function registerJobHandler(kind: string, handler: JobHandler, prepare?: 
  *  other's way; an expired lease (a replica that died mid-job) is taken over. */
 export function leaseDueJobs(engine: EngineCore, now: Date): Promise<Job[]> {
   return rows<Job>(
-    engine.pool(),
+    engine.db(),
     `UPDATE plg_omadia_agent_facilitator_jobs SET lease_owner = $1, lease_until = $2
       WHERE id IN (
         SELECT id FROM plg_omadia_agent_facilitator_jobs
@@ -100,10 +100,10 @@ async function jobFailed(engine: EngineCore, job: Job, err: unknown): Promise<vo
   const attempts = job.attempts + 1;
   engine.log(`facilitation ${job.facilitationId}: job ${job.kind} failed (attempt ${String(attempts)}): ${message}`);
   if (attempts < MAX_JOB_ATTEMPTS) {
-    await update(engine.pool(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { attempts, lastError: message, leaseOwner: null, leaseUntil: null });
+    await update(engine.db(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { attempts, lastError: message, leaseOwner: null, leaseUntil: null });
     return;
   }
-  await update(engine.pool(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { status: 'failed', attempts, lastError: message, finishedAt: engine.now(), leaseOwner: null, leaseUntil: null });
+  await update(engine.db(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { status: 'failed', attempts, lastError: message, finishedAt: engine.now(), leaseOwner: null, leaseUntil: null });
   try {
     await engine.work(job.facilitationId, async (w) => {
       if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
@@ -116,7 +116,7 @@ async function jobFailed(engine: EngineCore, job: Job, err: unknown): Promise<vo
 
 /** Essential messages waiting for another attempt. */
 async function retryDeliveries(engine: EngineCore, now: Date): Promise<void> {
-  const due = await engine.pool().query<{ facilitation_id: string }>(
+  const due = await engine.db().query<{ facilitation_id: string }>(
     `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_outbox
       WHERE status = 'sending' OR (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= $1))`,
     [now],

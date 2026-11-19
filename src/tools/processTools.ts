@@ -309,7 +309,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
         // Visible to its participants only; an engine-started turn has no caller.
-        return ctx.callerPrincipalId ? protocolFor(engine.core.pool(), f, ctx.callerPrincipalId) : buildProtocol(engine.core.pool(), f);
+        return ctx.callerPrincipalId ? protocolFor(engine.core.db(), f, ctx.callerPrincipalId) : buildProtocol(engine.core.db(), f);
       },
     ),
   ];

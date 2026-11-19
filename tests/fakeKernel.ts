@@ -29,7 +29,7 @@ import type {
 
 import type { CardAnswerValue, CardSendMembers, CardSupport, CardUpdate, QuestionCard } from '../src/cards/types.js';
 import type { Clock } from '../src/clock.js';
-import type { PoolLike } from '../src/db/pool.js';
+import type { Db } from '../src/db/pool.js';
 import type {
   ConversationEventsService,
   ConversationMembershipEvent,
@@ -215,7 +215,7 @@ export class FakeKernel {
   private readonly originals = new Map<string, ConversationMessageRecord>();
 
   constructor(
-    private readonly pool: PoolLike | undefined,
+    private readonly database: Db | undefined,
     readonly clock: FakeClock,
   ) {}
 
@@ -624,7 +624,7 @@ export class FakeKernel {
   kernel(): Kernel {
     const unless = <T>(name: keyof Kernel, value: T) => (): T | undefined => (this.absent.has(name) ? undefined : value);
     return {
-      pool: () => (this.absent.has('pool') ? undefined : this.pool),
+      db: () => (this.absent.has('db') ? undefined : this.database),
       messages: () => {
         if (this.absent.has('messages')) return undefined;
         if (this.exactSubscriptions) return this.messagesService;
