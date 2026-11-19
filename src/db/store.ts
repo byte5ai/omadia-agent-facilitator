@@ -17,8 +17,7 @@ import type {
   ProtocolEvent,
   Session,
   Stakeholder,
-  Step,
-} from '../model.js';
+  Step, CardRow } from '../model.js';
 import type { Queryable } from './pool.js';
 import { insert, insertIfAbsent, one, rows, update } from './sql.js';
 
@@ -403,3 +402,17 @@ export const pendingAcks = (q: Queryable, facilitationId: string, principal?: st
       ORDER BY created_at, id`,
     [facilitationId, principal ?? null],
   );
+
+// ── question cards ──────────────────────────────────────────────────────────
+
+export const addCard = (q: Queryable, values: Omit<CardRow, 'state' | 'messageId' | 'closedAt'>): Promise<CardRow> =>
+  insert<CardRow>(q, 'plg_omadia_agent_facilitator_cards', { ...values, card: JSON.stringify(values.card) });
+
+export const getCard = (q: Queryable, cardId: string): Promise<CardRow | undefined> =>
+  one<CardRow>(q, 'SELECT * FROM plg_omadia_agent_facilitator_cards WHERE card_id = $1', [cardId]);
+
+export const listCards = (q: Queryable, facilitationId: string): Promise<CardRow[]> =>
+  rows<CardRow>(q, 'SELECT * FROM plg_omadia_agent_facilitator_cards WHERE facilitation_id = $1 ORDER BY created_at, proposal_version', [facilitationId]);
+
+export const patchCard = (q: Queryable, cardId: string, patch: Partial<Pick<CardRow, 'state' | 'messageId' | 'closedAt'>>): Promise<CardRow | undefined> =>
+  update<CardRow>(q, 'plg_omadia_agent_facilitator_cards', { cardId }, { ...patch });

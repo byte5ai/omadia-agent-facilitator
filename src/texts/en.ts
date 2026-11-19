@@ -24,6 +24,9 @@ export const en = {
   echoRecorded: (name: string, summary: string): string => `Recorded for you, ${name}: ${summary}`,
   echoInterpreted: (name: string, summary: string): string =>
     `${name}, I read your message as: ${summary}. Reply "yes" (or react with 👍) to confirm, or correct me. It counts once you confirmed.`,
+  /** A card answer the platform did not verify: its owner confirms it here. */
+  echoUnverifiedCard: (name: string, summary: string): string =>
+    `${name}, an answer on the card came in under your name, and the channel could not confirm that it is yours: ${summary}. Reply "yes" (or react with 👍) to confirm, or correct me. It counts once you confirmed.`,
   echoChanged: (name: string, summary: string): string => `Changed for you, ${name}: ${summary}`,
   echoConfirmed: (name: string, summary: string): string => `Confirmed, ${name}: ${summary}`,
   echoDeclined: (name: string): string => `Understood, ${name}: I did not record that.`,
@@ -34,6 +37,21 @@ export const en = {
   stopped: (name: string): string =>
     `${name} asked to stop. The facilitation ends here without a result. Nothing further will be sent.`,
   aborted: (reason: string): string => `This facilitation ends without a result. Reason: ${reason}`,
+
+  /** What a question card says (the channel words its own buttons). */
+  card: {
+    chatToo: 'Answer on the card or in the chat; your newest answer counts.',
+    rank: 'Rank the options, best first.',
+    rankLabel: (rank: number, points: number | undefined): string => {
+      const ordinal = `${String(rank)}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'} place`;
+      return points === undefined ? ordinal : `${ordinal} (${String(points)} point${points === 1 ? '' : 's'})`;
+    },
+    single: 'Choose one option.',
+    approval: 'Choose every option you can go along with.',
+    idea: 'Your idea (one per submission)',
+    superseded: 'Replaced by a new version of this vote. Please answer on the new card.',
+    closed: (when: string): string => `Closed on ${when}.`,
+  },
 
   /** A participant the channel gave no name for (until a message carries one). */
   unnamedPerson: 'a participant without a name',

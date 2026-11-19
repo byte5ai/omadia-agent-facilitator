@@ -27,6 +27,7 @@ import type {
   TargetedSendService,
 } from '@omadia/plugin-api';
 
+import type { CardAnswerValue, CardSendMembers, CardSupport, CardUpdate, QuestionCard } from '../src/cards/types.js';
 import type { Clock } from '../src/clock.js';
 import type { PoolLike } from '../src/db/pool.js';
 import type {
@@ -67,6 +68,9 @@ export interface Post {
   text: string;
   mentions: { user: string; text: string }[];
   poll?: unknown;
+  card?: QuestionCard;
+  /** The id answers and updates of the card refer to. */
+  cardMessageId?: string;
   messageId: string;
 }
 
@@ -192,6 +196,15 @@ export class FakeKernel {
   rosterAsAgent = false;
   /** Every roster call, with the agent it named. */
   readonly rosterAsks: Array<{ conversationId: string; agentSlug?: string }> = [];
+  /** What the channel declares about question cards. Undefined: a kernel or a
+   *  channel without them (no `capabilities`, no `updateCard`). */
+  cardSupport: CardSupport | undefined;
+  /** Every card update the engine asked for. */
+  readonly cardUpdates: Array<{ as: string; conversationId: string; cardMessageId: string; update: CardUpdate }> = [];
+  /** The channel declares cards and still refuses the next ones (too large, ...). */
+  refuseCards = 0;
+  /** Card updates to refuse next. */
+  readonly cardUpdateFaults: Array<{ code: string; message: string }> = [];
   /** A kernel that states the caller's display name with a tool call. */
   statesCallerName = false;
   private readonly listeners = new Map<string, Set<(record: ConversationMessageRecord) => void | Promise<void>>>();
@@ -307,6 +320,35 @@ export class FakeKernel {
 
   async react(conversationId: string, userId: string, messageId: string, name = 'like', removed = false): Promise<ConversationMessageRecord> {
     return this.emit(conversationId, userId, { kind: 'reaction', messageId, revision: 0, reaction: { name, removed } });
+  }
+
+  /** The cards the facilitator posted in a conversation, oldest first. */
+  cards(conversationId: string): Array<Post & { card: QuestionCard; cardMessageId: string }> {
+    return this.posts.filter((p): p is Post & { card: QuestionCard; cardMessageId: string } => p.conversationId === conversationId && p.card !== undefined && p.cardMessageId !== undefined);
+  }
+
+  /** A person submits a question card. What the client sends back (card id,
+   *  proposal, answers) can be overridden to forge a submission. */
+  async submitCard(
+    conversationId: string,
+    userId: string,
+    post: { card: QuestionCard; cardMessageId: string },
+    answers: readonly CardAnswerValue[],
+    forged: { cardId?: string; proposalId?: string; proposalVersion?: number; verified?: boolean } = {},
+  ): Promise<ConversationMessageRecord> {
+    return this.emit(conversationId, userId, {
+      kind: 'card_answer',
+      messageId: post.cardMessageId,
+      revision: 0,
+      cardAnswer: {
+        cardId: forged.cardId ?? post.card.cardId,
+        value: { answers },
+        answers,
+        ...((forged.proposalId ?? post.card.proposalId) !== undefined ? { proposalId: forged.proposalId ?? post.card.proposalId } : {}),
+        ...((forged.proposalVersion ?? post.card.proposalVersion) !== undefined ? { proposalVersion: forged.proposalVersion ?? post.card.proposalVersion } : {}),
+        answererVerified: forged.verified ?? true,
+      },
+    } as never);
   }
 
   async answerCard(conversationId: string, userId: string, cardId: string, value: unknown, messageId = cardId): Promise<ConversationMessageRecord> {
@@ -433,18 +475,29 @@ export class FakeKernel {
       // A channel call that never answers.
       if (fault === 'hang') return new Promise<ConversationSendOutcome>(() => undefined);
       if (fault && fault !== 'lost') return { outcome: 'unreachable', ...fault };
-      const messageId = this.nextId('bot');
       const message = request.message;
+      const card = (message as { card?: QuestionCard }).card;
+      // As the kernel: a card on a channel that declares none (or not that
+      // kind) is refused and nothing is posted.
+      if (card !== undefined && this.refuseCards > 0) {
+        this.refuseCards -= 1;
+        return { outcome: 'unreachable', code: 'channel_error', message: 'the card is too large' };
+      }
+      if (card !== undefined && (!this.cardSupport || card.questions.length > this.cardSupport.maxQuestions || card.questions.some((q) => !this.cardSupport?.kinds.includes(q.kind)))) {
+        return { outcome: 'unreachable', code: 'channel_error', message: 'this channel does not render that card' };
+      }
+      const messageId = this.nextId('bot');
       this.posts.push({
         as: request.agentSlug,
         conversationId: request.conversationId,
         text: message.text,
         mentions: [...(message.mentions ?? [])],
         ...(message.poll !== undefined ? { poll: message.poll } : {}),
+        ...(card !== undefined ? { card, cardMessageId: `${messageId}-card` } : {}),
         messageId,
       });
       if (fault === 'lost') return { outcome: 'unreachable', code: 'timeout', message: 'no confirmation from the channel' };
-      return { outcome: 'delivered', messageId, ...(message.poll !== undefined ? { cardMessageId: `${messageId}-card` } : {}) };
+      return { outcome: 'delivered', messageId, ...(message.poll !== undefined || card !== undefined ? { cardMessageId: `${messageId}-card` } : {}) };
     },
   };
 
@@ -569,7 +622,21 @@ export class FakeKernel {
         return older;
       },
       agentTurn: unless('agentTurn', this.turnService),
-      conversationSend: unless('conversationSend', this.sendService),
+      conversationSend: () => {
+        if (this.absent.has('conversationSend')) return undefined;
+        if (!this.cardSupport) return this.sendService;
+        const members: CardSendMembers = {
+          capabilities: () => ({ card: this.cardSupport as CardSupport }),
+          updateCard: async (request) => {
+            const fault = this.cardUpdateFaults.shift();
+            if (fault) return { outcome: 'unreachable', ...fault };
+            if (!this.cardSupport?.update) return { outcome: 'unreachable', code: 'channel_error', message: 'this channel cannot update cards' };
+            this.cardUpdates.push({ as: request.agentSlug, conversationId: request.conversationId, cardMessageId: request.cardMessageId, update: request.update });
+            return { outcome: 'updated' };
+          },
+        };
+        return Object.assign({}, this.sendService, members) as ConversationSendService;
+      },
       targetedSend: unless('targetedSend', this.targetedService),
       readiness: unless('readiness', this.readinessService),
       sessionCapabilities: unless('sessionCapabilities', this.capabilitiesService),

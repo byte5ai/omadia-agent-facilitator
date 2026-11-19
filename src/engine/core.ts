@@ -84,6 +84,9 @@ export interface Outgoing {
   text: string;
   mentions?: { user: string; text: string }[];
   poll?: OutboxPayload['poll'];
+  card?: OutboxPayload['card'];
+  cardFallbackText?: string;
+  cardUpdate?: OutboxPayload['cardUpdate'];
   deliveryClass: DeliveryClass;
   /** Delivered only while the facilitation is in one of these phases. */
   requiredPhases?: Phase[];
@@ -94,7 +97,7 @@ export interface Outgoing {
    *  cannot be reached privately. */
   fallback?: GroupFallback;
   /** Row to stamp with the channel's message id once the send returned. */
-  link?: { kind: 'ack' | 'proposal'; id: string };
+  link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
 }
 
 export interface Work {
@@ -306,6 +309,9 @@ export class EngineCore {
       text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),
+      ...(m.card ? { card: m.card } : {}),
+      ...(m.cardFallbackText ? { cardFallbackText: m.cardFallbackText } : {}),
+      ...(m.cardUpdate ? { cardUpdate: m.cardUpdate } : {}),
       ...(m.link ? { link: m.link } : {}),
       ...(fallback ? { fallback } : {}),
     };

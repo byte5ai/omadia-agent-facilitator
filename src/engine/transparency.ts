@@ -13,7 +13,7 @@ import { cancelOpenRequests } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { conclude, onClosed } from './decide.js';
-import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake } from './lifecycle.js';
+import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake, announceVote } from './lifecycle.js';
 import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
 import { expectedNames, listKnown } from './roll.js';
@@ -195,6 +195,10 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
       if (affected.length > 0) await cancelOpenRequests(w, step.id);
       await store.patchStep(w.tx, step.id, { ...next, methodConfig: payload['methodConfig'] as Record<string, unknown>, round: affected.length > 0 ? step.round + 1 : step.round, roundOptions: null, roundDeadline: null });
       announce(t.changed.method(step.title, String(payload['rules'] ?? '')));
+      // A changed question is put to the group again: a card of the old one
+      // is replaced by a new version.
+      const changed = await store.getStep(w.tx, step.id);
+      if (changed?.status === 'open') await announceVote(w, changed);
       if (affected.length > 0) {
         const participants = await store.listParticipants(w.tx, w.f.id);
         const names = [...new Set(affected.map((c) => c.participantPrincipal))].map((id) => displayNameOf(participants, id, t.unnamedPerson));

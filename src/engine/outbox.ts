@@ -9,6 +9,7 @@
 //   essential (handshake, result, abort report): at-least-once. Retried until
 //     the channel confirmed, accepting a rare duplicate.
 
+import type { CardSendMembers } from '../cards/types.js';
 import type { PoolClientLike, Queryable } from '../db/pool.js';
 import { rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -17,10 +18,10 @@ import { texts } from '../texts/index.js';
 import type { EngineCore, GroupFallback } from './core.js';
 import { messageQuotaReached } from './quota.js';
 
-type SendResult = { ok: true; messageId?: string } | { ok: false; code: string; message: string };
+type SendResult = { ok: true; messageId?: string; cardMessageId?: string } | { ok: false; code: string; message: string };
 
 type StoredPayload = OutboxPayload & {
-  link?: { kind: 'ack' | 'proposal'; id: string };
+  link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
   /** What goes to the group when this private message cannot arrive. */
   fallback?: GroupFallback;
 };
@@ -53,11 +54,53 @@ function failed(code: unknown, message: unknown): SendResult {
   return { ok: false, code: text(code) ?? 'malformed_outcome', message: text(message) ?? 'the channel reported a failure without saying why' };
 }
 
-async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promise<SendResult> {
+/** Bring a posted card up to date (its closed state). Not a post. */
+async function updateCard(engine: EngineCore, q: Queryable, f: Facilitation, request: NonNullable<StoredPayload['cardUpdate']>): Promise<SendResult> {
+  const service = engine.deps.kernel.conversationSend() as (CardSendMembers & object) | undefined;
+  if (typeof service?.updateCard !== 'function') return { ok: false, code: 'no_card_update', message: 'the kernel cannot update cards' };
+  const card = await store.getCard(q, request.cardId);
+  // A card that never reached the channel has nothing to bring up to date.
+  if (!card?.messageId) return { ok: false, code: 'card_not_posted', message: 'the card was not posted, so there is nothing to update' };
+  const outcome = await service.updateCard({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, cardMessageId: card.messageId, update: request.update });
+  return outcome.outcome === 'updated' ? { ok: true } : failed(outcome.code, outcome.message);
+}
+
+/** The code a channel answers with when it does not render a card. */
+const CARD_REFUSED = 'channel_error';
+
+async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: OutboxRow): Promise<SendResult> {
   const payload = row.payload as StoredPayload;
+  if (payload.cardUpdate) return updateCard(engine, q, f, payload.cardUpdate);
   if (row.targetKind === 'group') {
     const service = engine.deps.kernel.conversationSend();
     if (!service) return { ok: false, code: 'no_service', message: "kernel service 'conversationSend' is not available" };
+    if (payload.card) {
+      const withCard = await service.sendToConversation({
+        agentSlug: f.facilitatorAgent,
+        channelType: f.channelType,
+        conversationId: f.conversationId,
+        message: { text: payload.text, card: payload.card } as never,
+        asOwnIdentity: true,
+      });
+      if (withCard.outcome === 'delivered') {
+        const cardMessageId = (withCard as { cardMessageId?: string }).cardMessageId ?? withCard.messageId;
+        return { ok: true, ...(withCard.messageId !== undefined ? { messageId: withCard.messageId } : {}), ...(cardMessageId !== undefined ? { cardMessageId } : {}) };
+      }
+      if (withCard.code !== CARD_REFUSED) return failed(withCard.code, withCard.message);
+      // The channel does not render this card: the question goes out as
+      // text, and the chat ballot is the way to answer.
+      await store.patchCard(q, payload.card.cardId, { state: 'closed', closedAt: engine.now() });
+      engine.log(`facilitation ${f.id}: the channel refused the card (${withCard.message}); the question is posted as text`);
+      const asText = await service.sendToConversation({
+        agentSlug: f.facilitatorAgent,
+        channelType: f.channelType,
+        conversationId: f.conversationId,
+        message: { text: payload.cardFallbackText ?? payload.text },
+        asOwnIdentity: true,
+      });
+      if (asText.outcome !== 'delivered') return failed(asText.code, asText.message);
+      return { ok: true, ...(asText.messageId !== undefined ? { messageId: asText.messageId } : {}) };
+    }
     const outcome = await service.sendToConversation({
       agentSlug: f.facilitatorAgent,
       channelType: f.channelType,
@@ -94,8 +137,14 @@ async function send(engine: EngineCore, f: Facilitation, row: OutboxRow): Promis
     : failed(delivery.outcome.code, delivery.outcome.message);
 }
 
-async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined): Promise<void> {
-  if (!payload.link || messageId === undefined) return;
+async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined, cardMessageId?: string): Promise<void> {
+  if (!payload.link) return;
+  if (payload.link.kind === 'card') {
+    // Answers and updates refer to the card's own message.
+    if (cardMessageId !== undefined) await store.patchCard(q, payload.link.id, { messageId: cardMessageId });
+    return;
+  }
+  if (messageId === undefined) return;
   if (payload.link.kind === 'ack') await update(q, 'plg_omadia_agent_facilitator_acks', { id: payload.link.id }, { promptMessageId: messageId });
   else await update(q, 'plg_omadia_agent_facilitator_proposals', { id: payload.link.id }, { announceMessageId: messageId });
 }
@@ -211,7 +260,7 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 
   let result: SendResult;
   try {
-    result = await withTimeout(send(engine, f, row), sendLimits.timeoutMs, `the channel send of ${row.purpose}`);
+    result = await withTimeout(send(engine, client, f, row), sendLimits.timeoutMs, `the channel send of ${row.purpose}`);
   } catch (err) {
     result = { ok: false, code: err instanceof CallTimeoutError ? 'timeout' : 'exception', message: err instanceof Error ? err.message : String(err) };
   }
@@ -219,8 +268,9 @@ async function deliver(engine: EngineCore, client: PoolClientLike, f: Facilitati
 
   if (result.ok) {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'sent', sentAt: engine.now(), channelMessageId: result.messageId ?? null });
-    await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
-    await stampLink(client, row.payload as StoredPayload, result.messageId);
+    // An update of a card is no new message in the conversation.
+    if (!(row.payload as StoredPayload).cardUpdate) await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
+    await stampLink(client, row.payload as StoredPayload, result.messageId, result.cardMessageId);
     await store.appendEvent(client, {
       facilitationId: f.id,
       kind: 'message_sent',

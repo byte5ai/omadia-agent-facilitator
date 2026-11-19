@@ -18,17 +18,19 @@ import { formatWhen, texts } from '../texts/index.js';
 import { mention } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
-import { recordBallot, roundOptions } from './decide.js';
+import { onClosed, recordBallot, roundOptions } from './decide.js';
 import { PRIORITY, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { scheduleJob } from './jobs.js';
-import { onConfigured, onStepOpened, onVoteOpened } from './lifecycle.js';
+import { onAborted, onConfigured, onStepOpened, onVoteOpened } from './lifecycle.js';
+import { onStepFinished } from './process.js';
 import { baselineSnapshot, describeMeans, diffSnapshots, perceptionStatement, planMeans, withRealOutputs } from './media.js';
 import { withTimeout } from './outbox.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { registerJobHandler } from './scheduler.js';
 import { registerHandshakeNote } from './transparency.js';
 import { registerContextSection } from './turn.js';
+import { cardAnswers, closeAllCards, closeStepCards, installCardReaders, postIdeaCard, postStepCard } from './cards.js';
 
 const TIME_NOTICE_MINUTES = 5;
 const MIN_TIMEBOX_FOR_NOTICE = 10;
@@ -292,6 +294,9 @@ export const pollIdOf = (step: Pick<Step, 'id' | 'round'>): string => `${step.id
 
 /** A vote as a poll card, when the session has polls and the method fits one. */
 async function postPoll(w: Work, step: Step): Promise<void> {
+  // A question card is the richer form of the same vote; a poll next to it
+  // would be the question twice.
+  if (await postStepCard(w, step)) return;
   if (step.method !== 'single' && step.method !== 'approval') return;
   const options = roundOptions(step);
   if (options.length < 2 || options.length > POLL_MAX_OPTIONS) return;
@@ -371,7 +376,13 @@ export async function speakingOrder(w: Work): Promise<{ names: string[]; remoteF
 
 export function installSessions(): void {
   registerInboundHandler(stopListening, PRIORITY.commands + 5);
+  registerInboundHandler(cardAnswers, PRIORITY.proposals + 1);
   registerInboundHandler(pollAnswers, PRIORITY.proposals + 2);
+  installCardReaders();
+  onStepOpened(postIdeaCard);
+  onStepFinished(closeStepCards);
+  onAborted(async (w) => closeAllCards(w));
+  onClosed(closeAllCards);
   onVoteOpened(postPoll);
   onConfigured(createChatSession);
 

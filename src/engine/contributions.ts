@@ -134,7 +134,7 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
       deliveryClass: 'droppable',
       versionBound: false,
       requiredPhases: ['active'],
-      text: t.echoInterpreted(author.displayName, input.summary),
+      text: input.source === 'card' ? t.echoUnverifiedCard(author.displayName, input.summary) : t.echoInterpreted(author.displayName, input.summary),
       mentions: [mention(author)],
       link: { kind: 'ack', id: ack.id },
     });

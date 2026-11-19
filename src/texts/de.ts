@@ -11,6 +11,8 @@ export const de: Texts = {
   echoRecorded: (name, summary) => `Für dich erfasst, ${name}: ${summary}`,
   echoInterpreted: (name, summary) =>
     `${name}, ich habe deine Nachricht so verstanden: ${summary}. Antworte mit "ja" (oder reagiere mit 👍), um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
+  echoUnverifiedCard: (name, summary) =>
+    `${name}, auf der Karte kam eine Antwort unter deinem Namen an, und der Kanal konnte nicht bestätigen, dass sie von dir ist: ${summary}. Antworte mit "ja" (oder reagiere mit 👍), um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
   echoChanged: (name, summary) => `Für dich geändert, ${name}: ${summary}`,
   echoConfirmed: (name, summary) => `Bestätigt, ${name}: ${summary}`,
   echoDeclined: (name) => `Verstanden, ${name}: Ich habe das nicht erfasst.`,
@@ -20,6 +22,17 @@ export const de: Texts = {
 
   stopped: (name) => `${name} hat um Stopp gebeten. Die Moderation endet hier ohne Ergebnis. Es wird nichts weiter gesendet.`,
   aborted: (reason) => `Diese Moderation endet ohne Ergebnis. Grund: ${reason}`,
+
+  card: {
+    chatToo: 'Antwortet auf der Karte oder im Chat; eure neueste Antwort zählt.',
+    rank: 'Reiht die Optionen, die beste zuerst.',
+    rankLabel: (rank, points) => (points === undefined ? `${String(rank)}. Platz` : `${String(rank)}. Platz (${String(points)} ${points === 1 ? 'Punkt' : 'Punkte'})`),
+    single: 'Wählt eine Option.',
+    approval: 'Wählt alle Optionen, mit denen ihr mitgehen könnt.',
+    idea: 'Deine Idee (eine pro Absenden)',
+    superseded: 'Ersetzt durch eine neue Version dieser Abstimmung. Bitte auf der neuen Karte antworten.',
+    closed: (when) => `Geschlossen am ${when}.`,
+  },
 
   unnamedPerson: 'Teilnehmer:in ohne Namen',
   someone: 'jemand aus dieser Runde',
