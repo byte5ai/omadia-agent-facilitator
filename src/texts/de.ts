@@ -297,6 +297,7 @@ export const de: Texts = {
       `Definition of Done (Version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
       `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'noch niemand'}`,
       `Noch offen: ${s.missing.length > 0 ? s.missing.join(', ') : 'niemand'}`,
+      ...(s.options ? [`Optionen: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Vorläufiger Stand' : 'Stand'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Offener Vorschlag: ${s.proposal}`] : []),
       s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: keine',

@@ -108,6 +108,7 @@ export async function statusText(q: Queryable, f: Facilitation): Promise<string>
     contributed: participation.contributed.map((p) => p.displayName),
     // The named people nobody was matched to are still to come.
     missing: [...participation.missing.map((p) => p.displayName), ...(step ? expectedNames(f) : [])],
+    ...(step?.method && options.length > 0 ? { options: t.options(options) } : {}),
     ...(counted && counted.tally.votes + counted.tally.abstentions > 0
       ? { tally: options.map((o) => `${o.label} ${String(counted.tally.scores[o.key] ?? 0)}`).join(', ') }
       : {}),
