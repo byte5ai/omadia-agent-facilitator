@@ -4,6 +4,8 @@
 // posted at the agreed time; follow-up runs after the close and ends when
 // every item is done or past its due date.
 
+import type { ConversationMessageRecord } from '@omadia/plugin-api';
+
 import { HOUR_MS, MINUTE_MS } from '../clock.js';
 import { insert, one, update } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -118,6 +120,28 @@ export async function markActionDone(w: Work, item: ActionItem, owner: Pick<Part
   if (!open && w.f.followupState === 'active') await endFollowup(w);
 }
 
+/**
+ * "done" with a mention, in a conversation where this facilitation runs next
+ * to the follow-up of an earlier one: the kernel gave the message to both.
+ * When it is not about an item of this facilitation and its author owns an
+ * item of that follow-up (open, or closed by this very message a moment
+ * ago), the follow-up answers it; this facilitation
+ * does not start a turn for it as well.
+ */
+async function meantForFollowup(w: Work, record: ConversationMessageRecord, principal: string): Promise<boolean> {
+  if (record.addressedToBot !== true || w.f.phase !== 'active') return false;
+  // The follow-up may have handled the message first: the item is done by
+  // then, and with the last item the follow-up itself has ended.
+  const theirs = await w.tx.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_action_items a JOIN plg_omadia_agent_facilitator_facilitations f ON f.id = a.facilitation_id
+      WHERE f.id <> $1 AND f.facilitator_agent = $2 AND f.channel_type = $3 AND f.conversation_id = $4 AND a.owner_principal = $5
+        AND ((a.status = 'confirmed' AND f.followup_state = 'active') OR (a.status = 'done' AND a.done_at > $6))
+      LIMIT 1`,
+    [w.f.id, w.f.facilitatorAgent, w.f.channelType, w.f.conversationId, principal, new Date(w.now.getTime() - MINUTE_MS)],
+  );
+  return theirs.rows.length > 0;
+}
+
 /** "done 2" from the owner, during the facilitation or its follow-up. */
 const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || record.kind !== 'created') return undefined;
@@ -132,7 +156,7 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
     // is the one. Several: the engine asks which, and closes nothing.
     const own = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.status === 'confirmed' && a.ownerPrincipal === author.principalId);
     const only = own[0];
-    if (!only) return undefined;
+    if (!only) return (await meantForFollowup(w, record, author.principalId)) ? { outcome: 'left_to_followup' } : undefined;
     if (own.length > 1) {
       w.post({ purpose: 'action_done_which', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionDoneWhich(author.displayName, own.map((a) => a.number)) });
       return { outcome: 'action_done_which' };
@@ -142,7 +166,7 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
     return undefined;
   }
   const item = (await store.listActionItems(w.tx, w.f.id)).find((a) => a.number === number);
-  if (!item || item.status !== 'confirmed') return undefined;
+  if (!item || item.status !== 'confirmed') return (await meantForFollowup(w, record, author.principalId)) ? { outcome: 'left_to_followup' } : undefined;
   if (item.ownerPrincipal !== author.principalId) {
     w.post({ purpose: 'action_not_yours', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionNotYours(author.displayName, number) });
     return { outcome: 'action_not_owner' };

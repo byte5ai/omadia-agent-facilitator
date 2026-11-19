@@ -228,6 +228,12 @@ What follows from it:
   group confirmed: `protocol_dispatch` under the closing scope,
   `followup_scheduling` under the scheduling scope. A grant is issued with the
   current recipients before each use and revoked when its work is done.
+- **One mention, one reply.** While a facilitation runs the engine answers
+  and the kernel suppresses the turn a mention would start. In follow-up it
+  is the other way round: a mention is answered by the facilitator's
+  ordinary turn, which closes an action item through
+  `facilitation_action_done`; the engine itself answers a reply to one of its
+  messages, a card button and a private message.
 - **A participant can ask for the status privately.** "status" in a private
   chat with the facilitator answers with the status of their facilitation and
   nothing else; with several, the facilitator asks which. An owner can report

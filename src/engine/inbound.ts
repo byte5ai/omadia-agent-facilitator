@@ -19,6 +19,7 @@ import type { EngineCore, Work } from './core.js';
 import { abortInWork } from './lifecycle.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { expectedNames, sameName } from './roll.js';
+import { wantedMode } from './scopes.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -257,6 +258,36 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
   return author.status === 'active' ? author : undefined;
 }
 
+/** Is a facilitation of this facilitator live in the conversation? Then the
+ *  kernel suppresses the facilitator's ordinary turn there. */
+export async function ordinaryTurnSuppressed(w: Work): Promise<boolean> {
+  const live = await store.findLiveByConversation(w.tx, w.f.channelType, w.f.conversationId);
+  return live !== undefined && live.facilitatorAgent === w.f.facilitatorAgent;
+}
+
+/**
+ * One mention, one reply.
+ *
+ * While a facilitation runs, the engine reads every message and the kernel
+ * suppresses the turn a mention would start: the engine answers. In follow-up
+ * the engine only hears what is addressed to the facilitator, and the kernel
+ * lets the facilitator's ordinary turn answer a mention (it also delivers the
+ * mention to the engine as an event). Both would answer. The kernel offers
+ * the engine no way to claim the message, so the engine leaves a mention to
+ * the turn: it does nothing for it and posts nothing. What the person wants
+ * done, the turn does through a tool (`facilitation_action_done`), and a tool
+ * that posts makes the kernel drop the turn's own text.
+ *
+ * A reply to one of the facilitation's messages and a card button start no
+ * turn: those stay the engine's. So does a mention where another
+ * facilitation of this facilitator is live, because then no turn runs.
+ */
+async function leftToOrdinaryTurn(w: Work, record: ConversationMessageRecord): Promise<boolean> {
+  if (record.addressedToBot !== true || (record.kind !== 'created' && record.kind !== 'edited')) return false;
+  if (wantedMode(w.f) !== 'addressed') return false;
+  return !(await ordinaryTurnSuppressed(w));
+}
+
 /** One stored event, inside the facilitation's unit of work. */
 export async function handleInbound(w: Work, record: ConversationMessageRecord): Promise<InboundResult> {
   const claimed = await store.claimInbound(w.tx, ledgerRow(w.f.id, record, w.now));
@@ -275,6 +306,13 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord):
     await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'before_facilitation');
     await store.advanceCursor(w.tx, w.f.id, record.eventId);
     return { outcome: 'before_facilitation' };
+  }
+
+  // A mention in follow-up is the ordinary turn's to answer (see below).
+  if (await leftToOrdinaryTurn(w, record)) {
+    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'left_to_turn');
+    await store.advanceCursor(w.tx, w.f.id, record.eventId);
+    return { outcome: 'left_to_turn' };
   }
 
   const author = await resolveAuthor(w, record);
