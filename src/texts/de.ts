@@ -200,6 +200,14 @@ export const de: Texts = {
   actionDone: (owner, number, description) => `Erledigt, danke ${owner}: #${String(number)} ${description}`,
   actionDoneWhich: (name, numbers) => `${name}, welche ist erledigt? Antworte mit ${numbers.map((n) => `"erledigt ${String(n)}"`).join(' oder ')}.`,
   actionNotYours: (name, number) => `${name}, Aufgabe #${String(number)} kannst nicht du abschließen.`,
+  statusAfterClose: (s) =>
+    [
+      `Status: ${s.phase}${s.reason ? ` (${s.reason})` : ''}. Ziel: ${s.goal}`,
+      ...(s.decisions.length > 0 ? ['Entscheidungen:', ...s.decisions.map((d) => `- ${d}`)] : []),
+      `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'niemand'}`,
+      ...(s.actions.length > 0 ? [`Aufgaben (${String(s.open)} offen):`, ...s.actions.map((a) => `- ${a}`)] : ['Aufgaben: keine']),
+      ...(s.until ? [`Nachverfolgung bis: ${s.until}`] : []),
+    ].join('\n'),
   actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number, description, owner, due, status) => `#${String(number)} ${description} (${owner}, fällig ${due}): ${status}`,
   actionStatusWords: { proposed: 'wartet auf die verantwortliche Person', confirmed: 'offen', done: 'erledigt', declined: 'abgelehnt' },

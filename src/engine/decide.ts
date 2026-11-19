@@ -4,6 +4,7 @@
 // Counting is `methods/evaluate.ts`; this module only loads the ballots from
 // the tables, asks it, and acts: decision, runoff, objection, conclusion.
 
+import { namesOf, withoutMention } from './addressing.js';
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { HOUR_MS } from '../clock.js';
@@ -447,16 +448,19 @@ const ballots: InboundHandler = async ({ w, record, author, retired }) => {
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) return undefined;
   const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  // A ballot is read without the mention it starts with ("Mona (Test) A"):
+  // the mention says who is spoken to, the rest is the ballot.
+  const cast = withoutMention(record.text ?? '', namesOf(w.f), record.addressedToBot === true);
   const parsed = parseBallot({
     method: step.method,
     options: roundOptions(step),
-    text: record.text ?? '',
+    text: cast,
     author: { id: author.principalId, name: author.displayName },
     people: people(participants),
   });
   if (parsed.kind === 'not_a_ballot') {
     // An option that is no longer up in the runoff deserves an answer.
-    const outside = step.roundOptions && parseBallot({ method: step.method, options: step.options, text: record.text ?? '' }).kind === 'ballot';
+    const outside = step.roundOptions && parseBallot({ method: step.method, options: step.options, text: cast }).kind === 'ballot';
     if (!outside) return undefined;
     const t = texts(w.f.language);
     await askClarification(w, { record, author, step, question: t.notInRunoff('', t.list(roundOptions(step).map((o) => o.label))).replace(/^, /, '') });

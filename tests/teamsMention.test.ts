@@ -10,6 +10,7 @@ import { HOUR_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { withoutMention } from '../src/engine/addressing.js';
 import { normaliseCommand } from '../src/engine/inbound.js';
+import { statusText } from '../src/engine/status.js';
 import { ANNA, BERT, CARA, createHarness, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
@@ -135,4 +136,54 @@ test('scenario B, during a vote: a request with a real mention that does not end
   assert.equal((await outcomes(f.id)).at(-1), 'status');
   await teams(conv, 'anna', 'Mona (Test) stopp');
   assert.equal((await h.facilitation(conv)).phase, 'aborted');
+});
+
+// ── 1.5.2 ───────────────────────────────────────────────────────────────────
+
+test('a ballot after a mention is a ballot: "Mona (Test) A" is counted for its author, without a model', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('tm-ballot', [ANNA, BERT, CARA]);
+  const f = await startActive(h, conv, { method: 'single', options: ['Harbour', 'Garden'] }, 'mona');
+  const turns = h.kernel.turns.length;
+  await teams(conv, 'anna', 'Mona (Test) A');
+  await teams(conv, 'bert', '<at>Mona (Test)</at> Garden');
+  await teams(conv, 'cara', 'Mona a');
+  assert.equal(h.kernel.turns.length, turns, 'no turn: each was read as the ballot it is');
+  const valid = (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid');
+  assert.deepEqual(valid.map((c) => [c.participantPrincipal, (c.payload['ballot'] as { choice?: string } | undefined)?.choice ?? JSON.stringify(c.payload['ballot'])]).sort(), [
+    ['user:anna', 'A'],
+    ['user:bert', 'B'],
+    ['user:cara', 'A'],
+  ]);
+  const closed = await h.facilitation(conv);
+  assert.equal(closed.phase, 'closed', 'everybody voted: the result is in');
+  // And the status afterwards names who voted.
+  const status = (await statusText(h.db.pool, closed)).split('\n');
+  assert.equal(status[0], 'Status: ended. Goal: Pick a venue');
+  assert.ok(status.includes('Contributed: Anna, Bert, Cara'), status.join(' | '));
+  assert.ok(status.includes('Action items: none'));
+});
+
+test('the status after the close says what was reached, who contributed and which action items are open, in the group and privately', { skip: PG_SKIP }, async () => {
+  const conv = 'tm-status';
+  const f = await followUp(conv, 2);
+  // One of the two is done.
+  assert.equal(await teams(conv, 'anna', 'Mona (Test) erledigt 2'), 'engine');
+  assert.equal(await teams(conv, 'bert', 'Mona (Test) Status'), 'engine');
+  const status = posts(conv).at(-1) ?? '';
+  const lines = status.split('\n');
+  assert.equal(lines[0], `Status: closed, action items are being followed up. Goal: Next steps ${conv}`);
+  assert.equal(lines[1], 'Contributed: Anna', 'who took on an action item, not "nobody yet"');
+  assert.equal(lines[2], 'Action items (1 open):');
+  assert.match(lines[3] ?? '', /^- #1 Task 1 \(Anna, due .+\): open$/);
+  assert.match(lines[4] ?? '', /^- #2 Task 2 \(Anna, due .+\): done$/);
+  assert.match(lines[5] ?? '', /^Followed up until: /);
+  assert.equal(lines.length, 6);
+  assert.doesNotMatch(status, /Still open|nobody yet|Definition of done/, 'nothing about a step that no longer exists');
+  // The private answer is the same status.
+  // (Anna takes part in other follow-ups of this file: she is asked which.)
+  const which = (await h.kernel.privateMessage('mona', 'anna', 'status')) ?? '';
+  const number = new RegExp(`^(\\d+)\\. Next steps ${conv}$`, 'm').exec(which)?.[1];
+  assert.ok(number, which);
+  assert.equal(await h.kernel.privateMessage('mona', 'anna', `status ${String(number)}`), status);
+  assert.equal((await h.facilitation(conv)).id, f.id);
 });

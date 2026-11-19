@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.2
+
+### Fixed
+
+- **The status after the close described a step that no longer exists.**
+  Asked during the follow-up (in the group or privately) it said "Contributed:
+  nobody yet / Still open: nobody" and listed no action item. It now says what
+  the facilitation reached: its decisions, who contributed (everybody whose
+  contribution counted over all steps, and who took on an action item), the
+  action items with number, owner, due date and state, how many are open, and
+  until when they are followed up. For a facilitation that ended without a
+  result it says why.
+- **A ballot after a mention was not counted.** "Mona (Test) A" went to the
+  facilitator's turn instead of being read as the ballot it is. The mention
+  at the start is taken off before the ballot is read (the display name as
+  Teams writes it, a tag, "@name").
+
 ## 1.5.1
 
 A mention as Teams writes it (live finding D36).
