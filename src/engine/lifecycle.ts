@@ -9,15 +9,17 @@
 
 import { DAY_MS } from '../clock.js';
 import { isValidTimezone } from '../config.js';
+import type { Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { poolTransaction } from '../db/tx.js';
-import { principalKey } from '../kernel.js';
-import type { RosterParticipant } from '../kernel.js';
 import { toOptions } from '../methods/ballot.js';
 import { FORMATS } from './formats.js';
 import { lifetimeEnd } from './lifetime.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
+import { askedOffsets, reminderOffsetsFor } from './reminders.js';
+import { buildRoll, effectiveCloseRule, expectedNames } from './roll.js';
+import type { Roll } from './roll.js';
 import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
@@ -45,6 +47,8 @@ export interface ConfigureInput extends ConversationRef {
   callerPrincipalId: string;
   /** The caller's name, when the kernel states it. */
   callerDisplayName?: string | undefined;
+  /** The participants the request named. They are the list then. */
+  participants?: string[];
   goal: string;
   /** Absent: the agreed one is kept, or a default from the goal is used. */
   definitionOfDone?: string;
@@ -55,6 +59,9 @@ export interface ConfigureInput extends ConversationRef {
   language?: 'de' | 'en';
   closeRule?: CloseRule;
   reminderOffsetsHours?: number[];
+  /** Reminders the request asked for: minutes before the deadline, an empty
+   *  list for none. Validated here, against the deadline. */
+  reminderMinutesBefore?: unknown;
   /** The decision the facilitation is about, when it is one vote. */
   decision?: DecisionSetup;
   /** An agenda of its own instead of the format's template. */
@@ -168,13 +175,15 @@ export function rulesOf(f: Facilitation, step: Step | undefined): string[] {
     consent: () => t.rules.consent(String(step.methodConfig['statement'] ?? step.title)),
     assignment: () => t.rules.assignment(options),
   }[step.method]();
-  return step.method === 'assignment' ? [line] : [line, t.rules.common(f.closeRule)];
+  return step.method === 'assignment' ? [line] : [line, t.rules.common(effectiveCloseRule(f))];
 }
 
 export interface ConfigureResult {
   facilitation: Facilitation;
   created: boolean;
   participants: Participant[];
+  /** Named in the request, matched to nobody yet. */
+  expected: string[];
   /** Things the facilitator has to tell the group (degradations). */
   notes: string[];
   /** The definition of done the engine wrote because none was given. */
@@ -229,7 +238,54 @@ const READINESS_UNVERIFIED = 'The channel could not confirm that I can read ever
 const OWN_IDENTITY_REQUIRED =
   'This facilitator has no identity of its own on this channel. A facilitator never speaks through another bot, so it cannot start a facilitation here. An operator has to give it its own channel identity first.';
 
-const matchesCaller = (member: RosterParticipant, caller: string): boolean => principalKey(member.userRef) === caller;
+const PARTICIPANTS_UNKNOWN =
+  "The channel cannot list who is in this conversation, so I cannot tell when everybody has voted. Either name the participants (argument 'participants': the names from the request; the person who asked always takes part), then it closes when all of them have voted. Or set a deadline and leave closeRule out, then it is evaluated at the deadline; the definition of done must then not say that it is done when everybody has voted. Nothing was created.";
+
+/** Who takes part, from the channel's member list and the request. */
+async function rollFor(engine: EngineCore, input: ConfigureInput): Promise<Roll> {
+  // Read as the facilitator: its own bot is the one that is in the conversation.
+  const roster = await engine.deps.kernel.rosters()?.getRoster(input.channelType, input.conversationId, { agentSlug: input.agentSlug });
+  const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
+  const statedName = input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? input.callerDisplayName : undefined;
+  return buildRoll({
+    members,
+    // A member list without a single person is no answer either.
+    complete: roster !== undefined && !roster.partial && members.length > 0,
+    initiator: { principalId: input.callerPrincipalId, displayName: statedName },
+    named: input.participants,
+  });
+}
+
+/**
+ * "Everybody has voted" needs a list. Without one a vote is evaluated at its
+ * deadline, and with neither there is nothing that would ever close it: that
+ * is refused. Undefined: nothing forces a rule.
+ */
+function closeRuleFor(c: { votes: boolean; open: boolean; asked: CloseRule | undefined; hasDeadline: boolean; definitionOfDone: string | undefined }): CloseRule | undefined {
+  if (!c.votes || !c.open) return c.asked;
+  if (c.asked === 'all_contributed' || !c.hasDeadline || (c.definitionOfDone !== undefined && DONE_WHEN_ALL.test(c.definitionOfDone))) {
+    throw new Refusal('participants_unknown', PARTICIPANTS_UNKNOWN);
+  }
+  return 'at_deadline';
+}
+
+async function storeRoll(tx: Queryable, facilitationId: string, roll: Roll, language: 'de' | 'en', now: Date): Promise<Participant[]> {
+  const participants: Participant[] = [];
+  for (const person of roll.people) {
+    const added = await store.addParticipant(tx, {
+      facilitationId,
+      principalId: person.principalId,
+      canonicalPrincipal: person.principalId,
+      displayName: nameOrPlaceholder(person.displayName, person.principalId, language),
+      email: person.email,
+      source: person.source,
+      joinedAt: now,
+      changedAt: now,
+    });
+    if (added) participants.push(added);
+  }
+  return participants;
+}
 
 /** Create a facilitation in `configuring`, or adjust the one being set up. */
 export async function configureFacilitation(engine: EngineCore, input: ConfigureInput): Promise<ConfigureResult> {
@@ -255,6 +311,11 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   }
 
   const existing = await store.findLiveByConversation(pool, input.channelType, input.conversationId);
+  // Reminders somebody asked for are kept as asked; the others follow from
+  // the time to the deadline, so that none is announced that cannot happen.
+  const askedHours =
+    input.reminderMinutesBefore !== undefined ? askedOffsets(input.reminderMinutesBefore, deadline ?? existing?.deadline, now) : input.reminderOffsetsHours ? [...input.reminderOffsetsHours].sort((a, b) => b - a) : undefined;
+  const derivedHours = deadline ? reminderOffsetsFor(deadline.getTime() - now.getTime(), config.reminderOffsetsHours) : undefined;
   // The handshake states both the definition of done and when the engine
   // evaluates. The two must not say opposite things.
   if ((input.closeRule ?? existing?.closeRule) === 'at_deadline' && input.definitionOfDone !== undefined && DONE_WHEN_ALL.test(input.definitionOfDone)) {
@@ -274,6 +335,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   }
 
   if (existing) {
+    const roll = input.participants && input.participants.length > 0 ? await rollFor(engine, input) : undefined;
     const facilitation = await engine.work(existing.id, async (w) => {
       const dod = await store.currentDod(w.tx, existing.id);
       // A call that names no definition of done keeps the one that is there.
@@ -282,6 +344,23 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         await store.patchDodVersion(w.tx, dod.id, { text: dodText, criteria: input.dodCriteria ?? null });
       }
       const agenda = agendaFor(input, config);
+      // A list of participants that is named now replaces the one from the
+      // first call; nothing was recorded for anybody yet.
+      const settings = { ...existing.settings };
+      if (roll) {
+        await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_participants WHERE facilitation_id = $1', [existing.id]);
+        await storeRoll(w.tx, existing.id, roll, input.language ?? existing.language, now);
+        delete settings.openRoster;
+        delete settings.expected;
+        Object.assign(settings, { participantsNamed: true }, roll.expected.length > 0 ? { expected: roll.expected } : {});
+      }
+      const forced = closeRuleFor({
+        votes: agenda.some((s) => s.method !== undefined && s.method !== null),
+        open: settings.openRoster === true,
+        asked: input.closeRule,
+        hasDeadline: (deadline ?? existing.deadline) !== null && (deadline ?? existing.deadline) !== undefined,
+        definitionOfDone: input.definitionOfDone,
+      });
       await store.replaceSteps(w.tx, existing.id, agenda);
       if (dod && !input.dodCriteria) await store.patchDodVersion(w.tx, dod.id, { text: dodText, criteria: criteriaFor(agenda) });
       await w.event('reconfigured', 'facilitator', { goal: input.goal });
@@ -291,14 +370,16 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         ...(deadline ? { deadline } : {}),
         ...(input.timezone ? { timezone: input.timezone } : {}),
         ...(input.language ? { language: input.language } : {}),
-        ...(input.closeRule ? { closeRule: input.closeRule } : {}),
-        ...(input.reminderOffsetsHours ? { reminderPolicy: { offsetsHours: [...input.reminderOffsetsHours].sort((a, b) => b - a) } } : {}),
+        // The rule that only the missing list had forced goes with it.
+        ...(forced ? { closeRule: forced } : roll && existing.settings.openRoster === true ? { closeRule: 'all_contributed' as const } : {}),
+        ...(roll ? { settings } : {}),
+        ...(askedHours ? { reminderPolicy: { offsetsHours: askedHours, asked: true } } : derivedHours && existing.reminderPolicy.asked !== true ? { reminderPolicy: { offsetsHours: derivedHours } } : {}),
         ...(input.followUp !== undefined || statusAt
           ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) } }
           : {}),
       });
     });
-    return { facilitation, created: false, participants: await store.listParticipants(pool, existing.id), notes };
+    return { facilitation, created: false, participants: await store.listParticipants(pool, existing.id), expected: [...expectedNames(facilitation)], notes };
   }
 
   // Name and language come from the kernel's record of the facilitator, not
@@ -335,6 +416,25 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     notes.push(READINESS_UNVERIFIED);
   }
 
+  const roll = await rollFor(engine, input);
+  const openRoster = roll.open;
+  if (openRoster) notes.push('The channel could not list every member of this conversation; whoever writes here counts as a participant.');
+
+  const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
+  const agenda = agendaFor({ ...input, language }, config);
+  // A setup is stored with what is known. Without a definition of done the
+  // engine writes the plain one that follows from the goal; the group sees it
+  // in the handshake and can change it like any other.
+  const defaultedDod = input.definitionOfDone === undefined ? texts(language).defaultDod(input.goal, agenda.some((s) => s.method !== undefined && s.method !== null)) : undefined;
+  const definitionOfDone = input.definitionOfDone ?? defaultedDod ?? input.goal;
+  // "Everybody has voted" needs a list. Without one a vote is evaluated at
+  // its deadline; with neither there is nothing that would ever close it.
+  const votes = agenda.some((s) => s.method !== undefined && s.method !== null);
+  const closeRule = closeRuleFor({ votes, open: openRoster, asked: input.closeRule, hasDeadline: deadline !== undefined, definitionOfDone: input.definitionOfDone }) ?? 'all_contributed';
+  if (votes && openRoster) {
+    notes.push('I cannot see who belongs to this conversation, so the vote is evaluated at the deadline, not when everybody has voted. To close as soon as everybody has voted, start again with the participants named.');
+  }
+
   const subscription = await messages.subscribe(input);
   if (subscription.outcome === 'refused') {
     throw new Refusal(subscription.code, subscription.code === 'no_identity' ? OWN_IDENTITY_REQUIRED : `I cannot read this conversation: ${subscription.message}. Nothing was started.`);
@@ -349,26 +449,6 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     [input.agentSlug, input.channelType, input.conversationId],
   );
 
-  // Read as the facilitator: its own bot is the one that is in the conversation.
-  const roster = await kernel.rosters()?.getRoster(input.channelType, input.conversationId, { agentSlug: input.agentSlug });
-  const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
-  // A member list without a single person is no answer either.
-  const openRoster = !roster || roster.partial || members.length === 0;
-  if (openRoster) notes.push('The channel could not list every member of this conversation; whoever writes here counts as a participant.');
-  const listed = members.find((m) => matchesCaller(m, input.callerPrincipalId));
-  // Whoever asked takes part, listed or not, as soon as their name is known.
-  const statedName = input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? input.callerDisplayName : undefined;
-  const asked: RosterParticipant | undefined = !listed && statedName ? { userRef: { kind: 'user', id: input.callerPrincipalId, displayName: statedName } } : undefined;
-  const initiator = listed ?? asked;
-  if (asked) members.push(asked);
-
-  const language = input.language ?? profileLanguage(profile?.language) ?? config.language;
-  const agenda = agendaFor({ ...input, language }, config);
-  // A setup is stored with what is known. Without a definition of done the
-  // engine writes the plain one that follows from the goal; the group sees it
-  // in the handshake and can change it like any other.
-  const defaultedDod = input.definitionOfDone === undefined ? texts(language).defaultDod(input.goal, agenda.some((s) => s.method !== undefined && s.method !== null)) : undefined;
-  const definitionOfDone = input.definitionOfDone ?? defaultedDod ?? input.goal;
   try {
     const result = await poolTransaction(pool, async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
@@ -376,21 +456,23 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         channelType: input.channelType,
         conversationId: input.conversationId,
         initiatorPrincipal: input.callerPrincipalId,
-        initiatorParticipant: initiator ? principalKey(initiator.userRef) : null,
+        initiatorParticipant: input.callerPrincipalId,
         goal: input.goal,
         format: input.format ?? 'custom',
         language,
         timezone: input.timezone ?? config.timezone,
-        closeRule: input.closeRule ?? 'all_contributed',
-        reminderPolicy: { offsetsHours: [...(input.reminderOffsetsHours ?? config.reminderOffsetsHours)].sort((a, b) => b - a) },
+        closeRule,
+        reminderPolicy: askedHours ? { offsetsHours: askedHours, asked: true } : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a) },
         followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}) },
         settings: {
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
           ...(profile?.displayName ? { facilitatorName: profile.displayName } : {}),
-          ...(statedName ? { initiatorName: statedName } : {}),
+          ...(input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? { initiatorName: input.callerDisplayName } : {}),
           ...(openRoster ? { openRoster: true } : {}),
+          ...(roll.named ? { participantsNamed: true } : {}),
+          ...(roll.expected.length > 0 ? { expected: roll.expected } : {}),
         },
         deadline: deadline ?? null,
         createdAt: now,
@@ -405,20 +487,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         createdAt: now,
       });
       await store.replaceSteps(tx, facilitation.id, agenda);
-      const participants: Participant[] = [];
-      for (const member of members) {
-        const added = await store.addParticipant(tx, {
-          facilitationId: facilitation.id,
-          principalId: principalKey(member.userRef),
-          canonicalPrincipal: principalKey(member.userRef),
-          displayName: nameOrPlaceholder(member.userRef.displayName, principalKey(member.userRef), language),
-          email: member.userRef.email ?? member.userPrincipalName ?? null,
-          source: member === asked ? 'joined' : 'roster',
-          joinedAt: now,
-          changedAt: now,
-        });
-        if (added) participants.push(added);
-      }
+      const participants = await storeRoll(tx, facilitation.id, roll, language, now);
       // No facilitation stays open forever.
       await insertIfAbsent(
         tx,
@@ -440,7 +509,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         occurredAt: now,
         payload: { goal: input.goal, initiator: input.callerPrincipalId, participants: participants.length },
       });
-      return { facilitation, created: true, participants, notes, ...(defaultedDod !== undefined ? { defaultedDod } : {}) };
+      return { facilitation, created: true, participants, expected: roll.expected, notes, ...(defaultedDod !== undefined ? { defaultedDod } : {}) };
     });
     // What needs the kernel (the session's capabilities) is fetched now,
     // outside any transaction.

@@ -95,6 +95,7 @@ export const de: Texts = {
 
   reminderGroup: (open, deadline) =>
     `Erinnerung: ${open === 1 ? 'Ein Beitrag ist' : `${String(open)} Beiträge sind`} noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Fragt nach dem "Status" für die Details.`,
+  reminderGroupOpen: (deadline) => `Erinnerung: Diese Abstimmung läuft${deadline ? ` noch bis ${deadline}` : ' noch'}. Wer noch nicht beigetragen hat, kann das jetzt tun.`,
   reminderDirect: (name, goal, deadline) =>
     `Hallo ${name}, dein Beitrag zu "${goal}" ist noch offen.${deadline ? ` Deadline: ${deadline}.` : ''} Bitte antworte in der Gruppe; hier kann ich keine Beiträge annehmen.`,
   directUnreachable: () =>
@@ -233,8 +234,11 @@ export const de: Texts = {
       h.participants.length === 0
         ? 'Teilnehmende: Die Mitgliederliste dieser Unterhaltung konnte ich nicht abrufen. Wer hier schreibt, nimmt teil.'
         : `Teilnehmende: ${h.participants.join(', ')}${h.rosterOpen ? ' (die Mitgliederliste konnte ich nicht vollständig abrufen; wer hier schreibt, nimmt teil)' : ''}`,
+      ...(h.unmatched.length > 0 ? [`Ich weiß noch nicht, wer von euch ${h.unmatched.join(', ')} ${h.unmatched.length === 1 ? 'ist' : 'sind'}: Schreibt bitte einmal kurz hier.`] : []),
+      ...(h.atDeadlineOnly ? ['Ich sehe nicht, wer alles zu dieser Unterhaltung gehört, und kann deshalb nicht erkennen, wann alle abgestimmt haben. Ich werte zur Deadline aus.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: keine vereinbart',
       ...(h.reminders ? [`Erinnerungen: ${h.reminders} vor der Deadline, nur solange Beiträge offen sind; in der Gruppe ohne Namen und privat an die Betroffenen, wo ich sie erreiche.`] : []),
+      ...(h.noReminders !== undefined ? [h.noReminders === null ? 'Erinnerungen: keine.' : `Erinnerungen: keine, die Deadline ist in ${String(h.noReminders)} ${h.noReminders === 1 ? 'Minute' : 'Minuten'}.`] : []),
       h.followUp
         ? 'Aufgaben: Ich erinnere die Verantwortlichen vor der Fälligkeit und höre auf, wenn alles erledigt oder überfällig ist.'
         : 'Aufgaben: keine Nachverfolgung nach dem Abschluss, außer ihr wünscht sie.',
@@ -246,7 +250,9 @@ export const de: Texts = {
         : 'Bericht: Das Ergebnis geht zuerst an diese Gruppe, danach mit dem Protokoll an die Person, die diese Moderation gestartet hat. Sie erhält nichts, was ihr nicht erfahren habt. Kann ich privat nicht schreiben, steht das Protokoll stattdessen hier.',
       'Fragt jederzeit nach dem "Status". "Stopp" beendet die Moderation.',
     ].join('\n'),
-  reminderTimes: (hours) => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} Min.` : `${String(h)} Std.`)).join(', '),
+  reminderTimes: (hours) =>
+    // Whole hours in hours, everything else in minutes.
+    hours.map((h) => (Number.isInteger(h) ? `${String(h)} Std.` : `${String(Math.max(1, Math.round(h * 60)))} Min.`)).join(', '),
 
   status: (s) =>
     [
@@ -270,6 +276,7 @@ export const de: Texts = {
     close_rule: (rule) =>
       rule === 'at_deadline' ? 'zur Deadline auswerten statt sobald alle beigetragen haben' : 'auswerten, sobald alle beigetragen haben, statt zur Deadline',
     method: (title, rules) => `ändern, wie "${title}" entschieden wird. ${rules}`,
+    reminders: (times) => (times === '' ? 'vor der Deadline nicht mehr erinnern' : `${times} vor der Deadline erinnern`),
     dod_met: (summary) => `die Definition of Done ist erfüllt, und wir schließen damit ab:\n${summary}`,
   },
   changed: {
@@ -278,6 +285,7 @@ export const de: Texts = {
     close_rule: (rule) =>
       rule === 'at_deadline' ? 'Ab jetzt wird das Ergebnis zur Deadline ausgewertet.' : 'Ab jetzt wird ausgewertet, sobald alle beigetragen haben.',
     method: (title, rules) => `"${title}" wird jetzt so entschieden. ${rules}`,
+    reminders: (times) => (times === '' ? 'Vor der Deadline wird nicht mehr erinnert.' : `Erinnert wird jetzt ${times} vor der Deadline.`),
   },
   actAgain: (names) => `Beiträge nach den alten Regeln passen nicht mehr. Bitte tragt noch einmal bei: ${names}.`,
 
@@ -374,6 +382,8 @@ export const de: Texts = {
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
   protocolSent: (channel, mail) =>
     `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}` : ''}.`,
+  protocolMailNoAddresses: (protocol) =>
+    `Ich kann das Protokoll nicht mailen: Dieser Kanal liefert mir keine Mail-Adressen der Teilnehmenden, und im Chat sammle ich keine Adressen ein. ${protocol === undefined ? 'Das Protokoll steht in dieser Gruppe.' : `Hier ist es stattdessen:\n\n${protocol}`}`,
   protocolMailUnavailable: (reason) => `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe, und die Teilnehmenden haben es privat erhalten, wo ich sie erreiche.`,
   followupCreated: (subject, when, link, unknown) =>
     `Der Folgetermin "${subject}" steht für ${when} in den Kalendern.${link ? '' : ' Die Einladung ging ohne Meeting-Link raus.'}${unknown > 0 ? ` Für ${String(unknown)} ${unknown === 1 ? 'Person' : 'Personen'} konnte ich keine Verfügbarkeit sehen, prüft die Zeit bitte.` : ''}`,
@@ -388,7 +398,7 @@ export const de: Texts = {
     provider_error: 'der Kalenderdienst hat einen Fehler gemeldet',
     grant_revoked: 'die Nachverfolgung dieser Moderation ist beendet',
     unknown_outcome: 'der Dienst hat nicht geantwortet',
-    no_addresses: 'ich habe keine Mail-Adressen der Teilnehmenden',
+    no_addresses: 'dieser Kanal liefert mir keine Mail-Adressen der Teilnehmenden, und im Chat sammle ich keine Adressen ein',
   },
   invitationBody: (goal, summary) => `Folgetermin zu "${goal}".\n\n${summary}`,
 

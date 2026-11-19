@@ -111,6 +111,9 @@ export const en = {
 
   reminderGroup: (open: number, deadline: string | undefined): string =>
     `Reminder: ${open === 1 ? 'one contribution is' : `${String(open)} contributions are`} still open.${deadline ? ` Deadline: ${deadline}.` : ''} Ask "status" for the details.`,
+  /** Nobody can be counted as missing: the member list is unknown. */
+  reminderGroupOpen: (deadline: string | undefined): string =>
+    `Reminder: this vote is open${deadline ? ` until ${deadline}` : ''}. Whoever has not contributed yet can still do so.`,
   reminderDirect: (name: string, goal: string, deadline: string | undefined): string =>
     `Hello ${name}, your contribution to "${goal}" is still open.${deadline ? ` Deadline: ${deadline}.` : ''} Please answer in the group; I cannot take contributions here.`,
   directUnreachable: (): string =>
@@ -254,8 +257,15 @@ export const en = {
     participants: string[];
     /** The channel could not list the members (or not all of them). */
     rosterOpen: boolean;
+    /** Named in the request (and listed under participants), matched to nobody yet. */
+    unmatched: string[];
+    /** A vote without a known list: evaluated at the deadline only. */
+    atDeadlineOnly: boolean;
     deadline?: string;
     reminders?: string;
+    /** There is a deadline and no reminder will be sent: the minutes to the
+     *  deadline when that is why, `null` when the group wants none. */
+    noReminders?: number | null;
     followUp: boolean;
     changeWindowHours: number;
     perception?: string;
@@ -272,8 +282,11 @@ export const en = {
       h.participants.length === 0
         ? 'Participants: I could not get the member list of this conversation. Whoever writes here takes part.'
         : `Participants: ${h.participants.join(', ')}${h.rosterOpen ? ' (I could not get the complete member list; whoever writes here takes part)' : ''}`,
+      ...(h.unmatched.length > 0 ? [`I do not know yet who of you ${h.unmatched.length === 1 ? `${h.unmatched[0] ?? ''} is` : `${h.unmatched.join(', ')} are`}: please write here once.`] : []),
+      ...(h.atDeadlineOnly ? ['I cannot see who belongs to this conversation, so I cannot tell when everybody has voted. I evaluate at the deadline.'] : []),
       h.deadline ? `Deadline: ${h.deadline}` : 'Deadline: none agreed',
       ...(h.reminders ? [`Reminders: ${h.reminders} before the deadline, only while contributions are open; in the group without names, and privately to the people concerned where I can reach them.`] : []),
+      ...(h.noReminders !== undefined ? [h.noReminders === null ? 'Reminders: none.' : `Reminders: none, the deadline is in ${String(h.noReminders)} minute${h.noReminders === 1 ? '' : 's'}.`] : []),
       h.followUp
         ? 'Action items: I remind each owner before the due date and stop when everything is done or past due.'
         : 'Action items: no follow-up after the close, unless you ask for it.',
@@ -285,7 +298,9 @@ export const en = {
         : 'Report: the result goes to this group first, then with the protocol to the person who started this facilitation. They receive nothing you were not told about. If I cannot write to them privately, the protocol goes here instead.',
       'Ask "status" at any time. "stop" ends the facilitation.',
     ].join('\n'),
-  reminderTimes: (hours: readonly number[]): string => hours.map((h) => (h < 1 ? `${String(Math.max(1, Math.round(h * 60)))} min` : `${String(h)} h`)).join(', '),
+  reminderTimes: (hours: readonly number[]): string =>
+    // Whole hours in hours, everything else in minutes.
+    hours.map((h) => (Number.isInteger(h) ? `${String(h)} h` : `${String(Math.max(1, Math.round(h * 60)))} min`)).join(', '),
 
   status: (s: {
     phase: string;
@@ -322,6 +337,7 @@ export const en = {
     close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
       rule === 'at_deadline' ? 'evaluate at the deadline instead of when everybody has contributed' : 'evaluate as soon as everybody has contributed instead of at the deadline',
     method: (title: string, rules: string): string => `change how "${title}" is decided. ${rules}`,
+    reminders: (times: string): string => (times === '' ? 'send no reminders before the deadline' : `remind ${times} before the deadline`),
     dod_met: (summary: string): string => `the definition of done is met, and we close with this:\n${summary}`,
   },
   changed: {
@@ -330,6 +346,7 @@ export const en = {
     close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
       rule === 'at_deadline' ? 'From now on the result is evaluated at the deadline.' : 'From now on the result is evaluated as soon as everybody has contributed.',
     method: (title: string, rules: string): string => `"${title}" is now decided like this. ${rules}`,
+    reminders: (times: string): string => (times === '' ? 'No reminders are sent before the deadline any more.' : `Reminders are now sent ${times} before the deadline.`),
   },
   actAgain: (names: string): string => `Contributions made under the old rules no longer fit. Please contribute again: ${names}.`,
 
@@ -430,6 +447,9 @@ export const en = {
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
   protocolSent: (channel: number, mail: number): string =>
     `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}` : ''}.`,
+  /** Nobody to mail to. With the protocol when the group does not have it yet. */
+  protocolMailNoAddresses: (protocol: string | undefined): string =>
+    `I cannot mail the protocol: this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat. ${protocol === undefined ? 'The protocol is in this group.' : `Here it is instead:\n\n${protocol}`}`,
   protocolMailUnavailable: (reason: string): string => `The protocol could not be mailed (${reason}). It is in this group, and participants got it privately where I can reach them.`,
   followupCreated: (subject: string, when: string, link: boolean, unknown: number): string =>
     `Follow-up meeting "${subject}" is in the calendars for ${when}.${link ? '' : ' The invitation went out without a meeting link.'}${unknown > 0 ? ` For ${String(unknown)} ${unknown === 1 ? 'person' : 'people'} I could not see availability, so please check the time.` : ''}`,
@@ -444,7 +464,7 @@ export const en = {
     provider_error: 'the calendar service reported an error',
     grant_revoked: 'the follow-up of this facilitation has ended',
     unknown_outcome: 'the service did not answer',
-    no_addresses: 'I have no mail addresses for the participants',
+    no_addresses: 'this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat',
   },
   invitationBody: (goal: string, summary: string): string => `Follow-up to "${goal}".\n\n${summary}`,
 

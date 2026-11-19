@@ -23,7 +23,7 @@ identity:
   kind: "extension"
   domain: "facilitation"
   name: "omadia Facilitator"
-  version: "1.0.3"
+  version: "1.0.4"
   description:
     en: "Facilitation engine for native facilitators: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Facilitation-Engine für native Facilitatoren: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -44,6 +44,15 @@ compat:
   node: ">=20"
 
 privacy_class: "strict"
+
+# The engine's tools answer its own facilitator: what was recorded, what was
+# refused and why. Under "guarded" the kernel replaces each answer by a digest
+# and the facilitator moderates blind, so the engine needs "bypass" for its
+# own tools. It is the operator's setting; this is the reason they are shown.
+privacy:
+  recommendation:
+    mode: "bypass"
+    reason: "The engine's tools answer the facilitator itself: what was recorded, what was refused and why, and what to tell the group. They carry only names and words of the participants of the conversation the facilitator moderates, nothing from other systems. Guarded would hide these answers, and the facilitator would tell the group things it cannot know."
 
 depends_on: []
 

@@ -17,6 +17,7 @@ import { advance, castBallots, evaluateStep } from './decide.js';
 import { scheduleJob } from './jobs.js';
 import { abortInWork } from './lifecycle.js';
 import { participationOf } from './status.js';
+import { expectedNames, listKnown } from './roll.js';
 
 export const LEASE_MS = 2 * MINUTE_MS;
 export const MAX_JOB_ATTEMPTS = 5;
@@ -179,7 +180,7 @@ async function waitingFor(w: Work): Promise<{ open: number; people: Participant[
   if (step.method) {
     const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
     const people = active.filter((p) => !cast.has(p.principalId));
-    return { open: people.length, people };
+    return { open: people.length + expectedNames(w.f).length, people };
   }
   const { missing } = await participationOf(w.tx, w.f);
   return { open: missing.length, people: missing };
@@ -198,10 +199,17 @@ const reminder: JobHandler = async (w, job) => {
     return;
   }
   const { open, people } = await waitingFor(w);
-  if (open === 0) return;
   const t = texts(w.f.language);
   const deadline = w.f.deadline ? formatWhen(w.f.deadline, w.f.timezone, w.f.language) : undefined;
-  w.post({ purpose: 'reminder', key: job.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], text: t.reminderGroup(open, deadline) });
+  // Without a list nobody can be counted as missing, and somebody who has
+  // not written yet may well be: the group is reminded, without a number.
+  const unknown = !listKnown(w.f) && (await store.openStepOf(w.tx, w.f.id)) !== undefined;
+  if (open === 0 && !unknown) {
+    // Nothing is sent, and that is on record: a reminder never ends silently.
+    await w.event('reminder_skipped', 'engine', { hoursBefore: job.payload['hoursBefore'], reason: 'nobody_waiting' });
+    return;
+  }
+  w.post({ purpose: 'reminder', key: job.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], text: unknown ? t.reminderGroupOpen(deadline) : t.reminderGroup(open, deadline) });
   for (const person of people) {
     w.post({
       purpose: 'reminder_direct',
@@ -212,7 +220,7 @@ const reminder: JobHandler = async (w, job) => {
       text: t.reminderDirect(person.displayName, w.f.goal, deadline),
     });
   }
-  await w.event('reminder', 'engine', { open, hoursBefore: job.payload['hoursBefore'] });
+  await w.event('reminder', 'engine', { open: unknown ? null : open, direct: people.length, hoursBefore: job.payload['hoursBefore'] });
 };
 
 /** At the deadline the engine closes with the state at that moment. */

@@ -75,6 +75,37 @@ export function parseNumberList(raw: string): number[] | undefined {
   return values.every((v) => Number.isFinite(v) && v > 0) ? values : undefined;
 }
 
+/** Every setting 1.0.x reads. The manifest declares exactly these fields and
+ *  the README documents each. */
+export const CONFIG_KEYS = [
+  'language',
+  'timezone',
+  'reminder_offsets_hours',
+  'change_window_hours',
+  'runoff_window_hours',
+  'confirm_window_minutes',
+  'ranked_points',
+  'action_reminder_lead_hours',
+  'retention_days',
+  'max_lifetime_days',
+  'max_active_per_facilitator',
+  'max_active_instance',
+  'starts_per_hour_per_facilitator',
+  'max_messages_per_facilitation',
+  'session_agenda_lead_minutes',
+  'media_consent_explicit',
+  'followup_grant_days',
+  'protocol_mail_enabled',
+] as const;
+
+/** Settings of 0.7.x (the Conductor-based facilitator). Nothing in the engine
+ *  reads them; an upgrade drops them. */
+export const OBSOLETE_CONFIG_KEYS = ['facilitator_agent_slug', 'initiator_role_key', 'reporting_mode', 'moderation_style', 'auto_setup', 'disclose_report_target'] as const;
+
+/** Keys the kernel keeps in a plugin's configuration for itself start with an
+ *  underscore (`_privacy_mode`, `_privacy_bypass_scopes`). */
+export const isKernelKey = (key: string): boolean => key.startsWith('_');
+
 export function parseConfig(read: ConfigReader, log: (msg: string) => void = () => {}): EngineConfig {
   const invalid = (key: string, value: unknown, fallback: unknown): void => {
     log(`config: '${key}' = ${JSON.stringify(value)} is not valid — using ${JSON.stringify(fallback)}`);

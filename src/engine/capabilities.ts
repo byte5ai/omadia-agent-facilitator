@@ -15,6 +15,7 @@
 import type { FacilitationFollowupService, FollowupGrant, FollowupRefusal } from '@omadia/plugin-api';
 
 import { DAY_MS } from '../clock.js';
+import { principalKey } from '../kernel.js';
 import { insert, one, update } from '../db/sql.js';
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
@@ -52,6 +53,45 @@ export async function grantOf(w: { tx: Queryable; f: Facilitation }): Promise<Fo
   const { participants, stakeholders } = await peopleOf(w);
   const allowed = [...participants.map((p) => p.email), ...stakeholders.map((s) => s.address)].filter((a): a is string => typeof a === 'string' && a.includes('@')).map(lower);
   return { facilitationId: w.f.id, allowed: [...new Set(allowed)] };
+}
+
+const isAddress = (a: string | null | undefined): a is string => typeof a === 'string' && a.includes('@');
+
+/**
+ * Fill in the mail addresses the channel's member list has (D21).
+ *
+ * Somebody who became a participant by writing is known by a name only. The
+ * member list, read as the facilitator, may carry an address or a user
+ * principal name. Addresses come from there and from nowhere else: nobody is
+ * asked for one in the chat. Called outside any unit of work.
+ */
+export async function refreshAddresses(engine: EngineCore, facilitationId: string): Promise<{ withAddress: number; without: number }> {
+  const pool = engine.pool();
+  const f = await store.getFacilitation(pool, facilitationId);
+  if (!f) return { withAddress: 0, without: 0 };
+  const active = (await store.listParticipants(pool, f.id)).filter((p) => p.status === 'active');
+  const missing = active.filter((p) => !isAddress(p.email));
+  let found = 0;
+  if (missing.length > 0) {
+    try {
+      const roster = await engine.deps.kernel.rosters()?.getRoster(f.channelType, f.conversationId, { agentSlug: f.facilitatorAgent });
+      const addresses = new Map<string, string>();
+      for (const member of roster?.participants ?? []) {
+        const address = member.userRef.email ?? member.userPrincipalName;
+        if (member.isBot !== true && isAddress(address)) addresses.set(principalKey(member.userRef), lower(address));
+      }
+      const fill = missing.filter((p) => addresses.has(p.principalId));
+      if (fill.length > 0) {
+        await engine.work(f.id, async (w) => {
+          for (const p of fill) await store.patchParticipant(w.tx, f.id, p.principalId, { email: addresses.get(p.principalId) ?? null });
+        });
+        found = fill.length;
+      }
+    } catch (err) {
+      engine.log(`facilitation ${f.id}: the member list could not be read for mail addresses: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { withAddress: active.length - missing.length + found, without: missing.length - found };
 }
 
 export type ScopedCode = keyof ReturnType<typeof texts>['followupReasons'];
@@ -176,10 +216,19 @@ const say = (w: Work, purpose: string, text: string): void => w.post({ purpose, 
 
 /** Mail the confirmed protocol to participants and confirmed stakeholders. */
 const protocolMail: ExternalJob = async (engine, job) => {
+  await refreshAddresses(engine, job.facilitationId);
   const claim = await claimJob(engine, job, 'mail_attempted', async (w) => {
     const { participants, stakeholders } = await peopleOf(w);
     const recipients = uniqueMail([...participants.map((p) => p.email), ...stakeholders.filter((s) => s.role === 'receives_protocol').map((s) => s.address)]);
-    if (recipients.length === 0) return undefined;
+    if (recipients.length === 0) {
+      // Nobody to mail to is not silence: the group reads why, and has the
+      // protocol where it is (once, if it is not there already).
+      const t = texts(w.f.language);
+      const shown = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'protocol_in_group' LIMIT 1`, [w.f.id]);
+      say(w, 'protocol_mail_unavailable', t.protocolMailNoAddresses(shown.rows.length > 0 ? undefined : await buildProtocol(w.tx, w.f)));
+      await w.event('protocol_mail_skipped', 'engine', { reason: 'no_addresses' });
+      return undefined;
+    }
     return { recipients, subject: texts(w.f.language).protocolMailSubject(w.f.goal), body: await buildProtocol(w.tx, w.f) };
   });
   if (claim.state === 'skip') return;
@@ -204,6 +253,7 @@ interface MeetingPlan {
 
 /** Schedule the follow-up meeting the group agreed on, from free/busy. */
 const followupMeeting: ExternalJob = async (engine, job) => {
+  await refreshAddresses(engine, job.facilitationId);
   const claim = await claimJob<MeetingPlan>(engine, job, undefined, async (w) => {
     const plan = w.f.followupPolicy.meeting;
     if (!plan) return undefined;
@@ -345,7 +395,7 @@ export function installCapabilities(): void {
   // outside the lock.
   onClosed(async (w) => {
     await setGrant(w, 'active');
-    const { participants, stakeholders } = await peopleOf(w);
+    const { participants } = await peopleOf(w);
     // The protocol the participants get is the one the initiator got with the
     // report: built before anything is written about sending it.
     const t = texts(w.f.language);
@@ -366,8 +416,9 @@ export function installCapabilities(): void {
       await w.event('capability_used', 'engine', { capability: 'protocol dispatch', participants: viaChannel.length, summary: t.capabilityLog.protocolSent(viaChannel.length) });
     }
 
-    const mailTo = uniqueMail([...participants.map((p) => p.email), ...stakeholders.filter((s) => s.role === 'receives_protocol').map((s) => s.address)]);
-    if (w.config.protocolMailEnabled && mailTo.length > 0) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
+    // Scheduled even when no address is known yet: the job reads the member
+    // list again, and says so when there is still nobody to mail to.
+    if (w.config.protocolMailEnabled) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
     if (w.f.followupPolicy.meeting) await scheduleJob(w, 'followup_meeting', 'once', w.now, {});
     // With action items the grant ends with their follow-up; otherwise after
     // a fixed time.

@@ -21,6 +21,7 @@ import { PRIORITY, isPositiveReaction, isYes, registerInboundHandler } from './i
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { onBeforeDeadline, registerJobHandler } from './scheduler.js';
+import { everybodyKnown } from './roll.js';
 
 export interface ProposalKind {
   /** What is proposed, as a phrase for the announcement. */
@@ -135,7 +136,8 @@ export async function decideProposal(w: Work, proposal: Proposal, accepted: bool
 async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean): Promise<boolean> {
   const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
   const standing = proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
-  const everybody = active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
+  // "Everybody agreed" is said only about a list that is known to be complete.
+  const everybody = everybodyKnown(w.f) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
   if (windowOver) {
     const needsAll = kindOf(proposal).unanimous?.(w, proposal) === true;
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));

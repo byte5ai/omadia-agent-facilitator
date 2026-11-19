@@ -18,7 +18,8 @@ import { PG_SKIP } from './pg.js';
 const MARCEL: FakeUser = { id: '328D16DE-4575-437b-94d2-1086a4904fd7', displayName: 'Marcel Wege' };
 const TESS: FakeUser = { id: '9f0c2a11-0b7e-4c1d-8a55-6d2e7b0a4c90', displayName: 'Teresita Biel' };
 const PRINCIPAL = /user:[0-9a-f]{8}-|328d16de|9f0c2a11/i;
-const VOTE = { goal: 'Den Namen wählen', language: 'de', method: 'single', options: ['Alpha', 'Bravo'], open: true };
+/** Without a member list a vote needs a deadline (D15). */
+const vote = (): Record<string, unknown> => ({ goal: 'Den Namen wählen', language: 'de', method: 'single', options: ['Alpha', 'Bravo'], deadline: new Date(h.clock.now().getTime() + 3 * 60 * 60 * 1000).toISOString(), open: true });
 
 let h: Harness;
 before(async () => {
@@ -43,7 +44,7 @@ test('guard: a principal id is never sent', () => {
 
 test('without a member list the handshake says so and names nobody by an id', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('nm-no-roster', [MARCEL, TESS], { noRoster: true });
-  await h.tool('facilitation_start', VOTE, { conversation: conv, caller: MARCEL.id });
+  await h.tool('facilitation_start', vote(), { conversation: conv, caller: MARCEL.id });
   const handshake = posts(conv)[0] ?? '';
   assert.doesNotMatch(handshake, PRINCIPAL);
   assert.doesNotMatch(handshake, /Teilnehmende:\s*(\n|$)/, 'an empty list is not printed as an empty line');
@@ -53,6 +54,9 @@ test('without a member list the handshake says so and names nobody by an id', { 
   // Whoever writes is known by the name on their message from then on.
   await say(conv, MARCEL, 'A');
   await say(conv, TESS, 'A');
+  // Without a member list the vote is evaluated at its deadline.
+  h.clock.advance(4 * 60 * 60 * 1000);
+  await h.tick();
   const f = await h.facilitation(conv);
   assert.equal(f.phase, 'closed');
   assert.equal(f.initiatorParticipant, `user:${MARCEL.id.toLowerCase()}`);
@@ -66,7 +70,7 @@ test('a kernel that states the caller by name: the initiator is named and takes 
   const conv = h.kernel.conversation('nm-caller-name', [MARCEL, TESS], { noRoster: true });
   h.kernel.statesCallerName = true;
   try {
-    await h.tool('facilitation_start', VOTE, { conversation: conv, caller: MARCEL.id });
+    await h.tool('facilitation_start', vote(), { conversation: conv, caller: MARCEL.id });
   } finally {
     h.kernel.statesCallerName = false;
   }
@@ -78,7 +82,7 @@ test('a kernel that states the caller by name: the initiator is named and takes 
 
 test('a member the channel lists without a name is not shown as an id, and gets the name of their first message', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('nm-unnamed', [MARCEL, { id: TESS.id, displayName: undefined as unknown as string }]);
-  await h.tool('facilitation_start', VOTE, { conversation: conv, caller: MARCEL.id });
+  await h.tool('facilitation_start', vote(), { conversation: conv, caller: MARCEL.id });
   assert.doesNotMatch(posts(conv)[0] ?? '', PRINCIPAL);
   h.kernel.conversation(conv, [MARCEL, TESS]);
   await say(conv, TESS, 'B');

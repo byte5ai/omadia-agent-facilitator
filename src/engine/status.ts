@@ -8,6 +8,7 @@ import type { CastBallot, Tally } from '../methods/evaluate.js';
 import type { Ballot } from '../methods/ballot.js';
 import type { Contribution, Facilitation, Participant, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export interface Participation {
   step: Step | undefined;
@@ -52,8 +53,8 @@ export function tallyOf(f: Facilitation, participation: Participation, hasOpenPr
     options: step.roundOptions ?? step.options,
     ...(Array.isArray(points) ? { points: points as number[] } : {}),
     ballots,
-    activeParticipants: participation.active.map((p) => p.principalId),
-    closeRule: f.closeRule,
+    activeParticipants: [...participation.active.map((p) => p.principalId), ...expectedKeys(f)],
+    closeRule: effectiveCloseRule(f),
     deadlineReached: false,
     hasOpenProposal,
   });
@@ -78,7 +79,8 @@ export async function statusText(q: Queryable, f: Facilitation): Promise<string>
     dodVersion: dod?.version ?? 1,
     definitionOfDone: dod?.text ?? '',
     contributed: participation.contributed.map((p) => p.displayName),
-    missing: participation.missing.map((p) => p.displayName),
+    // The named people nobody was matched to are still to come.
+    missing: [...participation.missing.map((p) => p.displayName), ...(step ? expectedNames(f) : [])],
     ...(counted && counted.tally.votes + counted.tally.abstentions > 0
       ? { tally: options.map((o) => `${o.label} ${String(counted.tally.scores[o.key] ?? 0)}`).join(', ') }
       : {}),

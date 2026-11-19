@@ -18,6 +18,7 @@ import { confirmContribution, declineContribution, mention, supersedeByMessage, 
 import type { EngineCore, Work } from './core.js';
 import { abortInWork } from './lifecycle.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
+import { expectedNames, sameName } from './roll.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -194,7 +195,7 @@ const revisions: InboundHandler = async (ctx) => {
 
 /** Reading order. Lower runs first; the fixed readings come before the
  *  method- and process-specific ones other modules register. */
-export const PRIORITY = { revisions: 0, commands: 10, acknowledgements: 20, proposals: 30, followup: 35, ballots: 40, process: 50 } as const;
+export const PRIORITY = { revisions: 0, commands: 10, acknowledgements: 20, proposals: 30, followup: 35, ballots: 40, process: 50, quiet: 60 } as const;
 
 const handlers: Array<{ priority: number; handler: InboundHandler }> = [
   { priority: PRIORITY.revisions, handler: revisions },
@@ -220,7 +221,17 @@ export function registerAfterInbound(hook: AfterInbound): void {
 async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promise<Participant | undefined> {
   const key = principalKey(record.author);
   let author = await store.getParticipant(w.tx, w.f.id, key);
-  if (!author && w.f.settings.openRoster === true && (w.f.phase === 'configuring' || w.f.phase === 'active')) {
+  const live = w.f.phase === 'configuring' || w.f.phase === 'active';
+  // A participant the request named and nobody was matched to: the name on
+  // this message says who it is.
+  const stated = record.author.displayName && !isPlaceholderName(record.author.displayName, key) ? record.author.displayName : author?.displayName;
+  const named = live && stated ? expectedNames(w.f).find((name) => sameName(name, stated)) : undefined;
+  if (named !== undefined) {
+    const fresh = (await store.getFacilitation(w.tx, w.f.id)) ?? w.f;
+    await w.patch({ settings: { ...fresh.settings, expected: expectedNames(fresh).filter((name) => name !== named) } });
+    await w.event('participant_matched', key, { named });
+  }
+  if (!author && (w.f.settings.openRoster === true || named !== undefined) && live) {
     author = await store.addParticipant(w.tx, {
       facilitationId: w.f.id,
       principalId: key,

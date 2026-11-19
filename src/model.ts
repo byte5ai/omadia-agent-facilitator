@@ -44,6 +44,8 @@ export interface StepOption {
 
 export interface ReminderPolicy {
   offsetsHours: number[];
+  /** The group asked for these; otherwise they follow from the deadline. */
+  asked?: boolean;
 }
 
 export interface FollowupPolicy {
@@ -74,8 +76,14 @@ export interface FacilitationSettings {
   /** The initiator's name as the kernel stated it with the starting call,
    *  for as long as they are not a participant with a name. */
   initiatorName?: string;
-  /** The channel could not list every member: whoever writes joins. */
+  /** The channel could not list every member and nobody named the
+   *  participants: whoever writes joins, and there is no "everybody". */
   openRoster?: boolean;
+  /** The request named the participants. */
+  participantsNamed?: boolean;
+  /** Named participants nobody was matched to yet. They are waited for and
+   *  matched by the name on their first message. */
+  expected?: string[];
   /** The group was told that not everybody can be reached privately. */
   directNoticeSent?: boolean;
   /** People a private message could not reach; not tried again. */
