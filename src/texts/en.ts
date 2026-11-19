@@ -50,6 +50,7 @@ export const en = {
     approval: 'Choose every option you can go along with.',
     idea: 'Your idea (one per submission)',
     superseded: 'Replaced by a new version of this vote. Please answer on the new card.',
+    supersededQuestionnaire: 'Replaced by a new questionnaire. Please answer on the new card.',
     closed: (when: string): string => `Closed on ${when}.`,
   },
 

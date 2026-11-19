@@ -19,7 +19,8 @@ const RANKED = { goal: 'Pick the name', method: 'ranked', options: ['Alpha', 'Br
 
 let h: Harness;
 before(async () => {
-  if (!PG_SKIP) h = await createHarness();
+  // Many facilitations stay open in this file: the quotas are not its subject.
+  if (!PG_SKIP) h = await createHarness({ config: { maxActivePerFacilitator: 100, maxActiveInstance: 100, startsPerHourPerFacilitator: 100 } });
 });
 after(async () => {
   if (!PG_SKIP) await h.close();
@@ -255,4 +256,126 @@ test('a card the channel refuses or cannot update costs nothing: the question an
   for (const who of ['anna', 'bert', 'cara']) await submit(noUpdate, who, rank('A', 'B', 'C'));
   assert.equal((await h.facilitation(noUpdate)).phase, 'closed');
   assert.ok(posts(noUpdate).some((p) => /^Result for "Pick the name"/.test(p)));
+});
+
+test('assignment on a card: volunteering counts at once, naming somebody else waits for that person', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-assign', THREE);
+  await tool(conv, 'facilitation_start', { goal: 'Who does what', method: 'assignment', options: ['Notes', 'Room'], open: true });
+  const posted = card(conv).card;
+  assert.deepEqual(
+    posted.questions.map((q) => [q.id, q.kind, q.label, q.required, 'candidates' in q ? q.candidates : undefined, 'allowVolunteer' in q ? q.allowVolunteer : undefined]),
+    [
+      ['A', 'assignment', 'Notes', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], true],
+      ['B', 'assignment', 'Room', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], true],
+    ],
+  );
+  await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: 'self' }]);
+  assert.match(posts(conv).at(-1) ?? '', /Anna/);
+  // Somebody who does not take part cannot be named, whatever the client sends.
+  const before = (await outcomes(conv)).length;
+  await submit(conv, 'bert', [{ questionId: 'B', kind: 'assignment', assignee: { kind: 'teams-aad', id: 'mallory' } }]);
+  assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_invalid']);
+  await submit(conv, 'bert', [{ questionId: 'B', kind: 'assignment', assignee: { kind: 'teams-aad', id: 'cara' } }]);
+  assert.equal((await h.facilitation(conv)).phase, 'active', 'Cara has not confirmed yet');
+  assert.match(posts(conv).at(-1) ?? '', /Cara/);
+  await say(conv, 'cara', 'yes');
+  assert.equal((await h.facilitation(conv)).phase, 'closed');
+  assert.match(posts(conv).find((p) => /^Result for/.test(p)) ?? '', /Notes: Anna[\s\S]*Room: Cara/);
+});
+
+test('collecting ideas: a text field next to the chat, one idea per submission', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-ideas', THREE);
+  await tool(conv, 'facilitation_start', { goal: 'Agenda topics', agenda: [{ kind: 'collect', title: 'Collect topics' }, { kind: 'close', title: 'Close' }], open: true });
+  const posted = card(conv);
+  assert.deepEqual(posted.card.questions, [{ id: 'idea', kind: 'text', label: 'Your idea (one per submission)', multiline: true, maxLength: 2000, mode: 'append', required: true }]);
+  await submit(conv, 'anna', [{ questionId: 'idea', kind: 'text', text: 'Budget for the offsite' }]);
+  await submit(conv, 'anna', [{ questionId: 'idea', kind: 'text', text: 'Who books the venue' }]);
+  await say(conv, 'bert', 'Catering');
+  const f = await h.facilitation(conv);
+  assert.deepEqual((await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid').map((c) => [c.participantPrincipal, c.payload['text'], c.source]), [
+    ['user:anna', 'Budget for the offsite', 'card'],
+    ['user:anna', 'Who books the venue', 'card'],
+    ['user:bert', 'Catering', 'message'],
+  ]);
+  const before = (await outcomes(conv)).length;
+  await submit(conv, 'cara', [{ questionId: 'idea', kind: 'text', text: 'x'.repeat(2001) }]);
+  await submit(conv, 'cara', [{ questionId: 'idea', kind: 'text', text: '   ' }]);
+  assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_invalid', 'card_answer_invalid']);
+  // The step closes: the card has no inputs any more.
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  assert.equal(h.kernel.cardUpdates.filter((u) => u.cardMessageId === posted.cardMessageId).length, 1);
+});
+
+test('a questionnaire: up to five structured questions on one card, answers read back by the facilitator', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-questionnaire', THREE);
+  await tool(conv, 'facilitation_start', { goal: 'Plan the offsite' });
+  const asked = await tool(conv, 'facilitation_questionnaire', {
+    title: 'Before we start',
+    questions: [
+      { id: 'day', label: 'Which day suits you?', kind: 'single_choice', options: ['Tuesday', 'Friday'] },
+      { id: 'people', label: 'How many people do you bring?', kind: 'number', min: 0, max: 20 },
+      { id: 'note', label: 'Anything I should know?', kind: 'text', required: false },
+    ],
+  });
+  assert.match(asked, /^Posted as a card/);
+  const posted = card(conv).card;
+  assert.equal(posted.title, 'Before we start');
+  assert.deepEqual(posted.questions.map((q) => [q.id, q.kind, q.required]), [['day', 'single_choice', true], ['people', 'number', true], ['note', 'text', false]]);
+
+  await submit(conv, 'anna', [{ questionId: 'day', kind: 'single_choice', optionId: 'A' }, { questionId: 'people', kind: 'number', value: 3 }]);
+  await submit(conv, 'bert', [{ questionId: 'day', kind: 'single_choice', optionId: 'B' }, { questionId: 'people', kind: 'number', value: 1 }, { questionId: 'note', kind: 'text', text: 'Vegetarian' }]);
+  // Changed: the newest submission of a person replaces the earlier one.
+  await submit(conv, 'anna', [{ questionId: 'day', kind: 'single_choice', optionId: 'B' }, { questionId: 'people', kind: 'number', value: 2 }]);
+  // Out of range, a missing required answer, an unverified sender: not counted.
+  await submit(conv, 'cara', [{ questionId: 'day', kind: 'single_choice', optionId: 'A' }, { questionId: 'people', kind: 'number', value: 99 }]);
+  await submit(conv, 'cara', [{ questionId: 'people', kind: 'number', value: 2 }]);
+  await submit(conv, 'cara', [{ questionId: 'day', kind: 'single_choice', optionId: 'A' }, { questionId: 'people', kind: 'number', value: 2 }], { verified: false });
+
+  const answers = await tool(conv, 'facilitation_questionnaire_answers');
+  assert.match(answers, /2 of 3 participants answered/);
+  assert.match(answers, /Which day suits you\?: Tuesday 0, Friday 2/);
+  assert.match(answers, /How many people do you bring\?: Anna: 2; Bert: 1/);
+  assert.match(answers, /Anything I should know\?: Bert: Vegetarian/);
+  assert.doesNotMatch(answers, /Cara/);
+
+  // Asking again replaces the card; five questions are the limit; no cards, no questionnaire.
+  assert.match(await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: Array.from({ length: 6 }, (_v, i) => ({ id: `q${String(i)}`, label: 'q', kind: 'text' })) }), /^Refused \(bad_input\)/);
+  // Teams declares no number and no date: those are asked in the chat.
+  h.kernel.cardSupport = { kinds: ['single_choice', 'multiple_choice', 'ranking', 'consent', 'assignment', 'text'], maxQuestions: 5, update: true };
+  const refused = await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: [{ label: 'How many?', kind: 'number' }, { label: 'When?', kind: 'date' }] });
+  assert.match(refused, /^Refused \(kind_not_supported\)/);
+  assert.match(refused, /number, date/);
+  assert.match(refused, /in the chat/);
+  h.kernel.cardSupport = undefined;
+  assert.match(await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: [{ id: 'a', label: 'q', kind: 'text' }] }), /^Refused \(no_cards\)/);
+});
+
+test('what does not fit a card stays a chat ballot, and what is too long is shortened', { skip: PG_SKIP }, async () => {
+  const many = h.kernel.conversation('cd-many', THREE);
+  await tool(many, 'facilitation_start', { ...RANKED, method: 'single', options: Array.from({ length: 25 }, (_v, i) => `Option ${String(i + 1)}`) });
+  assert.equal(h.kernel.cards(many).length, 0, 'the abstention would be the 26th option');
+
+  const long = h.kernel.conversation('cd-long', THREE);
+  await tool(long, 'facilitation_start', { ...RANKED, goal: 'g'.repeat(400), method: 'single' });
+  assert.equal(card(long).card.title.length, 300);
+
+  // An Entra object id in its own case names the participant all the same.
+  const GUID = '9F0C2A11-0b7e-4c1d-8a55-6d2e7b0a4c90';
+  const people = h.kernel.conversation('cd-guid', [ANNA, { id: GUID, displayName: 'Teresita' }]);
+  await tool(people, 'facilitation_start', { goal: 'Who does what', method: 'assignment', options: ['Notes'], open: true });
+  const q = card(people).card.questions[0] as unknown as { candidates: { id: string }[] };
+  assert.deepEqual(q.candidates.map((c) => c.id), ['anna', GUID.toLowerCase()]);
+  await submit(people, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: { kind: 'teams-aad', id: GUID } }]);
+  assert.match(posts(people).at(-1) ?? '', /Teresita/);
+});
+
+test('somebody who does not take part cannot answer a card', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-outsider', THREE);
+  await tool(conv, 'facilitation_start', { ...RANKED, participants: ['Anna', 'Bert'] });
+  const before = (await outcomes(conv)).length;
+  await submit(conv, 'cara', rank('A', 'B', 'C'));
+  await submit(conv, 'mallory', rank('A', 'B', 'C'));
+  assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_not_participant', 'card_answer_not_participant']);
+  assert.deepEqual(await ballots(conv), {});
 });

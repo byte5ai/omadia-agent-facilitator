@@ -31,6 +31,7 @@ export const de: Texts = {
     approval: 'Wählt alle Optionen, mit denen ihr mitgehen könnt.',
     idea: 'Deine Idee (eine pro Absenden)',
     superseded: 'Ersetzt durch eine neue Version dieser Abstimmung. Bitte auf der neuen Karte antworten.',
+    supersededQuestionnaire: 'Ersetzt durch einen neuen Fragebogen. Bitte auf der neuen Karte antworten.',
     closed: (when) => `Geschlossen am ${when}.`,
   },
 

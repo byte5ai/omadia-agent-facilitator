@@ -24,13 +24,16 @@ import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import type { CardAnswerValue, CardOption, CardQuestion, CardQuestionKind, CardSendMembers, CardSupport, QuestionCard, TypedCardAnswer } from '../cards/types.js';
 import { CARD_ID_PATTERN } from '../cards/types.js';
+import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import { principalKey } from '../kernel.js';
+import { toOptions } from '../methods/ballot.js';
 import type { Ballot } from '../methods/ballot.js';
 import type { CardRow, Facilitation, MethodId, Participant, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
+import { Refusal } from './core.js';
 import { recordBallot, roundOptions, withoutTakenItems } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
 import { rulesOf } from './lifecycle.js';
@@ -43,8 +46,15 @@ export const IDEA_QUESTION = 'idea';
 export const ABSTAIN = 'abstain';
 const IDEA_MAX_LENGTH = 2000;
 const REASON_MAX_LENGTH = 1000;
-/** Above this a fixed list of candidates is too long for a card. */
-const MAX_CANDIDATES = 25;
+/** The kernel's bounds of a card. What does not fit stays a chat ballot or
+ *  is shortened; a card is never sent that the kernel would refuse. */
+const MAX_OPTIONS = 25;
+const MAX_CANDIDATES = MAX_OPTIONS;
+const MAX_TITLE = 300;
+const MAX_LABEL = 500;
+const MAX_RESULT_LINES = 40;
+
+const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 
 const KIND_OF_METHOD: Record<MethodId, CardQuestionKind> = { ranked: 'ranking', single: 'single_choice', approval: 'multiple_choice', consent: 'consent', assignment: 'assignment' };
 
@@ -69,7 +79,9 @@ const candidateId = (p: Participant): string => p.principalId.replace(/^user:/, 
 function voteQuestions(f: Facilitation, step: Step, participants: readonly Participant[], support: CardSupport): CardQuestion[] | undefined {
   if (!step.method || !support.kinds.includes(KIND_OF_METHOD[step.method])) return undefined;
   const t = texts(f.language);
-  const options: CardOption[] = roundOptions(step).map((o) => ({ id: o.key, label: o.label }));
+  const options: CardOption[] = roundOptions(step).map((o) => ({ id: o.key, label: clip(o.label, MAX_LABEL) }));
+  // One more than fits (the abstention): too many for a card.
+  if (options.length >= MAX_OPTIONS || options.some((o) => !CARD_ID_PATTERN.test(o.id))) return undefined;
   const abstain: CardOption = { id: ABSTAIN, label: t.words.abstention };
   const base = { id: VOTE_QUESTION, required: true };
   switch (step.method) {
@@ -83,7 +95,7 @@ function voteQuestions(f: Facilitation, step: Step, participants: readonly Parti
     case 'approval':
       return [{ ...base, kind: 'multiple_choice', label: t.card.approval, options: [...options, abstain], min: 1 }];
     case 'consent':
-      return [{ ...base, kind: 'consent', label: String(step.methodConfig['statement'] ?? step.title), agreeLabel: t.words.consent, objectLabel: t.words.objection, reasonRequiredOnObject: true }];
+      return [{ ...base, kind: 'consent', label: clip(String(step.methodConfig['statement'] ?? step.title), MAX_LABEL), agreeLabel: t.words.consent, objectLabel: t.words.objection, reasonRequiredOnObject: true }];
     case 'assignment': {
       if (options.length === 0 || options.length > support.maxQuestions) return undefined;
       const people = participants.filter((p) => p.status === 'active');
@@ -102,34 +114,67 @@ async function nextVersion(w: Work, stepId: string): Promise<number> {
   return of.reduce((max, c) => Math.max(max, c.proposalVersion), 0) + 1;
 }
 
-async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questions: CardQuestion[], fallbackText: string): Promise<void> {
-  const t = texts(w.f.language);
-  const version = await nextVersion(w, step.id);
-  const closesAt = step.roundDeadline ?? w.f.deadline;
+interface NewCard {
+  cardId: string;
+  stepId: string | null;
+  round: number;
+  purpose: CardRow['purpose'];
+  proposalId: string;
+  version: number;
+  title: string;
+  intro?: string;
+  questions: CardQuestion[];
+  closesAt: Date | null;
+  /** What is posted alone when the channel refuses the card. */
+  fallbackText: string;
+  phases: Facilitation['phase'][];
+}
+
+async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
   const card: QuestionCard = {
-    cardId: cardIdOf(step, version),
-    proposalId: step.id,
-    proposalVersion: version,
-    title: step.title,
-    intro: t.card.chatToo,
-    questions,
-    ...(closesAt ? { closesAt: closesAt.toISOString() } : {}),
+    cardId: input.cardId,
+    proposalId: input.proposalId,
+    proposalVersion: input.version,
+    title: clip(input.title, MAX_TITLE),
+    ...(input.intro ? { intro: input.intro } : {}),
+    questions: input.questions,
+    ...(input.closesAt ? { closesAt: input.closesAt.toISOString() } : {}),
     changeable: true,
     locale: w.f.language,
   };
-  await store.addCard(w.tx, { cardId: card.cardId, facilitationId: w.f.id, stepId: step.id, round: step.round, purpose, proposalId: step.id, proposalVersion: version, card, createdAt: w.now });
+  await store.addCard(w.tx, { cardId: card.cardId, facilitationId: w.f.id, stepId: input.stepId, round: input.round, purpose: input.purpose, proposalId: input.proposalId, proposalVersion: input.version, card, createdAt: w.now });
   w.post({
     purpose: 'card',
     key: card.cardId,
     to: 'group',
     deliveryClass: 'essential',
-    requiredPhases: ['active'],
-    text: `${step.title}\n${t.card.chatToo}`,
+    requiredPhases: input.phases,
+    // Text and card are two messages on some channels: the text stays short.
+    text: input.intro ? `${input.title}\n${input.intro}` : input.title,
     card,
-    cardFallbackText: fallbackText,
+    cardFallbackText: input.fallbackText,
     link: { kind: 'card', id: card.cardId },
   });
-  await w.event('card_posted', 'engine', { cardId: card.cardId, stepId: step.id, round: step.round, version, purpose, kinds: questions.map((q) => q.kind) });
+  await w.event('card_posted', 'engine', { cardId: card.cardId, stepId: input.stepId, round: input.round, version: input.version, purpose: input.purpose, kinds: input.questions.map((q) => q.kind) });
+  return card;
+}
+
+async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questions: CardQuestion[], fallbackText: string): Promise<void> {
+  const version = await nextVersion(w, step.id);
+  await sendCard(w, {
+    cardId: cardIdOf(step, version),
+    stepId: step.id,
+    round: step.round,
+    purpose,
+    proposalId: step.id,
+    version,
+    title: step.title,
+    intro: texts(w.f.language).card.chatToo,
+    questions,
+    closesAt: step.roundDeadline ?? w.f.deadline,
+    fallbackText,
+    phases: ['active'],
+  });
 }
 
 /** What closes with a card: the lines it shows instead of its inputs. */
@@ -148,7 +193,7 @@ async function closeCards(w: Work, cards: readonly CardRow[], state: 'closed' | 
       deliveryClass: 'droppable',
       versionBound: false,
       text: lines.join('\n'),
-      cardUpdate: { cardId: card.cardId, update: { state: 'closed', title: card.card.title, resultLines: [...lines], closedAt: w.now.toISOString() } },
+      cardUpdate: { cardId: card.cardId, update: { state: 'closed', title: card.card.title, resultLines: lines.slice(0, MAX_RESULT_LINES).map((l) => clip(l, MAX_LABEL)), closedAt: w.now.toISOString() } },
     });
   }
 }
@@ -231,7 +276,9 @@ function fits(question: CardQuestion, answer: CardAnswerValue): boolean {
       if (answer.assignee === 'self') return q.allowVolunteer !== false;
       const assignee = answer.assignee as { id?: unknown } | null;
       if (assignee === null || typeof assignee !== 'object' || !isText(assignee.id) || assignee.id === '') return false;
-      return q.candidates === 'conversation_members' || q.candidates.some((c) => c.id === assignee.id);
+      // Channel ids come back in the channel's own case.
+      const id = assignee.id.toLowerCase();
+      return q.candidates === 'conversation_members' || q.candidates.some((c) => c.id.toLowerCase() === id);
     }
     case 'text': {
       const q = question as Extract<CardQuestion, { kind: 'text' }>;
@@ -356,7 +403,105 @@ const readIdea: CardAnswerReader = async (w, { card, answers, record, author, ve
   return { outcome: 'card_answer' };
 };
 
+// ── questionnaire ───────────────────────────────────────────────────────────
+
+/** What a facilitator may ask on a questionnaire card. */
+export const QUESTIONNAIRE_KINDS: readonly CardQuestionKind[] = ['single_choice', 'multiple_choice', 'text', 'number', 'date'];
+export const QUESTIONNAIRE_MAX_QUESTIONS = 5;
+const QUESTIONNAIRE = 'questionnaire';
+
+export interface QuestionnaireQuestion {
+  id?: string;
+  label: string;
+  kind: CardQuestionKind;
+  options?: string[];
+  min?: number;
+  max?: number;
+  required?: boolean;
+}
+
+/**
+ * Put up to five structured questions to the group on one card. For what a
+ * set-up needs to know from everybody (which day, how many, anything to
+ * note): one submission per person, the newest one counts. Refused where the
+ * channel has no cards or not the kind; the question belongs in the chat then.
+ */
+export async function postQuestionnaire(w: Work, input: { title: string; intro?: string; questions: QuestionnaireQuestion[] }): Promise<QuestionCard> {
+  if (w.f.phase !== 'configuring' && w.f.phase !== 'active') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
+  const support = cardSupport(w.engine, w.f.channelType);
+  if (!support) throw new Refusal('no_cards', 'This channel has no question cards. Ask the question in the chat instead. Nothing was posted.');
+  const limit = Math.min(QUESTIONNAIRE_MAX_QUESTIONS, support.maxQuestions);
+  if (input.questions.length === 0 || input.questions.length > limit) throw new Refusal('bad_input', `A questionnaire has 1 to ${String(limit)} questions.`);
+  const unsupported = [...new Set(input.questions.map((q) => q.kind).filter((k) => !QUESTIONNAIRE_KINDS.includes(k) || !support.kinds.includes(k)))];
+  if (unsupported.length > 0) {
+    throw new Refusal('kind_not_supported', `This channel cannot show ${unsupported.join(', ')} questions on a card. Ask those in the chat, or word them as single_choice or text. Nothing was posted.`);
+  }
+  const questions = input.questions.map((q, index): CardQuestion => {
+    const id = q.id && CARD_ID_PATTERN.test(q.id) ? q.id : `q${String(index + 1)}`;
+    const base = { id, label: clip(q.label, MAX_LABEL), required: q.required !== false };
+    if (q.kind === 'single_choice' || q.kind === 'multiple_choice') {
+      const labels = (q.options ?? []).map((o) => o.trim()).filter((o) => o !== '');
+      if (labels.length < 2 || labels.length > MAX_OPTIONS) throw new Refusal('bad_input', `Question "${q.label}" needs 2 to ${String(MAX_OPTIONS)} options.`);
+      return { ...base, kind: q.kind, options: toOptions(labels).map((o) => ({ id: o.key, label: o.label })) };
+    }
+    if (q.kind === 'number') return { ...base, kind: 'number', ...(q.min !== undefined ? { min: q.min } : {}), ...(q.max !== undefined ? { max: q.max } : {}) };
+    if (q.kind === 'date') return { ...base, kind: 'date' };
+    return { ...base, kind: 'text', multiline: true, maxLength: IDEA_MAX_LENGTH, mode: 'replace' };
+  });
+  if (!distinct(questions.map((q) => q.id))) throw new Refusal('bad_input', 'The ids of the questions must differ.');
+  const t = texts(w.f.language);
+  const earlier = (await store.listCards(w.tx, w.f.id)).filter((c) => c.purpose === QUESTIONNAIRE);
+  // One questionnaire at a time: asking again replaces the one that is open.
+  await closeCards(w, earlier, 'superseded', [t.card.supersededQuestionnaire]);
+  const version = earlier.reduce((max, c) => Math.max(max, c.proposalVersion), 0) + 1;
+  return sendCard(w, {
+    cardId: `q-${w.f.id}-v${String(version)}`,
+    stepId: null,
+    round: 1,
+    purpose: QUESTIONNAIRE,
+    proposalId: QUESTIONNAIRE,
+    version,
+    title: input.title,
+    ...(input.intro ? { intro: input.intro } : {}),
+    questions,
+    closesAt: null,
+    fallbackText: [input.title, ...questions.map((q) => `- ${q.label}${'options' in q ? `: ${q.options.map((o) => o.label).join(' / ')}` : ''}`)].join('\n'),
+    phases: ['configuring', 'active'],
+  });
+}
+
+const readQuestionnaire: CardAnswerReader = async (w, { card, answers, record, verified }) => {
+  // On record either way; only a verified submission is read back.
+  await w.event('questionnaire_answer', principalKey(record.author), { cardId: card.cardId, verified, answers: [...answers.values()] });
+  return { outcome: verified ? 'card_answer' : 'card_answer_unverified' };
+};
+
+/** What the group answered on the latest questionnaire, for the facilitator. */
+export async function questionnaireAnswers(q: Queryable, f: Facilitation): Promise<string> {
+  const card = (await store.listCards(q, f.id)).filter((c) => c.purpose === QUESTIONNAIRE).at(-1);
+  if (!card) throw new Refusal('no_questionnaire', 'No questionnaire was posted in this facilitation.');
+  const participants = (await store.listParticipants(q, f.id)).filter((p) => p.status === 'active');
+  const latest = new Map<string, CardAnswerValue[]>();
+  for (const event of await store.listEvents(q, f.id, ['questionnaire_answer'])) {
+    if (event.payload['cardId'] !== card.cardId || event.payload['verified'] !== true) continue;
+    // The newest submission of a person replaces the earlier one.
+    latest.set(event.actor, event.payload['answers'] as CardAnswerValue[]);
+  }
+  const name = (principal: string): string => participants.find((p) => p.principalId === principal)?.displayName ?? texts(f.language).unnamedPerson;
+  const lines = card.card.questions.map((question) => {
+    const given = [...latest].flatMap(([principal, answers]) => answers.filter((a) => a.questionId === question.id).map((a) => ({ principal, a })));
+    if ('options' in question && (question.kind === 'single_choice' || question.kind === 'multiple_choice')) {
+      const chosen = given.flatMap(({ a }) => (a.kind === 'single_choice' ? [a.optionId] : a.kind === 'multiple_choice' ? [...a.optionIds] : []));
+      return `${question.label}: ${question.options.map((o) => `${o.label} ${String(chosen.filter((id) => id === o.id).length)}`).join(', ')}`;
+    }
+    const said = given.map(({ principal, a }) => `${name(principal)}: ${a.kind === 'text' ? a.text.trim() : a.kind === 'number' || a.kind === 'date' ? String(a.value) : ''}`);
+    return `${question.label}: ${said.length > 0 ? said.join('; ') : 'no answer yet'}`;
+  });
+  return [`"${card.card.title}": ${String(latest.size)} of ${String(participants.length)} participants answered${card.state === 'open' ? '' : ' (the card is closed)'}.`, ...lines].join('\n');
+}
+
 export function installCardReaders(): void {
   registerCardReader('vote', readVote);
   registerCardReader('ideas', readIdea);
+  registerCardReader(QUESTIONNAIRE, readQuestionnaire);
 }
