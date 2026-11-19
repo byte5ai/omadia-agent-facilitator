@@ -292,7 +292,9 @@ export async function peopleFor(engine: EngineCore, f: Facilitation, kind: Execu
   let unrestricted: (principal: string) => boolean = () => true;
   if (kind === 'configuring') unrestricted = (principal) => principal === f.initiatorPrincipal || principal === f.initiatorParticipant;
   if (kind === 'follow_up') {
-    const owners = new Set((await store.listActionItems(db, f.id)).filter((a) => a.status === 'confirmed').map((a) => a.ownerPrincipal));
+    // The owners of the agreed items, also of one that is done by now: the
+    // answer to "done" goes to its owner.
+    const owners = new Set((await store.listActionItems(db, f.id)).filter((a) => a.status === 'confirmed' || a.status === 'done').map((a) => a.ownerPrincipal));
     unrestricted = (principal) => owners.has(principal);
   }
   const people: PersonTarget[] = [];
@@ -341,12 +343,15 @@ const settled = async (engine: EngineCore, facilitationId: string, jobKinds: rea
 };
 
 /** Why a scope of this kind is over, or undefined while it is still needed. */
-async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow): Promise<string | undefined> {
+async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow, onPass: boolean): Promise<string | undefined> {
   const ended = f.phase === 'closed' || f.phase === 'aborted';
   if (row.kind === 'configuring') return f.phase === 'configuring' ? undefined : f.phase === 'aborted' ? 'aborted' : 'opened';
   if (row.kind === 'active') return f.phase === 'active' || f.phase === 'configuring' ? undefined : f.phase;
   if (row.kind === 'follow_up') {
-    if (f.followupState === 'active') return undefined;
+    // Ended on a scheduler pass, not in the moment the last item is reported
+    // done: the answer to that report (in the group, or in the owner's
+    // private chat) is still drawn from this scope.
+    if (f.followupState === 'active' || !onPass) return undefined;
     return (await settled(engine, f.id, [])) ? 'follow-up ended' : undefined;
   }
   if (row.kind === 'scheduling') {
@@ -390,9 +395,9 @@ async function syncReading(engine: EngineCore, f: Facilitation): Promise<void> {
  * open what its state needs, move the deadline of the moderation when the
  * group changed it, register the people, and give the conversation back once
  * the facilitation has ended. Idempotent; called after every unit of work and
- * on every scheduler pass, outside the lock.
+ * on every scheduler pass (`onPass`), outside the lock.
  */
-export async function syncScopes(engine: EngineCore, facilitationId: string): Promise<void> {
+export async function syncScopes(engine: EngineCore, facilitationId: string, onPass = false): Promise<void> {
   const execution = engine.deps.kernel.execution();
   if (!execution) return;
   const f = await store.getFacilitation(engine.db(), facilitationId);
@@ -405,7 +410,7 @@ export async function syncScopes(engine: EngineCore, facilitationId: string): Pr
 
   for (const row of await listScopeRows(engine, f.id)) {
     if (row.state !== 'open') continue;
-    const reason = await overBecause(engine, f, row);
+    const reason = await overBecause(engine, f, row, onPass);
     if (reason !== undefined) {
       await endScope(engine, row, reason);
       continue;
@@ -435,7 +440,7 @@ export async function syncAllScopes(engine: EngineCore): Promise<void> {
   );
   for (const row of open.rows) {
     try {
-      await syncScopes(engine, row.id);
+      await syncScopes(engine, row.id, true);
     } catch (err) {
       engine.log(`facilitation ${row.id}: its execution scopes could not be brought up to date: ${err instanceof Error ? err.message : String(err)}`);
     }

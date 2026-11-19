@@ -29,7 +29,7 @@ import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { refusalText } from './refusals.js';
-import { endScope, ensureScope, syncScopes } from './scopes.js';
+import { endScope, ensureScope, stoppedByOperator, syncScopes } from './scopes.js';
 
 // ISO 8601 date-time WITH an explicit offset or Z. A bare local time is
 // ambiguous (whose timezone?) and refused rather than guessed.
@@ -390,7 +390,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
   const sends = kernel.conversationSend();
   if (missing.length > 0 || !messages || !execution || !sends) {
     throw new Refusal(
-      'kernel_too_old',
+      'instance_too_old',
       `A facilitation cannot run on this instance: it does not offer what a facilitation is authorized and bounded by (missing: ${missing.join(', ')}). Nothing was started. An operator has to update omadia, or finish its setup (a database is needed).`,
     );
   }
@@ -628,6 +628,10 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
   // facilitator) is the answer instead of a handshake that cannot go out.
   const before = await store.getFacilitation(engine.db(), facilitationId);
   if (before?.phase === 'configuring') {
+    // Opening a scope is not an action the kernel's stop refuses; the
+    // handshake is. Asked first, so that nothing is opened that cannot be said.
+    const stop = await stoppedByOperator(engine, before);
+    if (stop.stopped) throw new Refusal('kill_switch', `${refusalText('kill_switch', stop.message)} The facilitation was not opened.`);
     const scope = await ensureScope(engine, { ...before, phase: 'active' }, 'active');
     if (!scope.ok) throw new Refusal(scope.code, `${refusalText(scope.code, scope.message)} The facilitation was not opened.`);
   }

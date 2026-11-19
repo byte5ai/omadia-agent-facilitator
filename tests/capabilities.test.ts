@@ -306,3 +306,78 @@ test('review 4: an integration that does not answer times out; the conversation 
   assert.ok(posts(conv).some((t) => t.startsWith('I do not know whether the protocol mail went out')));
   assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);
 });
+
+// ── 1.4.0: kernel-issued grants (kernel #2078) ──────────────────────────────
+
+test('mail and calendar run under grants the kernel issued: per scope, for the people the group confirmed, handed to the integration and revoked when their work is done', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-grants', [ANNA, BERT, CARA]);
+  followup.calendars.set('anna@example.com', []);
+  followup.calendars.set('bert@example.com', []);
+  followup.calendars.set('cara@example.com', []);
+  const f = await closedWithFollowup(conv, { stakeholders: true, meeting: true });
+  const grants = h.kernel.grants.filter((g) => g.processId === f.id);
+  assert.deepEqual(grants.map((g) => g.kind).sort(), ['followup_scheduling', 'protocol_dispatch']);
+
+  // Protocol dispatch: under the closing scope of the result.
+  const dispatch = grants.find((g) => g.kind === 'protocol_dispatch');
+  assert.equal(dispatch?.scopeId, h.kernel.scopeOf(f.id, 'closing', 'result')?.id);
+  assert.deepEqual([...(dispatch?.recipients ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'sam@example.com', 'vera@example.com']);
+  assert.deepEqual(dispatch?.uses.map((u) => [u.operation, u.allowed]), [['send_mail', true]], 'the integration asked the kernel before it sent');
+  assert.match(dispatch?.revokeReason ?? '', /protocol mail done/, 'revoked once the send is confirmed');
+
+  // Follow-up scheduling: under the scheduling scope of the agreed meeting.
+  const scheduling = grants.find((g) => g.kind === 'followup_scheduling');
+  assert.equal(scheduling?.scopeId, h.kernel.scopeOf(f.id, 'scheduling', 'followup_meeting')?.id);
+  assert.deepEqual(scheduling?.uses.map((u) => [u.operation, u.allowed]), [['free_busy', true], ['create_invitation', true]]);
+  assert.match(scheduling?.revokeReason ?? '', /invitation done/, 'revoked once the invitation is out');
+
+  // Every call of the integration carried the grant, next to the recipient list.
+  const calls = followup.calls.filter((c) => c.grant.facilitationId === f.id);
+  assert.deepEqual(calls.map((c) => [c.method, (c.grant as { grantId?: string }).grantId]), [
+    ['sendMail', dispatch?.id],
+    ['freeBusy', scheduling?.id],
+    ['createInvitation', scheduling?.id],
+  ]);
+  assert.ok(calls.every((c) => c.grant.allowed.length === 5), 'the recipient list stays the second line');
+
+  // With its work done every scope has ended, and no grant is live.
+  await h.tick();
+  assert.deepEqual(h.kernel.openScopesOf(f.id), []);
+  assert.ok((await h.engine.core.deps.kernel.grants()?.listGrants(f.id))?.every((g) => !g.live));
+});
+
+test('without a grant nothing is sent: an instance that cannot grant, and a kernel that refuses, are said to the group and the integration is not asked', { skip: PG_SKIP }, async () => {
+  const calls = followup.calls.length;
+  h.kernel.absent.add('grants');
+  try {
+    const conv = h.kernel.conversation('ca-no-grants', [ANNA, BERT, CARA]);
+    const f = await closedWithFollowup(conv, { meeting: true });
+    assert.equal(f.phase, 'closed', 'the close stands');
+    assert.ok(posts(conv).includes('The protocol could not be mailed (this instance cannot grant a facilitation mail or calendar access). It is in this group, and participants got it privately where I can reach them.'), posts(conv).slice(-4).join('\n---\n'));
+    assert.ok(posts(conv).some((t) => t.startsWith('I could not schedule "Offsite follow-up" (this instance cannot grant a facilitation mail or calendar access).')));
+  } finally {
+    h.kernel.absent.delete('grants');
+  }
+  assert.equal(followup.calls.length, calls, 'the integration was not called');
+
+  // The integration asks the kernel with the grant; a stop refuses its use.
+  const conv = h.kernel.conversation('ca-grant-refused', [ANNA, BERT, CARA]);
+  followup.onCall = () => {
+    h.kernel.killSwitch.instance = true;
+  };
+  try {
+    await closedWithFollowup(conv, { tick: false });
+    await h.tick();
+  } finally {
+    followup.onCall = () => undefined;
+    h.kernel.killSwitch.instance = false;
+  }
+  const f = await h.facilitation(conv);
+  const grant = h.kernel.grants.find((g) => g.processId === f.id && g.kind === 'protocol_dispatch');
+  assert.deepEqual(grant?.uses.map((u) => [u.allowed, u.refusal]), [[false, 'kill_switch']]);
+  assert.equal(followup.mails.filter((m) => m.subject === 'Protocol: Offsite plan' && m.body.includes(f.id)).length, 0);
+  await h.tick();
+  h.clock.advance(MINUTE_MS);
+  await h.tick();
+  assert.ok(posts(conv).some((t) => t.startsWith('The protocol could not be mailed (the instance did not grant this')), posts(conv).slice(-4).join('\n---\n'));
+});

@@ -608,6 +608,20 @@ export class FakeKernel {
     this.accessChanged();
   }
 
+  /** A kernel that never heard of a process: what a facilitation from before
+   *  execution scopes looks like to it. It reads through a subscription of
+   *  the first major instead. */
+  forget(processId: string, agentSlug: string, conversationId: string): void {
+    const drop = <T extends { processId: string }>(list: T[]): void => {
+      for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.processId === processId) list.splice(i, 1);
+    };
+    drop(this.scopes);
+    drop(this.reservations);
+    drop(this.processSubscriptions);
+    this.refreshSubscriptions();
+    this.legacySubscriptions.add(scopeKey({ agentSlug, channelType: this.channelType, conversationId }));
+  }
+
   /** The kernel takes a conversation's reservation away (an operator freed
    *  the conversation). Whoever read everything there reads only what is
    *  addressed to it from now on. Nothing tells the engine. */

@@ -70,7 +70,7 @@ export class FacilitationEngine {
     this.core.onAfterDispatch(closeWhenResultDelivered);
     // After every unit of work the kernel's scopes follow the facilitation's
     // state: what is over ends, a changed deadline moves, the people are told.
-    this.core.onAfterRelease(syncScopes);
+    this.core.onAfterRelease((engine, facilitationId) => syncScopes(engine, facilitationId));
   }
 
   private readiness: (() => Promise<unknown>) | undefined;
