@@ -101,8 +101,14 @@ function voteQuestions(f: Facilitation, step: Step, participants: readonly Parti
       const people = participants.filter((p) => p.status === 'active');
       const listable = people.length > 0 && people.length <= MAX_CANDIDATES && people.every((p) => CARD_ID_PATTERN.test(candidateId(p)));
       const candidates = listable ? people.map((p) => ({ id: candidateId(p), label: p.displayName })) : ('conversation_members' as const);
+      // A channel shows "I'll take it" only on a card whose single question
+      // is the assignment. One candidate is enough next to that button and
+      // too few without it, so one candidate for several items stays in the
+      // chat rather than on a card the channel has to refuse.
+      const alone = options.length === 1;
+      if (candidates !== 'conversation_members' && candidates.length < (alone ? 1 : 2)) return undefined;
       // One question per item; nobody has to answer all of them.
-      return options.map((o) => ({ id: o.id, kind: 'assignment' as const, label: o.label, candidates, allowVolunteer: true, required: false }));
+      return options.map((o) => ({ id: o.id, kind: 'assignment' as const, label: o.label, candidates, allowVolunteer: alone, required: false }));
     }
   }
 }
@@ -155,7 +161,9 @@ async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
     cardFallbackText: input.fallbackText,
     link: { kind: 'card', id: card.cardId },
   });
-  await w.event('card_posted', 'engine', { cardId: card.cardId, stepId: input.stepId, round: input.round, version: input.version, purpose: input.purpose, kinds: input.questions.map((q) => q.kind) });
+  // Queued, not posted: whether the channel took the card is recorded when it
+  // answered (`card_posted` or `card_refused`, written at delivery).
+  await w.event('card_queued', 'engine', { cardId: card.cardId, stepId: input.stepId, round: input.round, version: input.version, purpose: input.purpose, kinds: input.questions.map((q) => q.kind) });
   return card;
 }
 

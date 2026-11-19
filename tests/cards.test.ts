@@ -265,11 +265,11 @@ test('assignment on a card: volunteering counts at once, naming somebody else wa
   assert.deepEqual(
     posted.questions.map((q) => [q.id, q.kind, q.label, q.required, 'candidates' in q ? q.candidates : undefined, 'allowVolunteer' in q ? q.allowVolunteer : undefined]),
     [
-      ['A', 'assignment', 'Notes', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], true],
-      ['B', 'assignment', 'Room', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], true],
+      ['A', 'assignment', 'Notes', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], false],
+      ['B', 'assignment', 'Room', false, [{ id: 'anna', label: 'Anna' }, { id: 'bert', label: 'Bert' }, { id: 'cara', label: 'Cara' }], false],
     ],
   );
-  await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: 'self' }]);
+  await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: { kind: 'teams-aad', id: 'anna' } }]);
   assert.match(posts(conv).at(-1) ?? '', /Anna/);
   // Somebody who does not take part cannot be named, whatever the client sends.
   const before = (await outcomes(conv)).length;
@@ -378,4 +378,56 @@ test('somebody who does not take part cannot answer a card', { skip: PG_SKIP }, 
   await submit(conv, 'mallory', rank('A', 'B', 'C'));
   assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_not_participant', 'card_answer_not_participant']);
   assert.deepEqual(await ballots(conv), {});
+});
+
+// ── 1.2.0: live finding D27 ─────────────────────────────────────────────────
+
+const eventKinds = async (conv: string): Promise<string[]> => {
+  const f = await h.facilitation(conv);
+  const result = await h.db.pool.query<{ kind: string }>('SELECT kind FROM plg_omadia_agent_facilitator_events WHERE facilitation_id = $1 ORDER BY id', [f.id]);
+  return result.rows.map((r) => r.kind);
+};
+
+test('D27: one task and one candidate is a card of its own with the volunteer button', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-assign-one', [ANNA]);
+  await tool(conv, 'facilitation_start', { goal: 'Proofread the protocol', method: 'assignment', options: ['Proofread'], open: true });
+  const posted = card(conv).card;
+  assert.deepEqual(posted.questions.map((q) => [q.kind, (q as { candidates?: unknown }).candidates, (q as { allowVolunteer?: boolean }).allowVolunteer]), [['assignment', [{ id: 'anna', label: 'Anna' }], true]]);
+  const kinds = await eventKinds(conv);
+  assert.ok(kinds.includes('card_posted'));
+  assert.ok(!kinds.includes('card_refused'));
+  await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: 'self' }]);
+  assert.equal((await h.facilitation(conv)).phase, 'closed', 'the volunteer click counts');
+});
+
+test('D27: several tasks and one candidate never go on one card; the question is in the chat', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-assign-one-many', [ANNA]);
+  await tool(conv, 'facilitation_start', { goal: 'Who does what', method: 'assignment', options: ['Notes', 'Room'], open: true });
+  assert.equal(h.kernel.cards(conv).length, 0);
+  const kinds = await eventKinds(conv);
+  assert.ok(!kinds.includes('card_posted') && !kinds.includes('card_refused'), 'no card was tried');
+});
+
+test('D27: on a card with several tasks the volunteer button is not offered, and a click on it is not accepted', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-assign-many', THREE);
+  await tool(conv, 'facilitation_start', { goal: 'Who does what', method: 'assignment', options: ['Notes', 'Room'], open: true });
+  assert.deepEqual(card(conv).card.questions.map((q) => (q as { allowVolunteer?: boolean }).allowVolunteer), [false, false]);
+  await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: 'self' }]);
+  assert.equal((await h.facilitation(conv)).phase, 'active');
+  const f = await h.facilitation(conv);
+  assert.equal((await store.listContributions(h.db.pool, f.id)).length, 0);
+});
+
+test('D27: a card the channel refuses is recorded as refused, never as posted', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-refused-record', THREE);
+  h.kernel.refuseCards = 1;
+  await tool(conv, 'facilitation_start', RANKED);
+  assert.equal(h.kernel.cards(conv).length, 0);
+  const f = await h.facilitation(conv);
+  const events = await h.db.pool.query<{ kind: string; payload: Record<string, unknown> }>('SELECT kind, payload FROM plg_omadia_agent_facilitator_events WHERE facilitation_id = $1 ORDER BY id', [f.id]);
+  const kinds = events.rows.map((r) => r.kind);
+  assert.ok(!kinds.includes('card_posted'), 'nothing was posted as a card');
+  const refused = events.rows.find((r) => r.kind === 'card_refused');
+  assert.equal(refused?.payload['reason'], 'the card is too large');
+  assert.equal(refused?.payload['postedAsText'], true);
 });

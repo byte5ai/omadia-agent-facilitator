@@ -486,6 +486,16 @@ export class FakeKernel {
       if (card !== undefined && (!this.cardSupport || card.questions.length > this.cardSupport.maxQuestions || card.questions.some((q) => !this.cardSupport?.kinds.includes(q.kind)))) {
         return { outcome: 'unreachable', code: 'channel_error', message: 'this channel does not render that card' };
       }
+      // As Teams 0.38.4: a fixed candidate list needs one candidate where the
+      // volunteer button is shown (the card's only question), two otherwise.
+      for (const q of card?.questions ?? []) {
+        if (q.kind !== 'assignment' || q.candidates === 'conversation_members') continue;
+        const volunteerShown = q.allowVolunteer !== false && card?.questions.length === 1;
+        if (q.candidates.length > 20) return { outcome: 'unreachable', code: 'channel_error', message: 'invalid question card: at most 20 candidates' };
+        if (q.candidates.length < (volunteerShown ? 1 : 2)) {
+          return { outcome: 'unreachable', code: 'channel_error', message: `invalid question card: question ${String(card!.questions.indexOf(q) + 1)}: at least ${volunteerShown ? 'one candidate is' : 'two options are'} needed` };
+        }
+      }
       const messageId = this.nextId('bot');
       this.posts.push({
         as: request.agentSlug,

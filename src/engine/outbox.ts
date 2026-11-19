@@ -84,6 +84,7 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
       });
       if (withCard.outcome === 'delivered') {
         const cardMessageId = (withCard as { cardMessageId?: string }).cardMessageId ?? withCard.messageId;
+        await store.appendEvent(q, { facilitationId: f.id, kind: 'card_posted', actor: 'engine', occurredAt: engine.now(), payload: { cardId: payload.card.cardId, kinds: payload.card.questions.map((question) => question.kind) } });
         return { ok: true, ...(withCard.messageId !== undefined ? { messageId: withCard.messageId } : {}), ...(cardMessageId !== undefined ? { cardMessageId } : {}) };
       }
       if (withCard.code !== CARD_REFUSED) return failed(withCard.code, withCard.message);
@@ -98,6 +99,9 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
         message: { text: payload.cardFallbackText ?? payload.text },
         asOwnIdentity: true,
       });
+      // On record as what happened: the channel refused the card, and
+      // whether the question reached the group as text instead.
+      await store.appendEvent(q, { facilitationId: f.id, kind: 'card_refused', actor: 'engine', occurredAt: engine.now(), payload: { cardId: payload.card.cardId, kinds: payload.card.questions.map((question) => question.kind), reason: withCard.message, postedAsText: asText.outcome === 'delivered' } });
       if (asText.outcome !== 'delivered') return failed(asText.code, asText.message);
       return { ok: true, ...(asText.messageId !== undefined ? { messageId: asText.messageId } : {}) };
     }
