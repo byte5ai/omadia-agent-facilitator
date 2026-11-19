@@ -15,7 +15,7 @@ import { FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
 import type { PluginContext } from '@omadia/plugin-api';
 
 import { systemClock } from './clock.js';
-import { parseConfig } from './config.js';
+import { CONFIG_KEYS, OBSOLETE_CONFIG_KEYS, isKernelKey, parseConfig } from './config.js';
 import type { EngineConfig } from './config.js';
 import { FacilitationEngine } from './engine/engine.js';
 import { OPERATOR_API_PREFIX, router as operatorRouter } from './http/operatorApi.js';
@@ -58,9 +58,58 @@ export const NAV_LABEL = { en: 'Facilitations', de: 'Moderationen' } as const;
 export const NO_DATABASE_REASON =
   'The facilitation engine has no database: grant this plugin its SQL permission and run the middleware with Postgres.';
 
+/** The kernel's setting for how the Privacy Shield treats what this plugin's
+ *  tools answer. Operator-owned; the manifest recommends 'bypass' and says why. */
+const PRIVACY_MODE_KEY = '_privacy_mode';
+
+/**
+ * What the privacy mode in force means for a facilitator, for the log.
+ *
+ * The engine's tools answer its own facilitator: what was recorded, what was
+ * refused and why, what to say next. Under 'guarded' the kernel replaces every
+ * such answer by an identity-free digest, and the facilitator would tell the
+ * group that something happened without knowing whether it did. So the engine
+ * needs 'bypass' for its own tools. It is never assumed silently: the mode in
+ * force is stated at every activation, and anything else is a warning.
+ */
+export function privacyNote(mode: unknown): string {
+  if (mode === 'bypass') {
+    return "privacy: mode 'bypass' is set for this plugin, as the manifest recommends: the facilitator reads what the engine's tools answer (state, refusals, names of the participants of the conversation it moderates). Tool inputs are restored by the kernel either way.";
+  }
+  const stated = typeof mode === 'string' && mode !== '' ? `'${mode}'` : "not set, which means 'guarded'";
+  return `privacy: WARNING: the privacy mode of this plugin is ${stated}. Under 'guarded' a facilitator cannot read what its tools answer (what was recorded, what was refused and why) and will moderate blind. Set the plugin's privacy mode to 'bypass' (see the recommendation in its settings), or 'per_tool' with every facilitation_* tool listed.`;
+}
+
+/**
+ * A version change of the installed plugin. The kernel would otherwise carry
+ * the configuration over key by key, including the settings of 0.7.x that
+ * nothing reads any more.
+ *
+ * Dropped: the 0.7.x keys. Kept: every setting 1.0.x reads, the kernel's own
+ * keys (the privacy mode is the operator's decision, not the plugin's), and
+ * keys the engine does not know (said in the log, not deleted). Idempotent.
+ */
+export async function onMigrate(ctx: { fromVersion: string; toVersion: string; previousConfig: Record<string, unknown>; log?: (msg: string) => void }): Promise<{ newConfig: Record<string, unknown> }> {
+  const log = (msg: string): void => ctx.log?.(`migrate ${ctx.fromVersion} -> ${ctx.toVersion}: ${msg}`);
+  const obsolete = new Set<string>(OBSOLETE_CONFIG_KEYS);
+  const known = new Set<string>(CONFIG_KEYS);
+  const entries = Object.entries(ctx.previousConfig);
+  const dropped = entries.filter(([key]) => obsolete.has(key)).map(([key]) => key);
+  const unknown = entries.filter(([key]) => !obsolete.has(key) && !known.has(key) && !isKernelKey(key)).map(([key]) => key);
+  if (dropped.length > 0) log(`dropped settings of 0.7.x that nothing reads any more: ${dropped.join(', ')}`);
+  if (unknown.length > 0) log(`kept settings the engine does not read: ${unknown.join(', ')}`);
+  if (ctx.previousConfig[PRIVACY_MODE_KEY] !== undefined) {
+    log(`the operator's ${PRIVACY_MODE_KEY} '${String(ctx.previousConfig[PRIVACY_MODE_KEY])}' is carried over unchanged. ${privacyNote(ctx.previousConfig[PRIVACY_MODE_KEY])}`);
+  }
+  return { newConfig: Object.fromEntries(entries.filter(([key]) => !obsolete.has(key))) };
+}
+
 export async function activate(ctx: PluginContext): Promise<FacilitatorHandle> {
   const log = (msg: string): void => ctx.log(msg);
   log('activating facilitation engine');
+  log(privacyNote(ctx.config.get<unknown>(PRIVACY_MODE_KEY)));
+  const stale = OBSOLETE_CONFIG_KEYS.filter((key) => ctx.config.get<unknown>(key) !== undefined);
+  if (stale.length > 0) log(`config: settings of 0.7.x are still stored and ignored: ${stale.join(', ')}`);
   const pluginId = ctx.agentId || PLUGIN_ID;
   const config = parseConfig(<T,>(key: string) => ctx.config.get<T>(key), log);
   const kernel = createKernel(ctx.services);

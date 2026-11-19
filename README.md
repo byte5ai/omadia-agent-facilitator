@@ -122,6 +122,34 @@ All fields are optional; defaults in brackets.
 | `followup_grant_days` [14] | how long the scoped grant lasts without action items |
 | `protocol_mail_enabled` [false] | also mail the protocol through the follow-up integration |
 
+### Privacy mode
+
+The kernel adds a privacy mode to every plugin with tools (`_privacy_mode`,
+operator-owned). It decides what the model sees of a tool's **answer**:
+
+- **Set it to `bypass` for this plugin** (the manifest recommends it and the
+  settings form shows the reason). The engine's tools answer the facilitator
+  itself: what was recorded, what was refused and why, what to tell the group.
+  Under `guarded` the kernel replaces each answer by an identity-free digest
+  and the facilitator moderates blind. The engine states the mode in force at
+  every activation and logs a warning when it is not `bypass`.
+- What the answers carry: names and words of the participants of the
+  conversation the facilitator moderates. Nothing from other systems.
+- Tool **inputs** do not depend on the mode: the kernel restores the real
+  values before a tool runs, so names and message texts reach the engine's
+  tables and the chat as people wrote them. A privacy placeholder that was not
+  restored is refused by the engine's text guard and never posted.
+- An organisation that forces `guarded` for every plugin
+  (`OMADIA_PRIVACY_FORCE_GUARDED`) cannot run facilitators reliably until the
+  kernel exempts the facilitation tools.
+
+### Upgrading from 0.7.x
+
+The settings of 0.7.x (`facilitator_agent_slug`, `initiator_role_key`,
+`reporting_mode`, `moderation_style`, `auto_setup`, `disclose_report_target`)
+are dropped on upgrade; nothing reads them. The privacy mode the operator had
+set is kept and stated in the log.
+
 ## Operators
 
 - **Facilitations view** in the navigation ("Facilitations" / "Moderationen"):

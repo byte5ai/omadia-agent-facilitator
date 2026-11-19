@@ -45,6 +45,15 @@ compat:
 
 privacy_class: "strict"
 
+# The engine's tools answer its own facilitator: what was recorded, what was
+# refused and why. Under "guarded" the kernel replaces each answer by a digest
+# and the facilitator moderates blind, so the engine needs "bypass" for its
+# own tools. It is the operator's setting; this is the reason they are shown.
+privacy:
+  recommendation:
+    mode: "bypass"
+    reason: "The engine's tools answer the facilitator itself: what was recorded, what was refused and why, and what to tell the group. They carry only names and words of the participants of the conversation the facilitator moderates, nothing from other systems. Guarded would hide these answers, and the facilitator would tell the group things it cannot know."
+
 depends_on: []
 
 # The instance's facilitation engine. A facilitator-kind agent gets exactly
