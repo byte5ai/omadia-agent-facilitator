@@ -88,7 +88,7 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
   if (payload.cardUpdate) {
     const card = await store.getCard(q, payload.cardUpdate.cardId);
     // A card that never reached the channel has nothing to bring up to date.
-    if (!card?.messageId) return { ok: false, code: 'card_not_posted', message: 'the card was not posted, so there is nothing to update' };
+    if (!card?.messageId) return { ok: false, code: CARD_NOT_POSTED, message: 'the card was not posted, so there is nothing to update' };
     const outcome = await service.updateCard({ ...to, cardMessageId: card.messageId, update: payload.cardUpdate.update, authorization });
     return outcome.outcome === 'updated' ? { ok: true } : unreachable(outcome);
   }
@@ -160,6 +160,11 @@ const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 60 * 60_000;
 /** A private message that can never arrive: retrying changes nothing. */
 const PERMANENT_DIRECT_FAILURES = new Set(['app_not_installed', 'blocked', 'no_identity', 'not_found']);
+
+/** How soon a message an operator's stop holds back is tried again. */
+export const STOPPED_RECHECK_MS = 60_000;
+/** The code of a card update whose card never reached the channel. */
+const CARD_NOT_POSTED = 'card_not_posted';
 
 export const retryDelayMs = (attempts: number): number => Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS);
 
@@ -287,6 +292,13 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
       if (row.targetKind === 'direct' && refusedBy === 'target_not_allowed') await fallbackToGroup(engine, client, f, row);
       return;
     }
+    // An operator's stop is not a failed attempt: the message is held and
+    // goes out soon after the stop is lifted, however long it lasted.
+    if (refusedBy === 'kill_switch') {
+      await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', attempts: row.attempts, lastError: error, nextAttemptAt: new Date(engine.now().getTime() + STOPPED_RECHECK_MS) });
+      if (row.lastError !== error) engine.log(`facilitation ${f.id}: essential ${row.purpose} is held back by an operator's stop (${error}); it goes out when the stop is lifted`);
+      return;
+    }
     // A refusal that does not pass on its own is not tried twenty times.
     if (isFinalRefusal(refusedBy) || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
       await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
@@ -297,6 +309,11 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
     }
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
     engine.log(`facilitation ${f.id}: essential ${row.purpose} is not authorized right now (${error}); will retry`);
+    return;
+  }
+  if (result.code === CARD_NOT_POSTED) {
+    // Trying again changes nothing: there is no card in the channel.
+    await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'the card was never posted' });
     return;
   }
   if (row.deliveryClass === 'droppable') {

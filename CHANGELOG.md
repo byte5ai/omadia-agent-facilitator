@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.5
+
+Finding O2 of the rollout: a question card closed while an operator had
+stopped the facilitator stayed open and clickable in the channel until its own
+end.
+
+The update that closes a card was queued as droppable. The kernel refused it
+under the stop, and a droppable message is not tried again.
+
+### Fixed
+
+- **A card's closing update is not lost.** It is essential now: refused or
+  failed, it is tried again until it is applied. There is one update per card
+  (a card closes once), so only its final state is sent. For the kernel it is
+  the same `moderation` action as before.
+- **An operator's stop is not a failed attempt.** An essential message the
+  kernel refuses because of a stop is held and asked again every minute,
+  without counting attempts, so it goes out soon after the stop is lifted,
+  however long it lasted. Before, it was retried with a growing pause and
+  given up after twenty attempts. This holds for every essential message (the
+  abort report, the result), not only for card updates.
+- An update for a card that never reached the channel is given up at once, as
+  before.
+
 ## 1.5.4
 
 Finding O1 of the rollout: during a vote a participant asked which options

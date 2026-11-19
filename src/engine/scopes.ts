@@ -257,6 +257,9 @@ const PURPOSES: Readonly<Record<string, ExecutionPurpose>> = {
   protocol: 'protocol_dispatch',
   protocol_in_group: 'protocol_dispatch',
   followup_meeting: 'invitation',
+  // Essential in the outbox (it is retried), but for the kernel it stays the
+  // moderation it always was.
+  card_update: 'moderation',
 };
 
 /** What an outgoing message is for, in the kernel's terms. */

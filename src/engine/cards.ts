@@ -206,11 +206,14 @@ async function closeCards(w: Work, cards: readonly CardRow[], state: 'closed' | 
     await w.event('card_closed', 'engine', { cardId: card.cardId, state });
     if (!support?.update) continue;
     // The update follows the card's own post through the outbox, in order.
+    // Essential: a card that stays open in the channel can still be clicked,
+    // so a refused or failed update is tried again until it is applied. One
+    // row per card (a card closes once), so only its final state is sent.
     w.post({
       purpose: 'card_update',
       key: `${card.cardId}:${state}`,
       to: 'group',
-      deliveryClass: 'droppable',
+      deliveryClass: 'essential',
       versionBound: false,
       text: lines.join('\n'),
       cardUpdate: { cardId: card.cardId, update: { state: 'closed', title: card.card.title, resultLines: lines.slice(0, MAX_RESULT_LINES).map((l) => clip(l, MAX_LABEL)), closedAt: w.now.toISOString() } },
