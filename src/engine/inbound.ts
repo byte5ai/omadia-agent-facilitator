@@ -19,6 +19,7 @@ import type { EngineCore, Work } from './core.js';
 import { abortInWork } from './lifecycle.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { expectedNames, sameName } from './roll.js';
+import { namesOf, withoutMention } from './addressing.js';
 import { wantedMode } from './scopes.js';
 import { statusText } from './status.js';
 
@@ -45,8 +46,21 @@ export interface InboundContext {
 /** A deterministic reading of one message. Undefined: not mine, try the next. */
 export type InboundHandler = (ctx: InboundContext) => Promise<InboundResult | undefined>;
 
-export function normaliseCommand(text: string | undefined): string {
-  return (text ?? '')
+/** Who a message may name at its start, and whether the kernel stated that
+ *  it addresses the facilitator. */
+export interface Addressing {
+  names: readonly string[];
+  addressed: boolean;
+}
+
+/**
+ * The command a message is: lower-cased, without the mention it starts with
+ * and without closing punctuation. A mention is "@token", or the
+ * facilitator's name as the channel writes it into the text (addressing.ts).
+ */
+export function normaliseCommand(text: string | undefined, addressing?: Addressing): string {
+  const body = addressing ? withoutMention(text ?? '', addressing.names, addressing.addressed) : (text ?? '');
+  return body
     .trim()
     .replace(/^(@\S+\s+)+/u, '')
     .replace(/^\/facilitator\s+/i, '')
@@ -348,7 +362,7 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord, 
   }
 
   const author = await resolveAuthor(w, record);
-  const ctx: InboundContext = { w, record, author, command: normaliseCommand(record.text) };
+  const ctx: InboundContext = { w, record, author, command: normaliseCommand(record.text, { names: namesOf(w.f), addressed: record.addressedToBot === true || opts.fromHook === true }) };
   let result: InboundResult | undefined;
   for (const { handler } of handlers) {
     result = await handler(ctx);

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.1
+
+A mention as Teams writes it (live finding D36).
+
+### Fixed
+
+- **A command after a real mention was not read when the facilitator's name
+  has more than one word.** Teams stores the mentioned display name in the
+  text, without an "@": "Mona (Test) erledigt 1". Only "@token" was taken off
+  the start, so "erledigt 1", "status" and "stopp" after a mention were not
+  recognised. In follow-up the engine declined the message and the ordinary
+  turn answered that nothing was closed. Now the mention at the start is
+  taken off as the channel wrote it: the whole display name (several words,
+  parentheses), a tag (`<at>…</at>`), "@name", and, where the kernel states
+  that the message addresses the facilitator, a part of the name or a name of
+  one word ("Mona erledigt 1").
+- **During a vote a request with a mention that did not end in "?" got no
+  answer.** Whether a message addresses the facilitator was read from its
+  text; the kernel's statement on the record (`addressedToBot`) was not
+  looked at, and the kernel suppresses the ordinary turn there, so nobody
+  answered. A message the kernel marks as addressed now always goes to the
+  facilitator's turn. The name is also found anywhere in a text when it has
+  several words.
+
 ## 1.5.0
 
 The engine answers a mention during the follow-up itself (kernel #2089,

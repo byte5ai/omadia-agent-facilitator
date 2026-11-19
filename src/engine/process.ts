@@ -4,6 +4,8 @@
 // keeps time, knows who has not spoken yet, and never closes anything
 // silently.
 
+import type { ConversationMessageRecord } from '@omadia/plugin-api';
+
 import { MINUTE_MS } from '../clock.js';
 import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -271,11 +273,22 @@ const MOVE_ON = /^(next|weiter|move on|next step|n[aä]chster schritt)$/u;
 const ABOUT_PROCESS =
   /(?<!\p{L})(abstimm\p{L}*|abstimmung|vote|voting|n[aä]chste[rnms]? (schritt|punkt)|next (step|item|point)|weitergehen|weitermachen|move on|[uü]berspring\p{L}*|skip|facilitator|moderator\p{L}*|moderation)(?!\p{L})/iu;
 
-function addressesProcess(text: string, facilitator: string): boolean {
+function addressesProcess(record: ConversationMessageRecord, facilitator: string): boolean {
+  // The kernel's statement comes first: a message it marks as addressed to
+  // the facilitator is, whatever its wording, and always gets an answer.
+  if (record.addressedToBot === true) return true;
+  const text = (record.text ?? '').trim();
   if (text.endsWith('?') || /^@\S+/u.test(text)) return true;
   if (ABOUT_PROCESS.test(text)) return true;
-  const name = facilitator.trim().toLowerCase();
-  return name !== '' && text.toLowerCase().split(/[^\p{L}\p{N}]+/u).includes(name);
+  // The name anywhere in the text, as written: several words and
+  // parentheses included ("Mona (Test)").
+  const name = facilitator.trim().toLowerCase().replace(/\s+/gu, ' ');
+  if (name === '') return false;
+  const at = text.toLowerCase().replace(/\s+/gu, ' ').indexOf(name);
+  if (at === -1) return false;
+  const lower = text.toLowerCase().replace(/\s+/gu, ' ');
+  const letter = /[\p{L}\p{N}]/u;
+  return !letter.test(lower.charAt(at - 1)) && !letter.test(lower.charAt(at + name.length));
 }
 
 /**
@@ -337,7 +350,7 @@ const collecting: InboundHandler = async ({ w, record, author, command, retired 
   if (text === '') return undefined;
   // A bare yes or no answers something; it is not a point to collect.
   if (isYes(command) || isNo(command)) return undefined;
-  if (addressesProcess(text, facilitatorName(w.f))) return undefined;
+  if (addressesProcess(record, facilitatorName(w.f))) return undefined;
   await recordContribution(w, { record, author, step, kind: 'idea', payload: { text }, summary: text, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'collected' };
 };
@@ -425,7 +438,7 @@ const quietInAVote: InboundHandler = async ({ w, record, author, command }) => {
   // An agreement that reached this handler agrees to nothing that is open
   // (proposals and confirmations were read before). It is about the process.
   if (record.kind === 'created' && record.quoted !== true && record.forwarded !== true && isAgreement(command)) return voteOpenHint(w, step, record.eventId, 'nothing_open');
-  if (addressesProcess(text, facilitatorName(w.f)) || ABOUT_THE_VOTE.test(text) || looksLikeBallot(text, step, texts(w.f.language).words.abstention)) return undefined;
+  if (addressesProcess(record, facilitatorName(w.f)) || ABOUT_THE_VOTE.test(text) || looksLikeBallot(text, step, texts(w.f.language).words.abstention)) return undefined;
   return { outcome: 'not_addressed' };
 };
 
