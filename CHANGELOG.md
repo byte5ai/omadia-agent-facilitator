@@ -1,5 +1,74 @@
 # Changelog
 
+## 1.2.0
+
+The plugin becomes an archetype plugin (kernel #2088, P1 of the spec
+alignment), and the findings of the live runs on 1.1.2 (D27, D28, D29).
+
+**Needs kernel `@omadia/plugin-api` >= 1.60.0** (`compat.core: >=1.60.0 <2.0`),
+the first kernel that knows the manifest kind `archetype`. An older kernel is
+not offered this version. Installing or updating to it asks the operator for
+an explicit confirmation.
+
+### Added
+
+- **Manifest kind `archetype`.** The manifest carries the descriptor of the
+  archetype `facilitator` that the kernel enforces: the eleven omissions with
+  their reasons, the four additions, the requirement of an own channel
+  identity, labels and description in English and German, and the neutrality
+  contract as `role_contract`. `provides: facilitationEngine@1` stays for
+  kernels that find the engine by it. The German manifest texts use the
+  product terms (Moderation, Kanalidentität); the display name is
+  "Facilitator archetype".
+- **Service `archetypeProcesses:facilitator`** (plugin-api 1.61.0; a kernel
+  that never asks ignores it). Before the kernel disables or deletes a
+  facilitator, or removes this plugin, `endProcessesOfAgent({ agentSlug,
+  reason })` ends every running facilitation of that agent with its abort
+  report, posted as the facilitator, with the reason in words. A closed
+  facilitation that still follows up action items ends its follow-up. It is
+  idempotent and answers within 17 s whatever a channel does (the kernel
+  waits 20 s); what is not finished by then is reported as `failed`.
+- **Closing a vote early, by consent (D28).** "next" / "weiter" in a ranked,
+  single or approval vote proposes to close it now and count the votes cast;
+  whoever writes it agrees with it. It closes when everybody agreed or nobody
+  objected within the confirmation window; an objection keeps it open. A tie
+  then goes to a runoff, never to an abort: the deadline has not passed.
+  `facilitation_step` with `close` on such a vote puts the same proposal to
+  the group instead of refusing.
+
+### Changed
+
+- **A vote is one message where the channel has cards (D30).** A card is
+  posted without a text next to it; it carries the step ("Step 2 of 3."), the
+  title, the question, until when it is open and one line that an answer in
+  the chat counts too. The separate announcement of a vote step is not posted
+  when the card stands for it; a card the channel refuses still brings the
+  whole announcement into the chat. The handshake says "You vote on the card;
+  an answer in the chat counts too." and explains the chat syntax only on
+  channels without cards.
+
+### Fixed
+
+- **A refused card was recorded as posted (D27).** The event at queueing is
+  now `card_queued`; `card_posted` is written when the channel took the card
+  and `card_refused` (with the channel's reason and whether the question went
+  out as text) when it did not.
+- **An assignment with one candidate (D27).** One item and one candidate is a
+  card of its own with the volunteer button (Teams 0.38.4 accepts it there).
+  A card with several items never offers the button, which channels do not
+  render there, and with a single candidate the question stays in the chat
+  instead of on a card the channel has to refuse.
+- **A number asked on a channel without a number field (D29).** `number` and
+  `date` questions of a questionnaire are no longer refused there: they are
+  text fields that say what is expected, and the typed answer is read and
+  checked ("15min" is 15, "24.11.2026" is 2026-11-24). What cannot be read,
+  or is out of range, is not recorded, and the person is told privately what
+  is needed.
+- **Process words in a vote were dropped without an answer (D28).** "next"
+  before anybody voted, and an agreement with nothing open to agree to, are
+  answered once per vote with when it closes and how the group can close it
+  earlier. The facilitator no longer says it cannot close a vote.
+
 ## 1.1.2
 
 ### Changed
