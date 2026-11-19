@@ -7,19 +7,21 @@
 import { MINUTE_MS } from '../clock.js';
 import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
-import type { Cluster, Contribution, Participant, Proposal, Step } from '../model.js';
+import type { Cluster, Contribution, Facilitation, Participant, Proposal, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import { voteCardFits } from './cards.js';
 import { recordContribution, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
-import { castBallots, conclude, setAfterStepDecided } from './decide.js';
+import { advance, castBallots, conclude, setAfterStepDecided } from './decide.js';
 import { PRIORITY, isNo, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { announceStepOpened, announceVote, facilitatorName, rulesOf, setStepOpener } from './lifecycle.js';
-import { decideProposal, openProposal, registerProposalKind } from './proposals.js';
+import { agree, decideProposal, isAgreement, openProposal, registerProposalKind } from './proposals.js';
 import { closingSummary } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
+import { effectiveCloseRule, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
 
 const isDeciding = (step: Step): boolean => step.method !== null;
@@ -62,14 +64,18 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
   const instruction = needsOptions(opened)
     ? t.needOptions(step.title)
     : [t.stepInstruction[step.kind], ...(opened.method === null && (step.kind === 'collect' || step.kind === 'discuss') ? [t.moveOnHint[step.kind]] : []), ...rulesOf(w.f, opened)].filter((l) => l !== '').join(' ');
-  w.post({
-    purpose: 'step_opened',
-    key: step.id,
-    to: 'group',
-    deliveryClass: 'essential',
-    requiredPhases: ['active'],
-    text: t.stepOpened(step.position, steps.length, step.title, instruction, until ? formatWhen(until, w.f.timezone, w.f.language) : undefined),
-  });
+  // A vote that goes out as a card is announced by the card alone: one
+  // message, not the step text, a pointer to the card and the card.
+  if (needsOptions(opened) || !(await voteCardFits(w, opened))) {
+    w.post({
+      purpose: 'step_opened',
+      key: step.id,
+      to: 'group',
+      deliveryClass: 'essential',
+      requiredPhases: ['active'],
+      text: t.stepOpened(step.position, steps.length, step.title, instruction, until ? formatWhen(until, w.f.timezone, w.f.language) : undefined),
+    });
+  }
   await announceVote(w, opened);
   await announceStepOpened(w, opened);
   return opened;
@@ -246,7 +252,7 @@ export async function setDecision(w: Work, step: Step, patch: Partial<Pick<Step,
   await w.event('decision_set', 'facilitator', { stepId: step.id, method: updated.method, options: updated.options });
   if (updated.status === 'open') {
     const t = texts(w.f.language);
-    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...rulesOf(w.f, updated)].join(' ') });
+    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...((await voteCardFits(w, updated)) ? [t.card.voteOnCard] : rulesOf(w.f, updated))].join(' ') });
     await announceVote(w, updated);
   }
   return updated;
@@ -292,7 +298,20 @@ const movingOn: InboundHandler = async ({ w, record, author, command }) => {
   if (record.quoted === true || record.forwarded === true || !MOVE_ON.test(command)) return undefined;
   if (!(await writtenAfterStart(w, record))) return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
-  if (!step || step.method !== null || !ENDED_BY_THE_GROUP.has(step.kind)) return undefined;
+  if (!step) return undefined;
+  if (isChoiceVote(step)) {
+    // In a vote the word asks to close it now: a change of its rule, which
+    // the group decides.
+    if ((await castBallots(w, step)).length === 0) return voteOpenHint(w, step, record.eventId, 'no_votes');
+    if (await store.openProposal(w.tx, w.f.id)) {
+      w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).proposalBusy() });
+      return { outcome: 'move_on_busy' };
+    }
+    // Whoever asks to close agrees to closing.
+    await agree(w, await proposeVoteClose(w, step, author.principalId, record.messageId), author);
+    return { outcome: 'move_on' };
+  }
+  if (step.method !== null || !ENDED_BY_THE_GROUP.has(step.kind)) return undefined;
   if (await store.openProposal(w.tx, w.f.id)) {
     w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).proposalBusy() });
     return { outcome: 'move_on_busy' };
@@ -343,6 +362,49 @@ function looksLikeBallot(text: string, step: Step, abstention: string): boolean 
   return options.some((o) => lower.includes(o.label.toLowerCase()) || new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(o.key)}(?![\\p{L}\\p{N}])`, 'u').test(text));
 }
 
+export const isChoiceVote = (step: Step): step is Step & { method: NonNullable<Step['method']> } =>
+  step.method !== null && CHOICE_METHODS.has(step.method) && (step.roundOptions ?? step.options).length > 0;
+
+/** When the open vote closes, in the words of the group. */
+export function voteClosesLine(f: Facilitation, step: Step): string {
+  const t = texts(f.language);
+  const until = step.roundDeadline ?? f.deadline;
+  const when = until ? formatWhen(until, f.timezone, f.language) : undefined;
+  return t.voteCloses(effectiveCloseRule(f), when);
+}
+
+/** Put "close the vote now" to the group. */
+export async function proposeVoteClose(w: Work, step: Step, proposedBy: string, proposalMessageId?: string): Promise<Proposal> {
+  const cast = (await castBallots(w, step)).length;
+  const of = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active').length + expectedNames(w.f).length;
+  return openProposal(w, {
+    kind: 'vote_close',
+    summary: step.title,
+    payload: { stepId: step.id, round: step.round, cast, of },
+    proposedBy,
+    ...(proposalMessageId !== undefined ? { proposalMessageId } : {}),
+    windowMinutes: w.f.settings.confirmWindowMinutes,
+  });
+}
+
+/**
+ * A process word in a vote that cannot do anything right now ("next" before
+ * anybody voted, an agreement with nothing open to agree to): answered with
+ * when the vote closes and how the group can close it earlier. Once per step
+ * and reason; never dropped without an answer the first time.
+ */
+async function voteOpenHint(w: Work, step: Step, eventId: string, reason: 'no_votes' | 'nothing_open'): Promise<{ outcome: string }> {
+  const t = texts(w.f.language);
+  const said = Array.isArray(step.methodConfig['voteHints']) ? (step.methodConfig['voteHints'] as string[]) : [];
+  const key = `${String(step.round)}:${reason}`;
+  if (!said.includes(key)) {
+    await store.patchStep(w.tx, step.id, { methodConfig: { ...step.methodConfig, voteHints: [...said, key] } });
+    const lines = [voteClosesLine(w.f, step), reason === 'no_votes' ? t.voteCloseNeedsVotes() : t.voteCloseHow()];
+    w.post({ purpose: 'vote_open_hint', key: eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['active'], text: lines.join(' ') });
+  }
+  return { outcome: 'vote_open_hint' };
+}
+
 /**
  * In a vote between announced options the facilitator stays quiet (D19).
  *
@@ -353,13 +415,16 @@ function looksLikeBallot(text: string, step: Step, abstention: string): boolean 
  * and not answered: a facilitator that comments on small talk during a vote
  * is noise.
  */
-const quietInAVote: InboundHandler = async ({ w, record, author }) => {
+const quietInAVote: InboundHandler = async ({ w, record, author, command }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
-  if (!step?.method || !CHOICE_METHODS.has(step.method) || (step.roundOptions ?? step.options).length === 0) return undefined;
+  if (!step || !isChoiceVote(step)) return undefined;
   const text = (record.text ?? '').trim();
   if (text === '') return undefined;
+  // An agreement that reached this handler agrees to nothing that is open
+  // (proposals and confirmations were read before). It is about the process.
+  if (record.kind === 'created' && record.quoted !== true && record.forwarded !== true && isAgreement(command)) return voteOpenHint(w, step, record.eventId, 'nothing_open');
   if (addressesProcess(text, facilitatorName(w.f)) || ABOUT_THE_VOTE.test(text) || looksLikeBallot(text, step, texts(w.f.language).words.abstention)) return undefined;
   return { outcome: 'not_addressed' };
 };
@@ -381,6 +446,19 @@ export function installProcess(): void {
     extend: async (w, p, minutes) => {
       const step = await store.getStep(w.tx, String(p.payload['stepId']));
       if (step?.status === 'open') await extendStep(w, step, minutes ?? Math.max(5, Math.round((step.timeboxMinutes ?? 20) / 2)), 'group');
+    },
+  });
+
+  // Closing a vote before its rule fires changes that rule for this vote:
+  // the group consents, and then the votes cast are counted. A tie goes to a
+  // runoff; the deadline has not passed.
+  registerProposalKind('vote_close', {
+    describe: (w, p) => texts(w.f.language).proposalKinds.vote_close(p.summary, Number(p.payload['cast'] ?? 0), Number(p.payload['of'] ?? 0)),
+    accept: async (w, p) => {
+      const step = await store.getStep(w.tx, String(p.payload['stepId']));
+      if (step?.status !== 'open' || step.round !== Number(p.payload['round'])) return;
+      await w.event('vote_closed_early', 'group', { stepId: step.id, round: step.round });
+      await advance(w, 'group');
     },
   });
 

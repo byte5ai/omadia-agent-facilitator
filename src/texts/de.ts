@@ -24,7 +24,9 @@ export const de: Texts = {
   aborted: (reason) => `Diese Moderation endet ohne Ergebnis. Grund: ${reason}`,
 
   card: {
-    chatToo: 'Antwortet auf der Karte oder im Chat; eure neueste Antwort zählt.',
+    chatToo: 'Eine Antwort im Chat zählt auch; eure neueste Antwort zählt.',
+    stepOf: (position, total) => `Schritt ${String(position)} von ${String(total)}.`,
+    voteOnCard: 'Abgestimmt wird über die Karte; eine Antwort im Chat zählt auch.',
     rank: 'Reiht die Optionen, die beste zuerst.',
     rankLabel: (rank, points) => (points === undefined ? `${String(rank)}. Platz` : `${String(rank)}. Platz (${String(points)} ${points === 1 ? 'Punkt' : 'Punkte'})`),
     single: 'Wählt eine Option.',
@@ -33,6 +35,10 @@ export const de: Texts = {
     superseded: 'Ersetzt durch eine neue Version dieser Abstimmung. Bitte auf der neuen Karte antworten.',
     supersededQuestionnaire: 'Ersetzt durch einen neuen Fragebogen. Bitte auf der neuen Karte antworten.',
     closed: (when) => `Geschlossen am ${when}.`,
+    numberExpected: (min, max) =>
+      `Nur eine Zahl, z. B. 15${min !== undefined && max !== undefined ? `, zwischen ${String(min)} und ${String(max)}` : min !== undefined ? `, mindestens ${String(min)}` : max !== undefined ? `, höchstens ${String(max)}` : ''}.`,
+    dateExpected: 'Ein Datum, z. B. 24.11.2026 oder 2026-11-24.',
+    notAsExpected: (label, expected) => `Deine Antwort auf „${label}“ konnte ich nicht verwenden. Ich brauche: ${expected.charAt(0).toLowerCase()}${expected.slice(1)} Bitte antworte noch einmal auf der Karte; von dieser Abgabe wurde nichts erfasst.`,
   },
 
   unnamedPerson: 'Teilnehmer:in ohne Namen',
@@ -156,6 +162,7 @@ export const de: Texts = {
 
   proposalKinds: {
     step_close: (title) => `"${title}" abschließen und weitergehen`,
+    vote_close: (title, cast, of) => `die Abstimmung zu "${title}" jetzt schließen und die ${String(cast)} von ${String(of)} abgegebenen Stimmen auszählen`,
     clusters: (lines) => `das Gesammelte so gruppieren:\n${lines.map((l) => `- ${l}`).join('\n')}`,
     summary: (text) => `diese Zusammenfassung ins Protokoll nehmen:\n${text}`,
     decision: (statement) => `diese Entscheidung festhalten: ${statement}`,
@@ -170,6 +177,12 @@ export const de: Texts = {
   proposalObjection: (name, reason) =>
     `${name} hat einen Einwand: ${reason}. Solange er steht, gilt der Vorschlag nicht. ${name}, schreib "einverstanden", wenn er für dich ausgeräumt ist.`,
   proposalBusy: () => 'Ein Vorschlag nach dem anderen: Zuerst wird der offene entschieden.',
+  voteCloses: (rule, when) =>
+    rule === 'at_deadline'
+      ? `Diese Abstimmung schließt zur Deadline${when ? ` (${when})` : ''}.`
+      : `Diese Abstimmung schließt, sobald alle abgestimmt haben${when ? `, spätestens zur Deadline (${when})` : ''}.`,
+  voteCloseHow: () => 'Wenn ihr früher schließen wollt, schreibt "weiter": Dann frage ich die Runde, und sie schließt, wenn niemand widerspricht.',
+  voteCloseNeedsVotes: () => 'Bisher hat niemand abgestimmt, es gibt also nichts auszuzählen. Sobald Stimmen da sind, könnt ihr mit "weiter" früher schließen; dann frage ich die Runde.',
 
   silentInviteDirect: (name, title) =>
     `Hallo ${name}, wir schließen gleich "${title}" ab. Wenn du noch etwas ergänzen möchtest, würde die Gruppe das gern hören. Schreib es bitte in die Gruppe; hier kann ich keine Beiträge annehmen.`,
@@ -334,6 +347,9 @@ export const de: Texts = {
   guardFallback: () => 'Ich konnte meine Antwort gerade nicht in Worte fassen. Fragt nach dem "Status", um zu sehen, wo wir stehen.',
   abortLifetime: (days) => `die maximale Dauer von ${String(days)} Tagen ist erreicht`,
   abortOperator: (reason) => `ein Operator hat sie beendet (${reason})`,
+  abortAgentDisabled: () => 'dieser Facilitator wurde von einem Operator deaktiviert und kann nicht mehr moderieren',
+  abortAgentDeleted: () => 'dieser Facilitator wird von einem Operator gelöscht',
+  abortArchetypeRemoved: () => 'der Archetyp Facilitator wird von dieser Instanz entfernt, deshalb kann hier kein Facilitator mehr moderieren',
   notVisible: () => 'Du nimmst an dieser Moderation nicht teil, deshalb steht dir ihr Protokoll nicht zur Verfügung.',
 
   // ── Sessions und Medien ──────────────────────────────────────────────────

@@ -18,9 +18,37 @@ test('version is the same in package.json, manifest.yaml and the engine', () => 
   assert.equal(ENGINE_VERSION, pkg.version);
 });
 
-test('the manifest declares the engine capability and an extension kind', () => {
+test('the manifest is of kind archetype and keeps the engine capability for kernels that find it by that', () => {
   assert.match(manifest, new RegExp(`provides:\\n\\s+- "${FACILITATION_ENGINE_CAPABILITY}"`));
-  assert.match(manifest, /^\s{2}kind: "extension"$/m);
+  assert.match(manifest, /^\s{2}kind: "archetype"$/m);
+  assert.match(manifest, /^\s{2}core: ">=1\.60\.0 <2\.0"$/m);
+});
+
+/** The entries of one list of the `archetype:` block. */
+function archetypeList(field: string): string[] {
+  const block = new RegExp(`^  ${field}:\\n((?:    - "[^"]+"\\n)+)`, 'm').exec(manifest)?.[1] ?? '';
+  return [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1] ?? '');
+}
+
+test('the archetype block states the facilitator descriptor the kernel enforces', () => {
+  assert.match(manifest, /^archetype:\n  id: "facilitator"$/m);
+  const omits = ['plugin_grant', 'tool_grant', 'memory', 'default_agent', 'channel_binding', 'persona_skill', 'fast_path', 'agent_to_agent', 'consultation', 'sub_agent', 'assistance'];
+  assert.deepEqual(archetypeList('omits'), omits);
+  assert.deepEqual(archetypeList('adds'), ['conversation_messages', 'agent_turn', 'own_identity_send', 'session_capabilities']);
+  assert.deepEqual(archetypeList('requires'), ['own_channel_identity']);
+  const reasons = /^  omission_reasons:\n((?:    [a-z_]+: "[^"]+"\n)+)/m.exec(manifest)?.[1] ?? '';
+  assert.deepEqual([...reasons.matchAll(/^    ([a-z_]+):/gm)].map((m) => m[1]), omits, 'one reason per omission, and none for anything else');
+  for (const field of ['label', 'label_plural', 'description']) {
+    assert.match(manifest, new RegExp(`^  ${field}:\\n    en: "[^"]+"\\n    de: "[^"]+"$`, 'm'), `${field} in en and de`);
+  }
+  assert.match(manifest, /^  noun: "a facilitator"$/m);
+  assert.match(manifest, /^  role_contract: \|\n    ## Neutrality contract \(fixed, takes precedence\)$/m);
+});
+
+test('the German manifest texts use the product terms', () => {
+  const german = manifest.split('\n').filter((line) => /^\s+de: /.test(line)).join('\n');
+  for (const retired of ['Facilitation', 'Channel-Identität']) assert.ok(!german.includes(retired), `${retired} in a German text`);
+  assert.match(manifest, /Kanalidentität/);
 });
 
 test('every kernel service the engine resolves is declared: the pool as required, the others as optional', () => {

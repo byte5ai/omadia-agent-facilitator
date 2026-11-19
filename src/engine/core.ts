@@ -298,7 +298,8 @@ export class EngineCore {
     // "say nothing".
     // People are named by their name: an id the facilitation knows goes out
     // as that name.
-    const verdict = guardOutgoing(await namePrincipals(tx, f, m.text));
+    // A card without a text is a whole message: the card says it all.
+    const verdict = m.card && m.text === '' ? ({ ok: true, text: '' } as const) : guardOutgoing(await namePrincipals(tx, f, m.text));
     if (!verdict.ok) {
       await store.appendEvent(tx, { facilitationId, kind: 'text_refused', actor: 'engine', occurredAt: now, payload: { purpose: m.purpose, reason: verdict.reason } });
       this.log(`facilitation ${facilitationId}: outgoing ${m.purpose} refused by the text guard (${verdict.reason})`);

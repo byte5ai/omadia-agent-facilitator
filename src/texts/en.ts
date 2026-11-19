@@ -40,7 +40,9 @@ export const en = {
 
   /** What a question card says (the channel words its own buttons). */
   card: {
-    chatToo: 'Answer on the card or in the chat; your newest answer counts.',
+    chatToo: 'An answer in the chat counts too; your newest answer counts.',
+    stepOf: (position: number, total: number): string => `Step ${String(position)} of ${String(total)}.`,
+    voteOnCard: 'You vote on the card; an answer in the chat counts too.',
     rank: 'Rank the options, best first.',
     rankLabel: (rank: number, points: number | undefined): string => {
       const ordinal = `${String(rank)}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'} place`;
@@ -52,6 +54,10 @@ export const en = {
     superseded: 'Replaced by a new version of this vote. Please answer on the new card.',
     supersededQuestionnaire: 'Replaced by a new questionnaire. Please answer on the new card.',
     closed: (when: string): string => `Closed on ${when}.`,
+    numberExpected: (min: number | undefined, max: number | undefined): string =>
+      `A number only, for example 15${min !== undefined && max !== undefined ? `, between ${String(min)} and ${String(max)}` : min !== undefined ? `, at least ${String(min)}` : max !== undefined ? `, at most ${String(max)}` : ''}.`,
+    dateExpected: 'A date, for example 2026-11-24 or 24.11.2026.',
+    notAsExpected: (label: string, expected: string): string => `I could not use your answer to "${label}". I need: ${expected.charAt(0).toLowerCase()}${expected.slice(1)} Please answer again on the card; nothing of that submission was recorded.`,
   },
 
   /** A participant the channel gave no name for (until a message carries one). */
@@ -180,6 +186,7 @@ export const en = {
 
   proposalKinds: {
     step_close: (title: string): string => `close "${title}" and move on`,
+    vote_close: (title: string, cast: number, of: number): string => `close the vote on "${title}" now and count the ${String(cast)} of ${String(of)} votes cast`,
     clusters: (lines: readonly string[]): string => `group what was collected like this:\n${lines.map((l) => `- ${l}`).join('\n')}`,
     summary: (text: string): string => `take this summary into the record:\n${text}`,
     decision: (statement: string): string => `record this decision: ${statement}`,
@@ -194,6 +201,12 @@ export const en = {
   proposalObjection: (name: string, reason: string): string =>
     `${name} objects: ${reason}. The proposal does not hold while this stands. ${name}, write "agreed" if it is resolved for you.`,
   proposalBusy: (): string => 'One proposal at a time: the open one is decided first.',
+  voteCloses: (rule: 'all_contributed' | 'at_deadline', when: string | undefined): string =>
+    rule === 'at_deadline'
+      ? `This vote closes at the deadline${when ? ` (${when})` : ''}.`
+      : `This vote closes when everybody has voted${when ? `, at the latest at the deadline (${when})` : ''}.`,
+  voteCloseHow: (): string => 'To close it earlier, write "next": I then ask the group, and it closes when nobody objects.',
+  voteCloseNeedsVotes: (): string => 'Nobody has voted yet, so there is nothing to count. Once votes are in, write "next" to close it earlier; I then ask the group.',
 
   silentInviteDirect: (name: string, title: string): string =>
     `Hello ${name}, we are about to close "${title}". If you would like to add something, the group would value hearing it. Please write it in the group; I cannot take contributions here.`,
@@ -403,6 +416,9 @@ export const en = {
   guardFallback: (): string => 'I could not put my answer into words just now. Ask "status" for where we stand.',
   abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
   abortOperator: (reason: string): string => `an operator ended it (${reason})`,
+  abortAgentDisabled: (): string => 'this facilitator was disabled by an operator and can no longer moderate',
+  abortAgentDeleted: (): string => 'this facilitator is being deleted by an operator',
+  abortArchetypeRemoved: (): string => 'the facilitator archetype is being removed from this instance, so no facilitator can moderate here any more',
   notVisible: (): string => 'You are not a participant of this facilitation, so its protocol is not available to you.',
 
   // ── sessions and media ───────────────────────────────────────────────────

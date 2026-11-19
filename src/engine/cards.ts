@@ -22,7 +22,7 @@
 
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
-import type { CardAnswerValue, CardOption, CardQuestion, CardQuestionKind, CardSendMembers, CardSupport, QuestionCard, TypedCardAnswer } from '../cards/types.js';
+import type { CardAnswerValue, CardOption, CardQuestion, CardQuestionKind, ExpectedAnswer, CardSendMembers, CardSupport, QuestionCard, TypedCardAnswer } from '../cards/types.js';
 import { CARD_ID_PATTERN } from '../cards/types.js';
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
@@ -101,8 +101,14 @@ function voteQuestions(f: Facilitation, step: Step, participants: readonly Parti
       const people = participants.filter((p) => p.status === 'active');
       const listable = people.length > 0 && people.length <= MAX_CANDIDATES && people.every((p) => CARD_ID_PATTERN.test(candidateId(p)));
       const candidates = listable ? people.map((p) => ({ id: candidateId(p), label: p.displayName })) : ('conversation_members' as const);
+      // A channel shows "I'll take it" only on a card whose single question
+      // is the assignment. One candidate is enough next to that button and
+      // too few without it, so one candidate for several items stays in the
+      // chat rather than on a card the channel has to refuse.
+      const alone = options.length === 1;
+      if (candidates !== 'conversation_members' && candidates.length < (alone ? 1 : 2)) return undefined;
       // One question per item; nobody has to answer all of them.
-      return options.map((o) => ({ id: o.id, kind: 'assignment' as const, label: o.label, candidates, allowVolunteer: true, required: false }));
+      return options.map((o) => ({ id: o.id, kind: 'assignment' as const, label: o.label, candidates, allowVolunteer: alone, required: false }));
     }
   }
 }
@@ -130,6 +136,12 @@ interface NewCard {
   phases: Facilitation['phase'][];
 }
 
+function withoutExpectation(question: CardQuestion): CardQuestion {
+  if (question.kind !== 'text' || question.expects === undefined) return question;
+  const { expects: _expects, ...sent } = question;
+  return sent;
+}
+
 async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
   const card: QuestionCard = {
     cardId: input.cardId,
@@ -143,24 +155,31 @@ async function sendCard(w: Work, input: NewCard): Promise<QuestionCard> {
     locale: w.f.language,
   };
   await store.addCard(w.tx, { cardId: card.cardId, facilitationId: w.f.id, stepId: input.stepId, round: input.round, purpose: input.purpose, proposalId: input.proposalId, proposalVersion: input.version, card, createdAt: w.now });
+  // What the channel gets: the card without the engine's own notes.
+  const sent: QuestionCard = { ...card, questions: card.questions.map((q) => withoutExpectation(q)) };
   w.post({
     purpose: 'card',
     key: card.cardId,
     to: 'group',
     deliveryClass: 'essential',
     requiredPhases: input.phases,
-    // Text and card are two messages on some channels: the text stays short.
-    text: input.intro ? `${input.title}\n${input.intro}` : input.title,
-    card,
+    // A text next to a card is a second message on a channel: the card says
+    // everything itself (title, intro, questions, until when), so no text.
+    text: '',
+    card: sent,
     cardFallbackText: input.fallbackText,
     link: { kind: 'card', id: card.cardId },
   });
-  await w.event('card_posted', 'engine', { cardId: card.cardId, stepId: input.stepId, round: input.round, version: input.version, purpose: input.purpose, kinds: input.questions.map((q) => q.kind) });
-  return card;
+  // Queued, not posted: whether the channel took the card is recorded when it
+  // answered (`card_posted` or `card_refused`, written at delivery).
+  await w.event('card_queued', 'engine', { cardId: card.cardId, stepId: input.stepId, round: input.round, version: input.version, purpose: input.purpose, kinds: input.questions.map((q) => q.kind) });
+  return sent;
 }
 
 async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questions: CardQuestion[], fallbackText: string): Promise<void> {
   const version = await nextVersion(w, step.id);
+  const t = texts(w.f.language);
+  const total = (await store.listSteps(w.tx, w.f.id)).length;
   await sendCard(w, {
     cardId: cardIdOf(step, version),
     stepId: step.id,
@@ -169,7 +188,8 @@ async function postCard(w: Work, step: Step, purpose: CardRow['purpose'], questi
     proposalId: step.id,
     version,
     title: step.title,
-    intro: texts(w.f.language).card.chatToo,
+    // The card stands for the step's announcement: where it is, and that the chat counts too.
+    intro: [...(total > 1 ? [t.card.stepOf(step.position, total)] : []), t.card.chatToo].join(' '),
     questions,
     closesAt: step.roundDeadline ?? w.f.deadline,
     fallbackText,
@@ -213,8 +233,23 @@ export async function postStepCard(w: Work, step: Step): Promise<boolean> {
   if (!support || !step.method) return false;
   const questions = voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support);
   if (!questions) return false;
-  await postCard(w, step, 'vote', questions, [step.title, ...rulesOf(w.f, step)].join('\n'));
+  // What the group reads when the channel refuses the card after all: the
+  // whole announcement the card stands for.
+  const total = (await store.listSteps(w.tx, w.f.id)).length;
+  const rules = rulesOf(w.f, step);
+  const fallback = total > 1 ? t.stepOpened(step.position, total, step.title, rules.join(' '), undefined) : [step.title, ...rules].join('\n');
+  await postCard(w, step, 'vote', questions, fallback);
   return true;
+}
+
+/**
+ * Will this deciding step be put to the group as a card? Then the card is the
+ * announcement, and the chat does not explain the vote a second time.
+ */
+export async function voteCardFits(w: Pick<Work, 'tx' | 'f' | 'engine'>, step: Step): Promise<boolean> {
+  const support = cardSupport(w.engine, w.f.channelType);
+  if (!support || !step.method) return false;
+  return voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support) !== undefined;
 }
 
 /** A collecting step: ideas can be sent through a text field as well. */
@@ -295,6 +330,64 @@ function fits(question: CardQuestion, answer: CardAnswerValue): boolean {
   }
 }
 
+/** Room for a number with its unit, or a date. */
+const EXPECTED_MAX_LENGTH = 40;
+const ONE_NUMBER = /-?\d+(?:[.,]\d+)?/g;
+
+/**
+ * What somebody typed where a number or a date was asked for, in the one form
+ * the engine keeps: "15min" is 15, "24.11.2026" is 2026-11-24. Undefined when
+ * it cannot be read as exactly one such value or is out of range.
+ */
+export function readExpected(expects: ExpectedAnswer, typed: string): string | undefined {
+  const text = typed.trim();
+  if (expects.kind === 'number') {
+    // A range, a date or a version is not one number.
+    const found = text.replace(/(\d)\s*-\s*(?=\d)/g, '$1 ').match(ONE_NUMBER) ?? [];
+    if (found.length !== 1 || /\d[.,]\d+[.,]\d/.test(text)) return undefined;
+    const value = Number((found[0] ?? '').replace(',', '.'));
+    if (!Number.isFinite(value) || value < (expects.min ?? -Infinity) || value > (expects.max ?? Infinity)) return undefined;
+    return String(value);
+  }
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const german = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(text);
+  const [year, month, day] = iso ? [iso[1], iso[2], iso[3]] : german ? [german[3], german[2], german[1]] : [];
+  if (year === undefined || month === undefined || day === undefined) return undefined;
+  const value = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  const date = new Date(`${value}T00:00:00Z`);
+  // 31.02. parses as a date in March: only what reads back the same is real.
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : undefined;
+}
+
+/** What a text field that stands in for a number or date field says it wants. */
+function expectationHelp(language: Facilitation['language'], expects: ExpectedAnswer): string {
+  const t = texts(language);
+  return expects.kind === 'number' ? t.card.numberExpected(expects.min, expects.max) : t.card.dateExpected;
+}
+
+/**
+ * The typed answers to questions that expect a number or a date, brought into
+ * the form the engine keeps. `refused` names the first question whose answer
+ * cannot be read.
+ */
+function normaliseExpected(card: QuestionCard, answers: readonly CardAnswerValue[] | undefined): { answers: readonly CardAnswerValue[] | undefined; refused?: Extract<CardQuestion, { kind: 'text' }> & { expects: ExpectedAnswer } } {
+  if (!Array.isArray(answers)) return { answers };
+  const normalised: CardAnswerValue[] = [];
+  for (const answer of answers as readonly CardAnswerValue[]) {
+    const question = answer !== null && typeof answer === 'object' ? card.questions.find((q) => q.id === answer.questionId) : undefined;
+    if (!question || question.kind !== 'text' || question.expects === undefined || answer.kind !== 'text' || !isText(answer.text)) {
+      normalised.push(answer);
+      continue;
+    }
+    // An optional field left empty is no answer, not a wrong one.
+    if (answer.text.trim() === '' && question.required === false) continue;
+    const value = readExpected(question.expects, answer.text);
+    if (value === undefined) return { answers, refused: { ...question, expects: question.expects } };
+    normalised.push({ ...answer, text: value });
+  }
+  return { answers: normalised };
+}
+
 /** The answers of a submission, checked against the card that was sent.
  *  Undefined when anything does not fit: nothing of a forged or broken
  *  submission is used. */
@@ -365,7 +458,16 @@ export const cardAnswers: InboundHandler = async ({ w, record, author }) => {
   if (card.state !== 'open' || (w.f.phase !== 'active' && w.f.phase !== 'configuring')) return { outcome: 'card_answer_closed' };
   // An answer to another proposal or version never counts.
   if (submitted.proposalId !== card.proposalId || submitted.proposalVersion !== card.proposalVersion) return { outcome: 'card_answer_stale' };
-  const answers = checkedAnswers(card.card, submitted.answers);
+  const typed = normaliseExpected(card.card, submitted.answers);
+  if (typed.refused) {
+    // The channel took the text; the person is told what is needed, in private.
+    const t = texts(w.f.language);
+    const hint = t.card.notAsExpected(typed.refused.label, expectationHelp(w.f.language, typed.refused.expects));
+    await w.event('card_answer_refused', principalKey(record.author), { cardId: card.cardId, questionId: typed.refused.id, reason: `not a ${typed.refused.expects.kind}` });
+    w.post({ purpose: 'card_answer_hint', key: record.eventId, to: { principalId: author.principalId }, deliveryClass: 'droppable', versionBound: false, text: hint, fallback: { purpose: 'card_answer_hint', text: `${author.displayName}: ${hint}` } });
+    return { outcome: 'card_answer_invalid' };
+  }
+  const answers = checkedAnswers(card.card, typed.answers);
   if (!answers) {
     await w.event('card_answer_refused', principalKey(record.author), { cardId: card.cardId, reason: 'does not fit the card that was sent' });
     return { outcome: 'card_answer_invalid' };
@@ -432,7 +534,10 @@ export async function postQuestionnaire(w: Work, input: { title: string; intro?:
   if (!support) throw new Refusal('no_cards', 'This channel has no question cards. Ask the question in the chat instead. Nothing was posted.');
   const limit = Math.min(QUESTIONNAIRE_MAX_QUESTIONS, support.maxQuestions);
   if (input.questions.length === 0 || input.questions.length > limit) throw new Refusal('bad_input', `A questionnaire has 1 to ${String(limit)} questions.`);
-  const unsupported = [...new Set(input.questions.map((q) => q.kind).filter((k) => !QUESTIONNAIRE_KINDS.includes(k) || !support.kinds.includes(k)))];
+  // A number or a date on a channel without such a field is asked as a text
+  // field that says what is expected; the engine checks what comes back.
+  const asText = (kind: CardQuestionKind): boolean => (kind === 'number' || kind === 'date') && !support.kinds.includes(kind) && support.kinds.includes('text');
+  const unsupported = [...new Set(input.questions.map((q) => q.kind).filter((k) => !QUESTIONNAIRE_KINDS.includes(k) || (!support.kinds.includes(k) && !asText(k))))];
   if (unsupported.length > 0) {
     throw new Refusal('kind_not_supported', `This channel cannot show ${unsupported.join(', ')} questions on a card. Ask those in the chat, or word them as single_choice or text. Nothing was posted.`);
   }
@@ -443,6 +548,10 @@ export async function postQuestionnaire(w: Work, input: { title: string; intro?:
       const labels = (q.options ?? []).map((o) => o.trim()).filter((o) => o !== '');
       if (labels.length < 2 || labels.length > MAX_OPTIONS) throw new Refusal('bad_input', `Question "${q.label}" needs 2 to ${String(MAX_OPTIONS)} options.`);
       return { ...base, kind: q.kind, options: toOptions(labels).map((o) => ({ id: o.key, label: o.label })) };
+    }
+    if (asText(q.kind)) {
+      const expects: ExpectedAnswer = q.kind === 'number' ? { kind: 'number', ...(q.min !== undefined ? { min: q.min } : {}), ...(q.max !== undefined ? { max: q.max } : {}) } : { kind: 'date' };
+      return { ...base, kind: 'text', help: expectationHelp(w.f.language, expects), maxLength: EXPECTED_MAX_LENGTH, mode: 'replace', expects };
     }
     if (q.kind === 'number') return { ...base, kind: 'number', ...(q.min !== undefined ? { min: q.min } : {}), ...(q.max !== undefined ? { max: q.max } : {}) };
     if (q.kind === 'date') return { ...base, kind: 'date' };

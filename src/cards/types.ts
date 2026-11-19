@@ -24,6 +24,13 @@ interface CardQuestionBase {
   required?: boolean;
 }
 
+/**
+ * The engine's own note on a text question that stands in for a number or a
+ * date field the channel does not have: what the typed answer has to be. Kept
+ * with the stored card and never sent to the channel.
+ */
+export type ExpectedAnswer = { kind: 'number'; min?: number; max?: number } | { kind: 'date' };
+
 export type CardQuestion = CardQuestionBase &
   (
     | { kind: 'single_choice'; options: readonly CardOption[] }
@@ -31,7 +38,7 @@ export type CardQuestion = CardQuestionBase &
     | { kind: 'ranking'; options: readonly CardOption[]; ranks?: number; rankLabels?: readonly string[] }
     | { kind: 'consent'; agreeLabel?: string; objectLabel?: string; reasonRequiredOnObject?: boolean }
     | { kind: 'assignment'; candidates: 'conversation_members' | readonly CardOption[]; allowVolunteer?: boolean }
-    | { kind: 'text'; multiline?: boolean; maxLength?: number; mode?: 'replace' | 'append' }
+    | { kind: 'text'; multiline?: boolean; maxLength?: number; mode?: 'replace' | 'append'; expects?: ExpectedAnswer }
     | { kind: 'number'; min?: number; max?: number }
     | { kind: 'date' }
   );
