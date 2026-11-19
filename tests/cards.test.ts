@@ -9,6 +9,7 @@ import { after, before, beforeEach, test } from 'node:test';
 import * as store from '../src/db/store.js';
 import type { CardAnswerValue, CardSupport } from '../src/cards/types.js';
 import { CARD_ID_PATTERN } from '../src/cards/types.js';
+import { readExpected } from '../src/engine/cards.js';
 import { ANNA, BERT, CARA, createHarness } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
@@ -341,12 +342,6 @@ test('a questionnaire: up to five structured questions on one card, answers read
 
   // Asking again replaces the card; five questions are the limit; no cards, no questionnaire.
   assert.match(await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: Array.from({ length: 6 }, (_v, i) => ({ id: `q${String(i)}`, label: 'q', kind: 'text' })) }), /^Refused \(bad_input\)/);
-  // Teams declares no number and no date: those are asked in the chat.
-  h.kernel.cardSupport = { kinds: ['single_choice', 'multiple_choice', 'ranking', 'consent', 'assignment', 'text'], maxQuestions: 5, update: true };
-  const refused = await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: [{ label: 'How many?', kind: 'number' }, { label: 'When?', kind: 'date' }] });
-  assert.match(refused, /^Refused \(kind_not_supported\)/);
-  assert.match(refused, /number, date/);
-  assert.match(refused, /in the chat/);
   h.kernel.cardSupport = undefined;
   assert.match(await tool(conv, 'facilitation_questionnaire', { title: 'x', questions: [{ id: 'a', label: 'q', kind: 'text' }] }), /^Refused \(no_cards\)/);
 });
@@ -430,4 +425,66 @@ test('D27: a card the channel refuses is recorded as refused, never as posted', 
   const refused = events.rows.find((r) => r.kind === 'card_refused');
   assert.equal(refused?.payload['reason'], 'the card is too large');
   assert.equal(refused?.payload['postedAsText'], true);
+});
+
+// ── 1.2.0: live finding D29 ─────────────────────────────────────────────────
+
+test('D29: a number or date question on a channel without those fields is a text field that says what is expected, and the answer is checked', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cd-number-text', THREE);
+  // Teams declares no number and no date.
+  h.kernel.cardSupport = { kinds: ['single_choice', 'multiple_choice', 'ranking', 'consent', 'assignment', 'text'], maxQuestions: 5, update: true };
+  await tool(conv, 'facilitation_start', { goal: 'Plan the test run' });
+  const asked = await tool(conv, 'facilitation_questionnaire', {
+    title: 'Test run',
+    questions: [
+      { id: 'minutes', label: 'How many minutes should the test run take?', kind: 'number', min: 1, max: 120 },
+      { id: 'day', label: 'Which day?', kind: 'date', required: false },
+    ],
+  });
+  assert.match(asked, /^Posted as a card/);
+  const posted = card(conv).card;
+  assert.deepEqual(posted.questions.map((q) => [q.id, q.kind]), [['minutes', 'text'], ['day', 'text']]);
+  assert.match(posted.questions[0]?.help ?? '', /A number only, for example 15.*between 1 and 120/);
+  assert.match(posted.questions[1]?.help ?? '', /2026-11-24 or 24\.11\.2026/);
+  assert.ok(!JSON.stringify(posted).includes('expects'), "the engine's own note is not sent to the channel");
+
+  // "15min" is read as 15; a date in the German form becomes the ISO date.
+  await submit(conv, 'anna', [{ questionId: 'minutes', kind: 'text', text: '15min' }, { questionId: 'day', kind: 'text', text: '24.11.2026' }]);
+  await submit(conv, 'bert', [{ questionId: 'minutes', kind: 'text', text: ' 7,5 Minuten ' }]);
+  // No number, two numbers, out of range, no real date: refused with a hint to the person.
+  const before = (await outcomes(conv)).length;
+  const dms = h.kernel.dms.length;
+  await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: 'a quarter of an hour' }]);
+  await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '10-15' }]);
+  await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '500' }]);
+  await submit(conv, 'cara', [{ questionId: 'minutes', kind: 'text', text: '15' }, { questionId: 'day', kind: 'text', text: '31.02.2026' }]);
+  assert.deepEqual((await outcomes(conv)).slice(before), ['card_answer_invalid', 'card_answer_invalid', 'card_answer_invalid', 'card_answer_invalid']);
+  const hints = h.kernel.dms.slice(dms).map((d) => d.text);
+  assert.equal(hints.length, 4);
+  assert.match(hints[0] ?? '', /"How many minutes should the test run take\?".*a number only, for example 15/i);
+  assert.match(hints[2] ?? '', /between 1 and 120/);
+  assert.match(hints[3] ?? '', /"Which day\?".*2026-11-24/);
+
+  const answers = await tool(conv, 'facilitation_questionnaire_answers');
+  assert.match(answers, /2 of 3 participants answered/);
+  assert.match(answers, /How many minutes should the test run take\?: Anna: 15; Bert: 7\.5/);
+  assert.match(answers, /Which day\?: Anna: 2026-11-24/);
+  assert.doesNotMatch(answers, /Cara|15min|Minuten/);
+});
+
+test('D29: reading a number or a date out of what somebody typed', () => {
+  const number = (text: string, min?: number, max?: number) => readExpected({ kind: 'number', ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) }, text);
+  assert.equal(number('15'), '15');
+  assert.equal(number('15min'), '15');
+  assert.equal(number('ca. 15 Minuten'), '15');
+  assert.equal(number('1,5'), '1.5');
+  assert.equal(number('-3'), '-3');
+  for (const bad of ['', 'viele', '10-15', '10 bis 15', '1.2.3']) assert.equal(number(bad), undefined, bad);
+  assert.equal(number('0', 1), undefined);
+  assert.equal(number('121', 1, 120), undefined);
+  const date = (text: string) => readExpected({ kind: 'date' }, text);
+  assert.equal(date('2026-11-24'), '2026-11-24');
+  assert.equal(date('24.11.2026'), '2026-11-24');
+  assert.equal(date('4.1.2027'), '2027-01-04');
+  for (const bad of ['31.02.2026', '2026-13-01', 'next Tuesday', '24.11.', '24.11.26 or 25.11.26']) assert.equal(date(bad), undefined, bad);
 });

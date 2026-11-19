@@ -52,6 +52,10 @@ export const en = {
     superseded: 'Replaced by a new version of this vote. Please answer on the new card.',
     supersededQuestionnaire: 'Replaced by a new questionnaire. Please answer on the new card.',
     closed: (when: string): string => `Closed on ${when}.`,
+    numberExpected: (min: number | undefined, max: number | undefined): string =>
+      `A number only, for example 15${min !== undefined && max !== undefined ? `, between ${String(min)} and ${String(max)}` : min !== undefined ? `, at least ${String(min)}` : max !== undefined ? `, at most ${String(max)}` : ''}.`,
+    dateExpected: 'A date, for example 2026-11-24 or 24.11.2026.',
+    notAsExpected: (label: string, expected: string): string => `I could not use your answer to "${label}". I need: ${expected.charAt(0).toLowerCase()}${expected.slice(1)} Please answer again on the card; nothing of that submission was recorded.`,
   },
 
   /** A participant the channel gave no name for (until a message carries one). */

@@ -28,7 +28,7 @@ export function cardTools(engine: FacilitationEngine): ToolDefinition[] {
               properties: {
                 id: { type: 'string', description: 'Letters, digits, _ and - only. Optional.' },
                 label: { type: 'string', description: 'The question.' },
-                kind: { type: 'string', enum: [...QUESTIONNAIRE_KINDS], description: 'number and date are not available on every channel; text always is where cards are.' },
+                kind: { type: 'string', enum: [...QUESTIONNAIRE_KINDS], description: 'Say number when you need a number and date when you need a day, never text for those. Where the channel has no such field the question becomes a text field that says what is expected, and what people type is checked and read ("15min" is 15).' },
                 options: { type: 'array', items: { type: 'string' }, description: 'For single_choice and multiple_choice: at least two.' },
                 min: { type: 'number' },
                 max: { type: 'number' },

@@ -33,6 +33,10 @@ export const de: Texts = {
     superseded: 'Ersetzt durch eine neue Version dieser Abstimmung. Bitte auf der neuen Karte antworten.',
     supersededQuestionnaire: 'Ersetzt durch einen neuen Fragebogen. Bitte auf der neuen Karte antworten.',
     closed: (when) => `Geschlossen am ${when}.`,
+    numberExpected: (min, max) =>
+      `Nur eine Zahl, z. B. 15${min !== undefined && max !== undefined ? `, zwischen ${String(min)} und ${String(max)}` : min !== undefined ? `, mindestens ${String(min)}` : max !== undefined ? `, höchstens ${String(max)}` : ''}.`,
+    dateExpected: 'Ein Datum, z. B. 24.11.2026 oder 2026-11-24.',
+    notAsExpected: (label, expected) => `Deine Antwort auf „${label}“ konnte ich nicht verwenden. Ich brauche: ${expected.charAt(0).toLowerCase()}${expected.slice(1)} Bitte antworte noch einmal auf der Karte; von dieser Abgabe wurde nichts erfasst.`,
   },
 
   unnamedPerson: 'Teilnehmer:in ohne Namen',
