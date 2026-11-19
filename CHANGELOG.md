@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.4.1
+
+One mention, one reply.
+
+### Fixed
+
+- **A mention during the follow-up got two replies.** There the kernel
+  delivers a mention to the engine as an event and also lets the
+  facilitator's ordinary turn answer it; the engine answered "done 2" and the
+  turn answered on top. The kernel gives the engine no way to claim the
+  message, so the engine now leaves a mention in follow-up to the turn: it
+  does nothing for it and posts nothing (`left_to_turn` in the inbound
+  ledger). A reply to one of the facilitation's messages and a card button
+  start no turn and stay the engine's, as does a mention where another
+  facilitation of the facilitator is live in the conversation (no turn runs
+  there).
+- Next to a live facilitation, a "done" with a mention that is about an item
+  of the earlier facilitation's follow-up no longer starts a model turn of
+  the live one as well.
+
+### Added
+
+- **Tool `facilitation_action_done`** for the ordinary turn: closes an action
+  item for the person who wrote the message (taken from the message, never
+  from an argument), says so in the group, and asks which one when several
+  are open. Because it posts, the kernel drops the turn's own text.
+- `facilitation_status` also answers while action items are followed up.
+
 ## 1.4.0
 
 Execution scopes (specification 2043 §0; kernel #2090, #2089, #2091, #2078).
