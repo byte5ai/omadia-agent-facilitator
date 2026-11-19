@@ -320,7 +320,12 @@ const ledgerRow = (facilitationId: string, record: ConversationMessageRecord, no
  * be processed, so nobody waits for an echo that will not come.
  */
 export async function processRecord(engine: EngineCore, agentSlug: string, record: ConversationMessageRecord): Promise<{ facilitationId: string; result: InboundResult } | undefined> {
-  const f = await store.findRoutableByConversation(engine.db(), record.channelType, record.conversationId);
+  // The kernel states which facilitation a record was stored for (a reply to
+  // one of its messages, an answer to one of its cards, or simply the one
+  // that reads the conversation). A record without it is routed by its
+  // conversation.
+  const processId = (record as { processId?: string }).processId;
+  const f = processId !== undefined ? await store.getFacilitation(engine.db(), processId) : await store.findRoutableByConversation(engine.db(), record.channelType, record.conversationId);
   if (!f || f.facilitatorAgent !== agentSlug) return undefined;
   try {
     const result = await engine.work(f.id, (w) => handleInbound(w, record));

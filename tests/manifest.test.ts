@@ -28,7 +28,7 @@ test('version is the same in package.json, manifest.yaml and the engine', () => 
 test('the manifest is of kind archetype and keeps the engine capability for kernels that find it by that', () => {
   assert.match(manifest, new RegExp(`provides:\\n\\s+- "${FACILITATION_ENGINE_CAPABILITY}"`));
   assert.match(manifest, /^\s{2}kind: "archetype"$/m);
-  assert.match(manifest, /^\s{2}core: ">=1\.62\.0 <2\.0"$/m);
+  assert.match(manifest, /^\s{2}core: ">=1\.69\.0 <2\.0"$/m);
 });
 
 /** The entries of one list of the `archetype:` block. */
@@ -60,7 +60,10 @@ test('the German manifest texts use the product terms', () => {
 
 test('every kernel service the engine resolves is declared as optional, and the shared pool is not asked for', () => {
   const block = /optional_requires:\n((?:\s+- "[^"]+"\n)+)/.exec(manifest)?.[1] ?? '';
-  const declared = [...block.matchAll(/- "([^"@]+)@/g)].map((m) => m[1]);
+  // A lookup of the first major names the service alone; a later major is
+  // named with it (`conversationSend@2`), and the kernel answers only for a
+  // major the manifest declares.
+  const declared = [...block.matchAll(/- "([^"@]+)@\^?(\d+)"/g)].map((m) => (m[2] === '1' ? m[1] : `${String(m[1])}@${String(m[2])}`));
   assert.deepEqual([...declared].sort(), [...KERNEL_SERVICE_NAMES].sort());
   // No `graphPool` anywhere among the requirements: this is what tells the
   // kernel that the plugin works in its own schema.

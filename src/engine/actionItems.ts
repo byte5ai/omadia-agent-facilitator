@@ -107,6 +107,17 @@ const DONE = /^(?:(?:done|erledigt|fertig)\s*#?(\d{1,3})|#?(\d{1,3})\s*(?:done|e
 /** "done" without saying which one. */
 const DONE_BARE = /^(?:done|erledigt|fertig)$/;
 
+/** An owner's item is done: on record, said in the group, and the follow-up
+ *  ends with the last open one. */
+export async function markActionDone(w: Work, item: ActionItem, owner: Pick<Participant, 'principalId' | 'displayName'>, messageId?: string): Promise<void> {
+  await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { status: 'done', doneAt: w.now });
+  w.bump();
+  await w.event('action_item_done', owner.principalId, { number: item.number, ...(messageId !== undefined ? { messageId } : { private: true }) });
+  w.post({ purpose: 'action_done', key: item.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).actionDone(owner.displayName, item.number, item.description) });
+  const open = (await store.listActionItems(w.tx, w.f.id)).some((a) => a.status === 'confirmed');
+  if (!open && w.f.followupState === 'active') await endFollowup(w);
+}
+
 /** "done 2" from the owner, during the facilitation or its follow-up. */
 const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || record.kind !== 'created') return undefined;
@@ -136,12 +147,7 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
     w.post({ purpose: 'action_not_yours', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionNotYours(author.displayName, number) });
     return { outcome: 'action_not_owner' };
   }
-  await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { status: 'done', doneAt: w.now });
-  w.bump();
-  await w.event('action_item_done', author.principalId, { number, messageId: record.messageId });
-  w.post({ purpose: 'action_done', key: item.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionDone(author.displayName, number, item.description) });
-  const open = (await store.listActionItems(w.tx, w.f.id)).some((a) => a.status === 'confirmed');
-  if (!open && w.f.followupState === 'active') await endFollowup(w);
+  await markActionDone(w, item, author, record.messageId);
   return { outcome: 'action_done' };
 };
 
@@ -180,7 +186,7 @@ export function installActionItems(): void {
     const t = texts(w.f.language);
     await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { remindersSent: item.remindersSent + 1 });
     const inGroup = { purpose: 'action_reminder', text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] };
-    if (w.engine.deps.kernel.targetedSend() === undefined) {
+    if (w.engine.deps.kernel.conversationSend() === undefined) {
       w.post({ ...inGroup, key: job.id, to: 'group', deliveryClass: 'droppable', versionBound: false });
     } else {
       w.post({

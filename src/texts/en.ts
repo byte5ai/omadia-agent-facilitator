@@ -221,11 +221,11 @@ export const en = {
   actionDeclined: (owner: string, number: number, description: string): string =>
     `${owner} declined action item #${String(number)} (${description}). It has no owner yet.`,
   actionReminder: (owner: string, number: number, description: string, due: string): string =>
-    `Hello ${owner}, action item #${String(number)} is due ${due}: ${description}. When it is done, write "done ${String(number)}" in the group.`,
+    `Hello ${owner}, action item #${String(number)} is due ${due}: ${description}. When it is done, answer me here with "done ${String(number)}", or write it in the group and mention me.`,
   actionReminderGroup: (owner: string, number: number, description: string, due: string): string =>
-    `${owner}, action item #${String(number)} is due ${due}: ${description}. Write "done ${String(number)}" when it is done.`,
+    `${owner}, action item #${String(number)} is due ${due}: ${description}. Reply to this message with "done ${String(number)}" when it is done.`,
   actionDone: (owner: string, number: number, description: string): string => `Done, thank you ${owner}: #${String(number)} ${description}`,
-  actionDoneWhich: (name: string, numbers: readonly number[]): string => `${name}, which one is done? Write ${numbers.map((n) => `"done ${String(n)}"`).join(' or ')}.`,
+  actionDoneWhich: (name: string, numbers: readonly number[]): string => `${name}, which one is done? Reply with ${numbers.map((n) => `"done ${String(n)}"`).join(' or ')}.`,
   actionNotYours: (name: string, number: number): string => `${name}, action item #${String(number)} is not yours to close.`,
   actionStatus: (lines: readonly string[]): string => `Status of the action items:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number: number, description: string, owner: string, due: string, status: string): string =>
@@ -414,6 +414,7 @@ export const en = {
     ballots_exist: 'People have already voted in this step. Changing it now needs a proposal that you all consent to.',
   } as Record<string, string>,
   guardFallback: (): string => 'I could not put my answer into words just now. Ask "status" for where we stand.',
+  abortConfiguringExpired: (): string => 'it was not opened within the time a facilitation may take to be set up',
   abortLifetime: (days: number): string => `the maximum duration of ${String(days)} days was reached`,
   abortOperator: (reason: string): string => `an operator ended it (${reason})`,
   abortAgentDisabled: (): string => 'this facilitator was disabled by an operator and can no longer moderate',
@@ -505,6 +506,8 @@ export const en = {
     recipient_not_allowed: 'somebody on the list was not confirmed by the group',
     provider_error: 'the calendar service reported an error',
     grant_revoked: 'the follow-up of this facilitation has ended',
+    grant_refused: 'the instance did not grant this (the facilitation was stopped, or its time for it has passed)',
+    no_grant_service: 'this instance cannot grant a facilitation mail or calendar access',
     unknown_outcome: 'the service did not answer',
     no_addresses: 'this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat',
   },
@@ -516,6 +519,21 @@ export const en = {
     concluding: 'concluding',
     closed: 'closed',
     aborted: 'ended without a result',
+    following_up: 'closed, action items are being followed up',
+    ended: 'ended',
+  },
+  /** What the group or a person reads when the instance refused an action. */
+  execution: {
+    turnLimit: (): string => 'I could not answer the last message: the limit for a single answer of mine was reached. Votes, "status" and "stop" work as before.',
+    turnBudget: (): string => 'The budget for answers of my own is used up for this part of the facilitation. Votes, "status" and "stop" work as before, and the result is still evaluated.',
+  },
+  /** Private status requests of participants (answered in the private chat). */
+  privateStatus: {
+    which: (goals: readonly string[]): string =>
+      `You take part in several facilitations of mine. Which one do you mean? Answer with "status" and its number:\n${goals.map((goal, i) => `${String(i + 1)}. ${goal}`).join('\n')}`,
+    doneWhich: (items: readonly string[]): string => `Which of your action items is done? Answer with "done" and its number:\n${items.join('\n')}`,
+    done: (number: number, description: string): string => `Noted: action item ${String(number)} ("${description}") is done. I tell the group.`,
+    nothingOpen: (): string => 'You have no open action item in a facilitation of mine.',
   },
 };
 

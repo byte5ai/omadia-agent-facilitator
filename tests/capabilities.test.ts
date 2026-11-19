@@ -175,7 +175,8 @@ test('with action items the grant ends with their follow-up', { skip: PG_SKIP },
   await tool(conv, 'facilitation_step', { action: 'close' });
   await all(conv, 'agreed', ['anna', 'bert']);
   assert.equal((await h.facilitation(conv)).settings.followupGrant, 'active');
-  await say(conv, 'anna', 'done 1');
+  // In follow-up the facilitator hears what is addressed to it.
+  await say(conv, 'anna', '@Mira done 1');
   const ended = await h.facilitation(conv);
   assert.equal(ended.followupState, 'ended');
   assert.equal(ended.settings.followupGrant, 'revoked');
@@ -289,9 +290,15 @@ test('review 4: an integration that does not answer times out; the conversation 
   try {
     const f = await closedWithFollowup(conv, { tick: false });
     assert.equal(f.phase, 'closed');
-    assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), true, 'kept while the mail is still to go (the note about it needs the subscription)');
+    // The conversation is given back at the close; the closing scope stays
+    // while the mail is still to go (the note about it is drawn from it).
+    assert.equal(h.kernel.modeOf(f.id, conv), 'none', 'not read any more');
+    assert.equal(h.kernel.reservations.find((r) => r.processId === f.id)?.releasedAt !== undefined, true, 'the reservation is released at the close');
+    assert.equal(h.kernel.scopeOf(f.id, 'closing', 'result')?.state, 'open');
     await h.tick();
     await h.tick();
+    assert.equal(h.kernel.scopeOf(f.id, 'closing', 'result')?.state, 'ended', 'ended once the follow-up work is done');
+    assert.deepEqual(h.kernel.openScopesOf(f.id), []);
   } finally {
     followup.afterEffects.clear();
     Object.assign(followupLimits, before);

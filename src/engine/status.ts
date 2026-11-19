@@ -7,6 +7,7 @@ import { evaluate } from '../methods/evaluate.js';
 import type { CastBallot, Tally } from '../methods/evaluate.js';
 import type { Ballot } from '../methods/ballot.js';
 import type { Contribution, Facilitation, Participant, Step } from '../model.js';
+import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
@@ -73,7 +74,7 @@ export async function statusText(q: Queryable, f: Facilitation): Promise<string>
   const counted = tallyOf(f, participation, proposal !== undefined);
   const options = step ? (step.roundOptions ?? step.options) : [];
   return t.status({
-    phase: t.phase[f.phase],
+    phase: t.phase[lifecycleOf(f)],
     goal: f.goal,
     ...(step && steps.length > 1 ? { step: `${String(step.position)}/${String(steps.length)} ${step.title}` } : {}),
     dodVersion: dod?.version ?? 1,

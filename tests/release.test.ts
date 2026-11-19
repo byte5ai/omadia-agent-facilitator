@@ -54,7 +54,9 @@ test('review 3: a new facilitation in a conversation that is still being read do
   const turns = h.kernel.turns.length;
   const second = await startActive(h, conv, VOTE);
   assert.notEqual(second.id, first.id);
-  assert.ok((await h.facilitation(conv)).inboundCursor, 'the cursor starts at the head of what the kernel stored');
+  // The second facilitation has a subscription of its own: what the kernel
+  // stored for the first one is not among what it can read.
+  assert.equal((await h.engine.core.deps.kernel.messages()?.listSince({ agentSlug: 'mira', channelType: 'teams', conversationId: conv, processId: second.id }))?.events.length, 0);
   await h.restart(); // catch-up after downtime replays from the cursor
   await h.tick();
   assert.deepEqual(await store.listContributions(h.db.pool, second.id), [], 'no vote of the earlier facilitation is counted');

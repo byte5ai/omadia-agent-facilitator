@@ -16,6 +16,8 @@ import type { EngineCore, Work } from './core.js';
 import { advance, castBallots, evaluateStep } from './decide.js';
 import { scheduleJob } from './jobs.js';
 import { abortInWork } from './lifecycle.js';
+import { recordRefusal } from './refusals.js';
+import { stoppedByOperator } from './scopes.js';
 import { participationOf } from './status.js';
 import { expectedNames, listKnown } from './roll.js';
 
@@ -67,6 +69,19 @@ export function registerExternalJob(kind: string, run: ExternalJob): void {
 
 async function runJob(engine: EngineCore, job: Job): Promise<void> {
   await engine.deps.hooks?.beforeJob?.(job);
+  // An operator's stop holds the scheduler too: the job stays due and runs
+  // when the stop is lifted. It is not a failed attempt.
+  try {
+    const f = await store.getFacilitation(engine.db(), job.facilitationId);
+    const check = f ? await stoppedByOperator(engine, f) : { stopped: false as const };
+    if (check.stopped) {
+      await update(engine.db(), 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { leaseOwner: null, leaseUntil: null });
+      await recordRefusal(engine, job.facilitationId, { code: 'kill_switch', message: check.message, what: 'the scheduler' });
+      return;
+    }
+  } catch (err) {
+    engine.log(`facilitation ${job.facilitationId}: asking whether it is stopped failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const outside = external.get(job.kind);
   if (outside) {
     try {

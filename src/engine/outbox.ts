@@ -9,7 +9,8 @@
 //   essential (handshake, result, abort report): at-least-once. Retried until
 //     the channel confirmed, accepting a rare duplicate.
 
-import type { CardSendMembers } from '../cards/types.js';
+import type { SendAuthorization } from '@omadia/plugin-api';
+
 import type { Db, Queryable } from '../db/pool.js';
 import { rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -17,10 +18,14 @@ import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, GroupFallback } from './core.js';
 import { messageQuotaReached } from './quota.js';
+import { executionCodeOf, recordRefusal } from './refusals.js';
+import { isFinalRefusal, purposeFor, scopeForAction, syncPeople } from './scopes.js';
 
 type SendResult = { ok: true; messageId?: string; cardMessageId?: string } | { ok: false; code: string; message: string };
 
 type StoredPayload = OutboxPayload & {
+  /** `prose`: a model wrote the text. Everything else is a filled template. */
+  emission?: 'prose';
   link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
   /** What goes to the group when this private message cannot arrive. */
   fallback?: GroupFallback;
@@ -54,61 +59,62 @@ function failed(code: unknown, message: unknown): SendResult {
   return { ok: false, code: text(code) ?? 'malformed_outcome', message: text(message) ?? 'the channel reported a failure without saying why' };
 }
 
-/** Bring a posted card up to date (its closed state). Not a post. */
-async function updateCard(engine: EngineCore, q: Queryable, f: Facilitation, request: NonNullable<StoredPayload['cardUpdate']>): Promise<SendResult> {
-  const service = engine.deps.kernel.conversationSend() as (CardSendMembers & object) | undefined;
-  if (typeof service?.updateCard !== 'function') return { ok: false, code: 'no_card_update', message: 'the kernel cannot update cards' };
-  const card = await store.getCard(q, request.cardId);
-  // A card that never reached the channel has nothing to bring up to date.
-  if (!card?.messageId) return { ok: false, code: 'card_not_posted', message: 'the card was not posted, so there is nothing to update' };
-  const outcome = await service.updateCard({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, cardMessageId: card.messageId, update: request.update });
-  return outcome.outcome === 'updated' ? { ok: true } : failed(outcome.code, outcome.message);
-}
+/** A refused or failed send of the second major, as the outbox records it.
+ *  A refusal of the execution authorization keeps its code. */
+const unreachable = (outcome: { code: string; message: string; executionCode?: string }): SendResult =>
+  outcome.code === 'not_authorized' && outcome.executionCode ? failed(`not_authorized:${outcome.executionCode}`, outcome.message) : failed(outcome.code, outcome.message);
 
 /** The code a channel answers with when it does not render a card. */
 const CARD_REFUSED = 'channel_error';
 
+/**
+ * One row to the channel, as an action drawn from the facilitation's scope
+ * (kernel #2091): the kernel takes the authorization first and sends only
+ * then, as the facilitator's own identity.
+ */
 async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: OutboxRow): Promise<SendResult> {
   const payload = row.payload as StoredPayload;
-  if (payload.cardUpdate) return updateCard(engine, q, f, payload.cardUpdate);
+  const service = engine.deps.kernel.conversationSend();
+  if (!service) return { ok: false, code: 'no_service', message: "kernel service 'conversationSend@2' is not available" };
+  const found = await scopeForAction(engine, f, row.purpose);
+  if (!found.ok) return failed(`not_authorized:${found.code}`, found.message);
+  const authorization: SendAuthorization = {
+    ...found.value.authorization,
+    purpose: purposeFor(row.purpose, row.deliveryClass === 'essential'),
+    emission: payload.emission === 'prose' ? 'prose' : 'template',
+  };
+  const to = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId };
+
+  if (payload.cardUpdate) {
+    const card = await store.getCard(q, payload.cardUpdate.cardId);
+    // A card that never reached the channel has nothing to bring up to date.
+    if (!card?.messageId) return { ok: false, code: 'card_not_posted', message: 'the card was not posted, so there is nothing to update' };
+    const outcome = await service.updateCard({ ...to, cardMessageId: card.messageId, update: payload.cardUpdate.update, authorization });
+    return outcome.outcome === 'updated' ? { ok: true } : unreachable(outcome);
+  }
+
   if (row.targetKind === 'group') {
-    const service = engine.deps.kernel.conversationSend();
-    if (!service) return { ok: false, code: 'no_service', message: "kernel service 'conversationSend' is not available" };
     if (payload.card) {
-      const withCard = await service.sendToConversation({
-        agentSlug: f.facilitatorAgent,
-        channelType: f.channelType,
-        conversationId: f.conversationId,
-        message: { text: payload.text, card: payload.card } as never,
-        asOwnIdentity: true,
-      });
+      const withCard = await service.sendToConversation({ ...to, message: { text: payload.text, card: payload.card } as never, authorization });
       if (withCard.outcome === 'delivered') {
-        const cardMessageId = (withCard as { cardMessageId?: string }).cardMessageId ?? withCard.messageId;
+        const cardMessageId = withCard.cardMessageId ?? withCard.messageId;
         await store.appendEvent(q, { facilitationId: f.id, kind: 'card_posted', actor: 'engine', occurredAt: engine.now(), payload: { cardId: payload.card.cardId, kinds: payload.card.questions.map((question) => question.kind) } });
         return { ok: true, ...(withCard.messageId !== undefined ? { messageId: withCard.messageId } : {}), ...(cardMessageId !== undefined ? { cardMessageId } : {}) };
       }
-      if (withCard.code !== CARD_REFUSED) return failed(withCard.code, withCard.message);
+      if (withCard.code !== CARD_REFUSED) return unreachable(withCard);
       // The channel does not render this card: the question goes out as
       // text, and the chat ballot is the way to answer.
       await store.patchCard(q, payload.card.cardId, { state: 'closed', closedAt: engine.now() });
       engine.log(`facilitation ${f.id}: the channel refused the card (${withCard.message}); the question is posted as text`);
-      const asText = await service.sendToConversation({
-        agentSlug: f.facilitatorAgent,
-        channelType: f.channelType,
-        conversationId: f.conversationId,
-        message: { text: payload.cardFallbackText ?? payload.text },
-        asOwnIdentity: true,
-      });
+      const asText = await service.sendToConversation({ ...to, message: { text: payload.cardFallbackText ?? payload.text }, authorization });
       // On record as what happened: the channel refused the card, and
       // whether the question reached the group as text instead.
       await store.appendEvent(q, { facilitationId: f.id, kind: 'card_refused', actor: 'engine', occurredAt: engine.now(), payload: { cardId: payload.card.cardId, kinds: payload.card.questions.map((question) => question.kind), reason: withCard.message, postedAsText: asText.outcome === 'delivered' } });
-      if (asText.outcome !== 'delivered') return failed(asText.code, asText.message);
+      if (asText.outcome !== 'delivered') return unreachable(asText);
       return { ok: true, ...(asText.messageId !== undefined ? { messageId: asText.messageId } : {}) };
     }
     const outcome = await service.sendToConversation({
-      agentSlug: f.facilitatorAgent,
-      channelType: f.channelType,
-      conversationId: f.conversationId,
+      ...to,
       // The text always carries the whole question, so a channel without
       // polls loses nothing.
       message: {
@@ -116,29 +122,24 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
         ...(payload.mentions ? { mentions: payload.mentions } : {}),
         ...(payload.poll ? { poll: payload.poll } : {}),
       },
-      asOwnIdentity: true,
+      authorization,
     });
-    if (outcome.outcome !== 'delivered') return failed(outcome.code, outcome.message);
+    if (outcome.outcome !== 'delivered') return unreachable(outcome);
     return { ok: true, ...(outcome.messageId !== undefined ? { messageId: outcome.messageId } : {}) };
   }
 
-  const service = engine.deps.kernel.targetedSend();
-  if (!service) return { ok: false, code: 'no_service', message: "kernel service 'targetedSend' is not available" };
-  const result = await service.sendToPrincipal({
+  // A private message: the person has to be one the scope lists. Who takes
+  // part may have changed since the scope was last told.
+  await syncPeople(engine, f, found.value.scope);
+  const direct = await service.sendToPerson({
+    agentSlug: f.facilitatorAgent,
     channelType: f.channelType,
     // Participants are keyed by canonical principal, which is the wire form.
     principal: row.targetPrincipal ?? '',
     message: { text: payload.text },
-    asAgentSlug: f.facilitatorAgent,
+    authorization,
   });
-  const delivery = result.deliveries[0];
-  if (!delivery) {
-    const diagnostic = result.diagnostics[0];
-    return failed(diagnostic?.code ?? 'no_delivery', diagnostic?.message ?? 'no delivery was reported');
-  }
-  return delivery.outcome.outcome === 'delivered'
-    ? { ok: true, ...(delivery.outcome.messageId !== undefined ? { messageId: delivery.outcome.messageId } : {}) }
-    : failed(delivery.outcome.code, delivery.outcome.message);
+  return direct.outcome === 'delivered' ? { ok: true, ...(direct.messageId !== undefined ? { messageId: direct.messageId } : {}) } : unreachable(direct);
 }
 
 async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined, cardMessageId?: string): Promise<void> {
@@ -155,10 +156,6 @@ async function stampLink(q: Queryable, payload: StoredPayload, messageId: string
 
 /** An essential message is retried with a growing pause, at most this often. */
 export const MAX_ESSENTIAL_ATTEMPTS = 20;
-/** The kernel's answer to a post without a subscription. */
-const NO_SUBSCRIPTION_CODE = 'not_permitted';
-/** How often an ended facilitation tries to post without a subscription. */
-export const ORPHAN_ATTEMPTS = 3;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 60 * 60_000;
 /** A private message that can never arrive: retrying changes nothing. */
@@ -228,14 +225,6 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
     return;
   }
 
-  // The subscription this facilitation posted under is gone for good. A later
-  // subscription to the same conversation belongs to another facilitation and
-  // does not carry this one's messages.
-  if (f.settings.orphaned === true) {
-    await drop(client, row, 'the facilitation lost its subscription; nothing is posted for it any more');
-    return;
-  }
-
   // A private message is tried once per person: who could not be reached is
   // not tried again in this facilitation.
   if (row.targetKind === 'direct' && row.deliveryClass === 'droppable' && (f.settings.unreachable ?? []).includes(row.targetPrincipal ?? '')) {
@@ -287,24 +276,28 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
 
   const error = `${result.code}: ${result.message}`;
   const attempts = row.attempts + 1;
-  // The kernel holds no subscription for this conversation: remembered, so
-  // that the next pass takes it again or ends the facilitation.
-  const unsubscribed = row.targetKind === 'group' && result.code === NO_SUBSCRIPTION_CODE;
-  if (unsubscribed) {
-    const ended = (f.phase === 'closed' || f.phase === 'aborted') && f.followupState !== 'active';
-    // An ended facilitation is not subscribed again. After a few attempts
-    // its messages are given up, not kept until somebody else subscribes.
-    const orphaned = ended && attempts >= ORPHAN_ATTEMPTS;
-    await client.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || $2::jsonb WHERE id = $1`, [
-      f.id,
-      JSON.stringify(orphaned ? { subscriptionLost: true, orphaned: true } : { subscriptionLost: true }),
-    ]);
-    if (orphaned && row.deliveryClass === 'essential') {
-      await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
-      await store.appendEvent(client, { facilitationId: f.id, kind: 'delivery_failed', actor: 'engine', occurredAt: engine.now(), payload: { purpose: row.purpose, to: 'group', error, attempts } });
-      engine.log(`facilitation ${f.id}: ${row.purpose} is given up, the facilitation has no subscription any more (${error})`);
+  // The execution authorization refused: on record, for the group's protocol
+  // and for the operator. Never taken for "this person cannot be reached".
+  const refusedBy = executionCodeOf(result.code);
+  if (refusedBy !== undefined) {
+    await recordRefusal(engine, f.id, { code: refusedBy, message: result.message, what: row.targetKind === 'group' ? `posting '${row.purpose}'` : `a private message ('${row.purpose}')` }, client);
+    if (row.deliveryClass === 'droppable') {
+      await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'not authorized; droppable messages are not retried' });
+      // What the person is owed is said in the group, where that is allowed.
+      if (row.targetKind === 'direct' && refusedBy === 'target_not_allowed') await fallbackToGroup(engine, client, f, row);
       return;
     }
+    // A refusal that does not pass on its own is not tried twenty times.
+    if (isFinalRefusal(refusedBy) || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
+      await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
+      await store.appendEvent(client, { facilitationId: f.id, kind: 'delivery_failed', actor: 'engine', occurredAt: engine.now(), payload: { purpose: row.purpose, to: row.targetKind === 'group' ? 'group' : row.targetPrincipal, error, attempts } });
+      engine.log(`facilitation ${f.id}: essential ${row.purpose} is given up, it is not authorized (${error})`);
+      if (row.targetKind === 'direct') await fallbackToGroup(engine, client, f, row);
+      return;
+    }
+    await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'pending', lastError: error, nextAttemptAt: new Date(engine.now().getTime() + retryDelayMs(attempts)) });
+    engine.log(`facilitation ${f.id}: essential ${row.purpose} is not authorized right now (${error}); will retry`);
+    return;
   }
   if (row.deliveryClass === 'droppable') {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', lastError: error, dropReason: 'send failed; droppable messages are not retried' });

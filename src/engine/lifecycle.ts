@@ -7,8 +7,13 @@
 // is nothing to keep. The conversation always comes from the kernel's tool
 // call context, never from a tool argument.
 
-import { DAY_MS } from '../clock.js';
+import { randomUUID } from 'node:crypto';
+
+import type { ChannelReadinessReport } from '@omadia/plugin-api';
+
+import { DAY_MS, MINUTE_MS } from '../clock.js';
 import { isValidTimezone } from '../config.js';
+import { missingServices } from '../kernel.js';
 import type { Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -23,6 +28,8 @@ import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Particip
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
+import { refusalText } from './refusals.js';
+import { endScope, ensureScope, syncScopes } from './scopes.js';
 
 // ISO 8601 date-time WITH an explicit offset or Z. A bare local time is
 // ambiguous (whose timezone?) and refused rather than guessed.
@@ -195,25 +202,6 @@ const profileLanguage = (language: string | undefined): 'de' | 'en' | undefined 
   const base = language?.toLowerCase().split('-')[0];
   return base === 'de' || base === 'en' ? base : undefined;
 };
-
-const HEAD_PAGE = 500;
-const HEAD_MAX_PAGES = 40;
-
-/** The id of the newest event the kernel has stored for a subscription, so a
- *  new facilitation starts reading after it. Bounded: beyond the bound the
- *  time check of the inbound consumer still drops what is older. */
-async function headOfStored(engine: EngineCore, scope: ConversationRef): Promise<string | undefined> {
-  const messages = engine.deps.kernel.messages();
-  if (!messages) return undefined;
-  let after: string | undefined;
-  for (let page = 0; page < HEAD_MAX_PAGES; page += 1) {
-    const batch = await messages.listSince(scope, { ...(after !== undefined ? { after } : {}), limit: HEAD_PAGE });
-    const last = batch.events[batch.events.length - 1];
-    if (last) after = last.eventId;
-    if (!batch.nextCursor || !last) break;
-  }
-  return after;
-}
 
 export type ConfiguredHook = (engine: EngineCore, facilitation: Facilitation) => Promise<void>;
 const configured: ConfiguredHook[] = [];
@@ -391,36 +379,20 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
 
   // Name and language come from the kernel's record of the facilitator, not
   // from the model.
-  const profile = await kernel.agentTurn()?.getProfile?.(input.agentSlug);
+  const profile = await kernel.agentTurn()?.getProfile(input.agentSlug);
   for (const check of startChecks) await check(engine, input.agentSlug, input.language ?? profileLanguage(profile?.language) ?? config.language);
 
+  // Without execution scopes nothing a facilitation does would be authorized:
+  // nothing starts, rather than something that half works.
+  const missing = missingServices(kernel);
   const messages = kernel.messages();
-  if (!messages) {
+  const execution = kernel.execution();
+  const sends = kernel.conversationSend();
+  if (missing.length > 0 || !messages || !execution || !sends) {
     throw new Refusal(
-      'no_message_service',
-      'The messages of a conversation cannot be read on this instance. Without them contributions cannot be recorded, so nothing is started. An operator has to finish the setup.',
+      'kernel_too_old',
+      `A facilitation cannot run on this instance: it does not offer what a facilitation is authorized and bounded by (missing: ${missing.join(', ')}). Nothing was started. An operator has to update omadia, or finish its setup (a database is needed).`,
     );
-  }
-
-  const readiness = kernel.readiness();
-  if (readiness) {
-    let report = await readiness.check(input);
-    // Consent that only needs renewing is repaired once; anything else is
-    // said exactly and nothing starts.
-    if (!report.ready && readiness.repairConsent && report.missing.some((m) => REPAIRABLE.has(m.code))) {
-      const repair = await readiness.repairConsent(input);
-      if (repair.outcome !== 'failed') report = await readiness.check(input);
-    }
-    if (!report.ready) {
-      const missing = report.missing.map((m) => `${m.code}: ${m.message}`);
-      throw new Refusal(
-        report.missing.some((m) => m.code === 'no_identity') ? 'no_identity' : 'not_ready',
-        `I cannot facilitate here yet. Missing: ${missing.length > 0 ? missing.join('; ') : 'the channel reports it is not ready'}. Nothing was started.`,
-      );
-    }
-    if (report.verified === false) notes.push(READINESS_UNVERIFIED);
-  } else {
-    notes.push(READINESS_UNVERIFIED);
   }
 
   const roll = await rollFor(engine, input);
@@ -442,23 +414,84 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     notes.push('I cannot see who belongs to this conversation, so the vote is evaluated at the deadline, not when everybody has voted. To close as soon as everybody has voted, start again with the participants named.');
   }
 
-  const subscription = await messages.subscribe(input);
+  // The id is fixed before anything is stored: the kernel's scope, the
+  // reservation of the conversation and the subscription all name it.
+  const facilitationId = randomUUID();
+  const process = { agentSlug: input.agentSlug, channelType: input.channelType, conversationId: input.conversationId, processId: facilitationId };
+  const draft = {
+    id: facilitationId,
+    facilitatorAgent: input.agentSlug,
+    channelType: input.channelType,
+    conversationId: input.conversationId,
+    createdAt: now,
+    phase: 'configuring',
+    followupState: 'none',
+    followupPolicy: { actionItems: false, leadHours: 0 },
+    deadline: null,
+    followupEndsAt: null,
+  } as unknown as Facilitation;
+
+  // The `configuring` scope takes the conversation's reservation. Another
+  // facilitation or an agent discussion that holds it is the kernel's answer.
+  const scope = await ensureScope(engine, draft, 'configuring');
+  if (!scope.ok) {
+    if (scope.code === 'conversation_busy') throw new Refusal('conversation_taken', `This conversation is already in use (${scope.message}). One facilitation or discussion per conversation at a time. Nothing was started.`);
+    throw new Refusal(scope.code, `${refusalText(scope.code, scope.message)} Nothing was started.`);
+  }
+  /** Nothing was created: give back what was taken for it. */
+  const giveBack = async (reason: string): Promise<void> => {
+    try {
+      await endScope(engine, scope.scope, reason);
+      await execution.releaseConversation({ processId: facilitationId, channelType: input.channelType, conversationId: input.conversationId, reason });
+      await db.query('DELETE FROM plg_omadia_agent_facilitator_scopes WHERE facilitation_id = $1', [facilitationId]);
+    } catch (err) {
+      engine.log(`facilitation ${facilitationId}: giving back its scope failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Readiness of the facilitator's identity in this conversation: a checked
+  // action under the scope. Consent that only needs renewing is repaired
+  // once; anything else is said exactly and nothing starts.
+  const authorization = { scopeId: scope.scope.scopeId, processId: facilitationId, phase: 'configuring' as const };
+  const check = async (): Promise<ChannelReadinessReport | { refused: string }> => {
+    const outcome = await sends.checkReadiness({ ...input, authorization });
+    if (outcome.outcome === 'checked') return outcome.report;
+    // A host without a readiness check: said as unverified, not as ready.
+    if (outcome.code === 'channel_error') return { ready: true, installed: true, canReadAllMessages: true, canPost: true, missing: [], verified: false };
+    return { refused: refusalText(outcome.executionCode ?? outcome.code, outcome.message) };
+  };
+  let report = await check();
+  const repair = kernel.readiness();
+  if (!('refused' in report) && !report.ready && repair?.repairConsent && report.missing.some((m) => REPAIRABLE.has(m.code))) {
+    const repaired = await repair.repairConsent(input);
+    if (repaired.outcome !== 'failed') report = await check();
+  }
+  if ('refused' in report) {
+    await giveBack('readiness check refused');
+    throw new Refusal('not_ready', `${report.refused} Nothing was started.`);
+  }
+  if (!report.ready) {
+    await giveBack('not ready');
+    const lacking = report.missing.map((m) => `${m.code}: ${m.message}`);
+    throw new Refusal(
+      report.missing.some((m) => m.code === 'no_identity') ? 'no_identity' : 'not_ready',
+      `I cannot facilitate here yet. Missing: ${lacking.length > 0 ? lacking.join('; ') : 'the channel reports it is not ready'}. Nothing was started.`,
+    );
+  }
+  if (report.verified === false) notes.push(READINESS_UNVERIFIED);
+
+  // Every message of the conversation, for this facilitation alone: what an
+  // earlier facilitation received here is not this one's to read.
+  const subscription = await messages.subscribe(process, { mode: 'all' });
   if (subscription.outcome === 'refused') {
+    await giveBack('subscription refused');
     throw new Refusal(subscription.code, subscription.code === 'no_identity' ? OWN_IDENTITY_REQUIRED : `I cannot read this conversation: ${subscription.message}. Nothing was started.`);
   }
-
-  // The subscription is this facilitation's. What an earlier facilitation of
-  // this conversation could not post while it had none stays unsent.
-  await db.query(
-    `UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"orphaned": true}'::jsonb
-      WHERE facilitator_agent = $1 AND channel_type = $2 AND conversation_id = $3
-        AND phase IN ('closed', 'aborted') AND coalesce((settings->>'subscriptionLost')::boolean, false)`,
-    [input.agentSlug, input.channelType, input.conversationId],
-  );
 
   try {
     const result = await db.transaction(async (tx) => {
       const facilitation = await store.createFacilitation(tx, {
+        id: facilitationId,
         facilitatorAgent: input.agentSlug,
         channelType: input.channelType,
         conversationId: input.conversationId,
@@ -475,6 +508,8 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
+          scoped: true,
+          readMode: 'all',
           ...(profile?.displayName ? { facilitatorName: profile.displayName } : {}),
           ...(input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? { initiatorName: input.callerDisplayName } : {}),
           ...(openRoster ? { openRoster: true } : {}),
@@ -509,6 +544,15 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         },
         '(dedupe_key)',
       );
+      // Setting up is bounded by the `configuring` scope: when it runs out,
+      // the facilitation ends with a short note (a minute before, so that
+      // the note is still drawn from a scope that is open).
+      await insertIfAbsent(
+        tx,
+        'plg_omadia_agent_facilitator_jobs',
+        { facilitationId: facilitation.id, kind: 'configuring_end', dedupeKey: `${facilitation.id}:configuring_end`, dueAt: new Date(scope.scope.deadline.getTime() - MINUTE_MS), payload: {}, createdAt: now },
+        '(dedupe_key)',
+      );
       await store.appendEvent(tx, {
         facilitationId: facilitation.id,
         kind: 'configured',
@@ -518,17 +562,13 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
       });
       return { facilitation, created: true, participants, expected: roll.expected, notes, ...(defaultedDod !== undefined ? { defaultedDod } : {}) };
     });
-    // What needs the kernel (the session's capabilities) is fetched now,
-    // outside any transaction.
+    // What needs the kernel (the session's capabilities, the people of the
+    // scope) is fetched now, outside any transaction.
     for (const hook of configured) await hook(engine, result.facilitation);
-    // The conversation may still be read for an earlier facilitation (its
-    // follow-up). What the kernel stored so far is not this one's to read.
-    const cursor = await headOfStored(engine, input);
-    if (cursor !== undefined) await db.query('UPDATE plg_omadia_agent_facilitator_facilitations SET inbound_cursor = $2 WHERE id = $1', [result.facilitation.id, cursor]);
+    await syncScopes(engine, facilitationId);
     return result;
   } catch (err) {
-    // Nothing was created: do not keep reading a conversation we do not moderate.
-    if (!(await store.findLiveByConversation(db, input.channelType, input.conversationId))) await messages.unsubscribe(input);
+    await giveBack('not created');
     if (err instanceof Error && err.message.includes('one_active_per_conversation')) {
       throw new Refusal('already_active', 'This conversation already has a facilitation.');
     }
@@ -583,6 +623,14 @@ export function onOpened(hook: (w: Work) => Promise<void>): void {
 
 /** configuring -> active: open the first step and post the handshake. */
 export async function openFacilitation(engine: EngineCore, facilitationId: string): Promise<Facilitation> {
+  // The `active` scope is opened before the handshake is written: the kernel
+  // ends `configuring` with it, and a refusal (an operator stopped the
+  // facilitator) is the answer instead of a handshake that cannot go out.
+  const before = await store.getFacilitation(engine.db(), facilitationId);
+  if (before?.phase === 'configuring') {
+    const scope = await ensureScope(engine, { ...before, phase: 'active' }, 'active');
+    if (!scope.ok) throw new Refusal(scope.code, `${refusalText(scope.code, scope.message)} The facilitation was not opened.`);
+  }
   return engine.work(facilitationId, async (w) => {
     if (w.f.phase !== 'configuring') throw new Refusal('not_configuring', `The facilitation is ${w.f.phase}; only one that is being set up can be opened.`);
     const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
@@ -594,6 +642,8 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
     const opened = single && first ? await store.patchStep(w.tx, first.id, { status: 'open', openedAt: w.now }) : undefined;
     if (!single && first?.kind === 'open') await store.patchStep(w.tx, first.id, { status: 'closed', openedAt: w.now, closedAt: w.now });
     const f = await w.patch({ phase: 'active', activatedAt: w.now });
+    // Set up in time: the bound of the set-up no longer applies.
+    await w.tx.query(`DELETE FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind = 'configuring_end'`, [w.f.id]);
     w.post({ purpose: 'handshake', key: 'opening', to: 'group', deliveryClass: 'essential', text: await handshake(w, single ? opened : undefined) });
     await w.event('opened', 'facilitator', { participants: participants.length });
     for (const hook of onOpen) await hook(w);
@@ -656,39 +706,12 @@ export async function abortFacilitation(engine: EngineCore, facilitationId: stri
   return ended;
 }
 
-/** Stop reading a conversation once nothing needs it any more: not this
- *  facilitation (its follow-up, an undelivered report), and no other
- *  facilitation of the same facilitator in the same conversation. Called
- *  outside the lock. Idempotent. */
+/** A facilitation ended: its conversation is given back and its scopes are
+ *  ended as their work is done. Called outside the lock. Idempotent. */
 export async function releaseConversation(engine: EngineCore, f: Facilitation): Promise<void> {
-  if (f.followupState === 'active' || f.settings.released === true) return;
-  const db = engine.db();
-  // Posting as the facilitator rides on the subscription: keep it until the
-  // report is out.
-  const undelivered = await db.query(
-    `SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND delivery_class = 'essential' AND status IN ('pending', 'sending') LIMIT 1`,
-    [f.id],
-  );
-  if (undelivered.rows.length > 0) return;
-  // Mail and invitation run after the close; what they have to tell the group
-  // needs the subscription too.
-  const working = await db.query(
-    `SELECT 1 FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('protocol_mail', 'followup_meeting') LIMIT 1`,
-    [f.id],
-  );
-  if (working.rows.length > 0) return;
-  const others = await db.query(
-    `SELECT 1 FROM plg_omadia_agent_facilitator_facilitations
-      WHERE id <> $1 AND facilitator_agent = $2 AND channel_type = $3 AND conversation_id = $4
-        AND (phase IN ('configuring', 'active', 'concluding') OR followup_state = 'active' OR NOT coalesce((settings->>'released')::boolean, false))
-      LIMIT 1`,
-    [f.id, f.facilitatorAgent, f.channelType, f.conversationId],
-  );
-  await db.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"released": true}'::jsonb WHERE id = $1`, [f.id]);
-  if (others.rows.length > 0) return;
   try {
-    await engine.deps.kernel.messages()?.unsubscribe({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId });
+    await syncScopes(engine, f.id);
   } catch (err) {
-    engine.log(`facilitation ${f.id}: unsubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+    engine.log(`facilitation ${f.id}: giving back its conversation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

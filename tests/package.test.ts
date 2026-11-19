@@ -20,7 +20,7 @@ const manifest = readFileSync(join(root, 'manifest.yaml'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name: string; version: string; peerDependencies: Record<string, string> };
 const zipPath = join(root, 'out', `${pkg.name.replace(/^@/, '').replace(/\//g, '-')}-${pkg.version}.zip`);
 /** The lowest host contract the plugin runs on: the first kernel that gives an archetype plugin its own database. */
-const FLOOR = '1.62.0';
+const FLOOR = '1.69.0';
 const FILE = 0o100644;
 
 let entries: ZipEntry[] = [];

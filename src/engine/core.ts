@@ -87,6 +87,9 @@ export interface Outgoing {
   card?: OutboxPayload['card'];
   cardFallbackText?: string;
   cardUpdate?: OutboxPayload['cardUpdate'];
+  /** `prose`: a model wrote this text (an agent turn). Absent: a template
+   *  the engine filled. The kernel records it with the send. */
+  emission?: 'prose';
   deliveryClass: DeliveryClass;
   /** Delivered only while the facilitation is in one of these phases. */
   requiredPhases?: Phase[];
@@ -306,7 +309,8 @@ export class EngineCore {
       if (verdict.reason === 'silent' || verdict.reason === 'empty') return;
     }
     const fallback = m.fallback && m.to !== 'group' ? { ...m.fallback, text: await namePrincipals(tx, f, m.fallback.text) } : undefined;
-    const payload: OutboxPayload & { link?: Outgoing['link']; fallback?: Outgoing['fallback'] } = {
+    const payload: OutboxPayload & { link?: Outgoing['link']; fallback?: Outgoing['fallback']; emission?: 'prose' } = {
+      ...(m.emission && verdict.ok ? { emission: m.emission } : {}),
       text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),

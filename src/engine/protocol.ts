@@ -5,6 +5,7 @@
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import type { Facilitation, ProtocolEvent } from '../model.js';
+import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { Work } from './core.js';
 import { facilitatorName } from './lifecycle.js';
@@ -85,7 +86,7 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     ...section(p.changes, of(CHANGE_EVENTS).map((e) => `${when(e.occurredAt)}: ${changeLine(e)}`)),
     ...section(p.capabilities, of(CAPABILITY_EVENTS).map((e) => `${when(e.occurredAt)}: ${String(e.payload['summary'] ?? e.kind)}`)),
     '',
-    `${p.outcome}: ${t.phase[f.phase]}${f.closeReason && f.phase === 'aborted' ? ` (${f.closeReason})` : ''}`,
+    `${p.outcome}: ${t.phase[lifecycleOf(f)]}${f.closeReason && f.phase === 'aborted' ? ` (${f.closeReason})` : ''}`,
   ].join('\n');
 }
 

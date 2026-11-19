@@ -229,14 +229,15 @@ test('retrospective: ideas without mentions, clusters and decisions by consent, 
   h.clock.advance(2 * 24 * HOUR_MS + MINUTE_MS);
   await h.tick();
   assert.deepEqual(h.kernel.dms.slice(dms).map((d) => d.principal), ['user:bert']);
-  assert.match(h.kernel.dms.at(-1)?.text ?? '', /Hello Bert, action item #2 is due .*write "done 2" in the group/);
+  assert.match(h.kernel.dms.at(-1)?.text ?? '', /Hello Bert, action item #2 is due .*answer me here with "done 2", or write it in the group and mention me/);
   assert.doesNotMatch(last(conv), /action item #2 is due/, 'privately only: the group is not pinged as well');
-  await say(conv, 'cara', 'done 2');
+  // In follow-up the facilitator hears what is addressed to it.
+  await say(conv, 'cara', '@Mira done 2');
   assert.equal(last(conv), 'Cara, action item #2 is not yours to close.');
-  await say(conv, 'bert', 'done 2');
+  await say(conv, 'bert', '@Mira done 2');
   assert.equal(last(conv), 'Done, thank you Bert: #2 Block Wednesdays in the team calendar');
   assert.equal((await h.facilitation(conv)).followupState, 'active', 'one item is still open');
-  await say(conv, 'cara', 'erledigt 1');
+  await say(conv, 'cara', '@Mira erledigt 1');
   assert.equal(last(conv), 'The follow-up of the action items has ended. I am no longer reading this conversation.');
   assert.equal((await h.facilitation(conv)).followupState, 'ended');
   assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);

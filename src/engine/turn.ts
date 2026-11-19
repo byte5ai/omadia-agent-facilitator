@@ -6,7 +6,7 @@
 // else, so a facilitator never carries anything from one facilitation into
 // another.
 
-import type { ConversationMessageRecord } from '@omadia/plugin-api';
+import type { ConversationMessageRecord, ScopedAgentTurnOutcome } from '@omadia/plugin-api';
 
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
@@ -15,6 +15,8 @@ import { formatWhen, texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { isSilent } from './guard.js';
 import { playbook } from './playbook.js';
+import { recordRefusal } from './refusals.js';
+import { TURN_MODEL_CALLS, scopeForAction } from './scopes.js';
 import { participationOf } from './status.js';
 import { checkTurnText } from './turnGuard.js';
 
@@ -71,7 +73,14 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
   if (!f || (f.phase !== 'configuring' && f.phase !== 'active')) return;
   const agentTurn = engine.deps.kernel.agentTurn();
   if (!agentTurn) {
-    engine.log(`facilitation ${f.id}: kernel service 'agentTurn' is not available; free text is not moderated`);
+    engine.log(`facilitation ${f.id}: kernel service 'agentTurn@2' is not available; free text is not moderated`);
+    return;
+  }
+  // The turn is an authorized action: it is drawn from the scope of the
+  // phase, with a reservation of model calls the kernel holds it to.
+  const found = await scopeForAction(engine, f, 'moderation');
+  if (!found.ok) {
+    await recordRefusal(engine, f.id, { code: found.code, message: found.message, what: 'a turn of the facilitator' });
     return;
   }
   const outcome = await agentTurn.runTurn({
@@ -82,6 +91,11 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     inboundEventId: record.eventId,
     input: `From: ${record.author.displayName ?? record.author.id} (message id: ${record.messageId})\n${record.text ?? ''}`,
     engineContext: await buildEngineContext(db, f),
+    ...found.value.authorization,
+    purpose: 'moderation',
+    emission: 'prose',
+    budget: { modelCalls: TURN_MODEL_CALLS },
+    target: { kind: 'conversation', channelType: f.channelType, conversationId: f.conversationId },
   });
   // What the tools of this turn did. If one already made the facilitator post
   // (the handshake, a step, a question to somebody), that was the answer:
@@ -91,10 +105,11 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     const detail = outcome.outcome === 'refused' ? `${outcome.code}: ${outcome.message}` : outcome.message;
     engine.log(`facilitation ${f.id}: facilitator turn ${outcome.outcome} (${detail})`);
     await engine.work(f.id, (w) => w.event('turn_failed', 'engine', { outcome: outcome.outcome, detail, eventId: record.eventId }));
+    if (outcome.outcome === 'refused') await turnRefused(engine, f.id, record.eventId, outcome);
     return;
   }
-  const say = (w: Work, text: string): void =>
-    w.post({ purpose: 'moderation', key: `turn:${record.eventId}`, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['configuring', 'active'], text });
+  const say = (w: Work, text: string, prose = false): void =>
+    w.post({ purpose: 'moderation', key: `turn:${record.eventId}`, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['configuring', 'active'], text, ...(prose ? { emission: 'prose' as const } : {}) });
 
   // The marker anywhere in the answer means: say nothing.
   if (isSilent(outcome.text)) {
@@ -122,7 +137,7 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
       live: w.f.phase === 'configuring' || w.f.phase === 'active',
     });
     if (verdict.ok) {
-      say(w, outcome.text.trim());
+      say(w, outcome.text.trim(), true);
       return;
     }
     const t = texts(w.f.language);
@@ -136,3 +151,32 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
 /** Refusals that are not an answer to the group (nothing could be posted, or
  *  the call itself was malformed). */
 const UNSPEAKABLE_REFUSALS = new Set(['no_subscription', 'no_context', 'bad_input', 'unknown_message', 'no_facilitation']);
+
+/**
+ * The kernel did not run the turn, or cut it off. Nobody is left waiting for
+ * an answer that does not come: the reason is on record, and the group is
+ * told where it can still be told and the reason concerns it.
+ *
+ *   reservation_exceeded   this one answer needed more model calls than a
+ *                          turn may make: said in the group for that message
+ *   budget_exhausted       the model calls of the phase are used up: said in
+ *                          the group once
+ *   kill_switch, ...       an operator's matter: on record and in the log
+ */
+async function turnRefused(engine: EngineCore, facilitationId: string, eventId: string, outcome: Extract<ScopedAgentTurnOutcome, { outcome: 'refused' }>): Promise<void> {
+  const code = outcome.code === 'not_authorized' ? (outcome.executionCode ?? outcome.code) : outcome.code;
+  await recordRefusal(engine, facilitationId, { code, message: outcome.message, what: 'a turn of the facilitator' });
+  if (code !== 'reservation_exceeded' && code !== 'budget_exhausted') return;
+  await engine.work(facilitationId, async (w) => {
+    if (w.f.phase !== 'configuring' && w.f.phase !== 'active') return;
+    const t = texts(w.f.language).execution;
+    w.post({
+      purpose: 'system_notice',
+      key: code === 'budget_exhausted' ? `turn_budget:${w.f.phase}` : `turn_limit:${eventId}`,
+      to: 'group',
+      deliveryClass: 'droppable',
+      versionBound: false,
+      text: code === 'budget_exhausted' ? t.turnBudget() : t.turnLimit(),
+    });
+  });
+}

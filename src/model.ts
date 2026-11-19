@@ -7,6 +7,25 @@ export type Phase = 'configuring' | 'active' | 'concluding' | 'closed' | 'aborte
 export const LIVE_PHASES: readonly Phase[] = ['configuring', 'active', 'concluding'];
 export const TERMINAL_PHASES: readonly Phase[] = ['closed', 'aborted'];
 
+/**
+ * The lifecycle of the specification (5.2):
+ *
+ *   invited -> configuring -> active -> concluding -> closed -> following_up -> ended
+ *                                    \-> aborted
+ *
+ * `invited` is not stored: before somebody asks the facilitator to start there
+ * is nothing to keep. `phase` holds the stored part up to `closed`; what comes
+ * after the close follows from the follow-up of the action items.
+ */
+export type LifecycleState = Phase | 'following_up' | 'ended';
+
+/** Where a facilitation is in the lifecycle of the specification. A closed
+ *  facilitation follows up its action items, or it has ended. */
+export function lifecycleOf(f: Pick<Facilitation, 'phase' | 'followupState'>): LifecycleState {
+  if (f.phase !== 'closed') return f.phase;
+  return f.followupState === 'active' ? 'following_up' : 'ended';
+}
+
 export type CloseRule = 'all_contributed' | 'at_deadline';
 export type FormatId = 'decision' | 'prioritisation' | 'assignment' | 'ideas' | 'retrospective' | 'alignment' | 'custom';
 export type StepKind = 'open' | 'collect' | 'discuss' | 'cluster' | 'prioritise' | 'decide' | 'assign' | 'close';
@@ -35,7 +54,9 @@ export type ActionItemStatus = 'proposed' | 'confirmed' | 'done' | 'declined';
 export type SessionKind = 'async' | 'live';
 export type Modality = 'chat' | 'online' | 'hybrid';
 export type MediaConsent = 'not_needed' | 'pending' | 'granted' | 'refused' | 'withdrawn';
-export type SessionStatus = 'scheduled' | 'running' | 'ended' | 'cancelled';
+/** The session states of the specification (5.2). `confirming` is reserved
+ *  for a session whose summary waits for the group's consent. */
+export type SessionStatus = 'scheduled' | 'live' | 'confirming' | 'closed' | 'cancelled';
 export type StakeholderRole = 'receives_protocol' | 'invited_to_followups';
 
 export interface StepOption {
@@ -105,9 +126,14 @@ export interface FacilitationSettings {
   subscribedAt?: string;
   /** ISO time since which the kernel refuses the subscription. */
   refusedSince?: string;
-  /** The subscription is gone for good: nothing is posted for this
-   *  facilitation any more, whoever subscribes to the conversation later. */
-  orphaned?: boolean;
+  /** The facilitation runs under execution scopes of the kernel. Absent for
+   *  one that began before 1.4.0 and was not taken over yet. */
+  scoped?: boolean;
+  /** How the kernel was last told to deliver the conversation's messages. */
+  readMode?: 'all' | 'addressed' | 'none';
+  /** Refusals of the execution authorization the group or the operator was
+   *  told about, by code: each is said once. */
+  refusalsSaid?: string[];
 }
 
 export interface Facilitation {
