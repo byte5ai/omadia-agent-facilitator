@@ -165,3 +165,47 @@ test('criterion 49 (stop): scheduled sessions are cancelled, a live one closes w
   const closings = await listClosings(h.db.pool, f.id);
   assert.ok(closings.filter((c) => c.kind === 'session' && c.sessionId !== null).every((c) => c.resultStatus !== null));
 });
+
+test('criterion 59: at the deadline the last session closes and the evaluation waits for its confirmation; an objection ends it with an abort report naming it, also across a restart', { skip: PG_SKIP }, async () => {
+  for (const outcome of ['objection', 'consent'] as const) {
+    const name = `sc59-${outcome}`;
+    const home = h.kernel.conversation(`${name}-home`, [ANNA, BERT, CARA]);
+    const chat = h.kernel.conversation(`${name}-chat`, [ANNA, BERT, CARA]);
+    const goal = `Charter ${name}`;
+    const deadline = inMinutes(180);
+    await tool(home, 'facilitation_start', { goal, definitionOfDone: 'Everybody can live with the charter', deadline, agenda: [{ kind: 'collect', title: 'Values' }, { kind: 'discuss', title: 'Discuss' }] });
+    await tool(home, 'facilitation_open');
+    await tool(home, 'facilitation_session', { action: 'schedule', title: 'Last call', start: inMinutes(60), end: deadline, modality: 'online' });
+    await h.kernel.linkRequest(chat, 'anna', `@mira link this chat to ${goal}`);
+    await h.settle();
+    const f = await h.facilitation(home);
+    h.clock.advance(61 * MINUTE_MS);
+    await h.tick();
+    assert.equal((await sessionNamed(f.id, 'Last call'))?.status, 'live');
+    // The deadline: the session closes, its summary needs confirmation, the evaluation waits.
+    h.clock.advance(120 * MINUTE_MS);
+    await h.tick();
+    await h.tick();
+    assert.equal((await sessionNamed(f.id, 'Last call'))?.status, 'confirming');
+    assert.equal((await h.facilitation(home)).phase, 'active', 'waiting, not evaluated');
+    assert.equal((await h.facilitation(home)).settings.deadlineWait, true);
+    // Meanwhile nothing else changes.
+    const before = (await store.listContributions(h.db.pool, f.id)).length;
+    await say(home, 'cara', 'One more value');
+    assert.equal((await store.listContributions(h.db.pool, f.id)).length, before);
+    await h.restart();
+    if (outcome === 'objection') await say(chat, 'bert', 'objection: that is not what we said');
+    h.clock.advance(25 * HOUR_MS);
+    await h.tick();
+    await h.tick();
+    const after = await h.facilitation(home);
+    if (outcome === 'objection') {
+      assert.equal(after.phase, 'aborted');
+      assert.match(after.closeReason ?? '', /the summary of the session "Last call" is not confirmed/);
+    } else {
+      assert.notEqual(after.phase, 'active', 'evaluated once the confirmation ended');
+      assert.doesNotMatch(after.closeReason ?? '', /summary of the session/);
+    }
+    assert.equal(after.settings.deadlineWait, undefined);
+  }
+});

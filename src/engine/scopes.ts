@@ -143,6 +143,17 @@ async function wantedDeadline(engine: EngineCore, f: Facilitation, kind: Executi
     const until = f.followupPolicy.meeting ? Date.parse(f.followupPolicy.meeting.to) : NaN;
     return bounded(Number.isFinite(until) ? until : now + DAY_MS);
   }
+  // active, in its bounded deadline wait (5.6): until the waiting session
+  // closings have ended, bounded by their own limits.
+  if (f.settings.deadlineWait === true) {
+    const waiting = await engine.db().query<{ until: Date | null }>(
+      `SELECT max(coalesce(window_ends_at, absolute_until)) AS until FROM plg_omadia_agent_facilitator_closings
+        WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND ended_at IS NULL`,
+      [f.id],
+    );
+    const until = waiting.rows[0]?.until;
+    if (until) return bounded(until.getTime() + SCOPE_MARGIN_MS);
+  }
   // active: the facilitation's deadline, or a runoff that runs beyond it;
   // without a deadline the facilitation's maximum duration.
   const runoff = await engine.db().query<{ round_deadline: Date | null }>(
@@ -457,7 +468,7 @@ export async function syncScopes(engine: EngineCore, facilitationId: string, onP
     if (row.kind === 'active' || row.kind === 'follow_up') {
       const wanted = await wantedDeadline(engine, f, row.kind);
       if (wanted && Math.abs(wanted.getTime() - row.deadline.getTime()) > MINUTE_MS) {
-        const moved = await execution.extendScope(row.scopeId, { deadline: wanted.toISOString() });
+        const moved = await execution.extendScope(row.scopeId, { deadline: wanted.toISOString(), ...(row.kind === 'active' && f.settings.deadlineWait === true ? { deadlineWait: true } : {}) });
         if (moved.outcome === 'extended') await engine.db().query(`UPDATE ${TABLE} SET deadline = $2 WHERE id = $1`, [row.id, new Date(moved.scope.deadline)]);
         else engine.log(`facilitation ${f.id}: the deadline of its ${row.kind} scope could not be moved to ${wanted.toISOString()} (${moved.code}: ${moved.message})`);
       }

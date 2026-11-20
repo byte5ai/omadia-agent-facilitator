@@ -197,7 +197,7 @@ byte5ai/omadia `docs/adr/`.
   and Telegram without Teams.
 
 
-## Sessions and linked session conversations (spec 5.2, 5.3, 6.3; ADR-0025 in byte5ai/omadia)
+## Sessions and linked session conversations (spec 5.2, 5.3, 6.3; ADR-0026 in byte5ai/omadia)
 
 - `src/engine/sessionLinks.ts`: link requests (`onLinkRequest`) name a running facilitation;
   only an active home participant, from inside the target chat, links it. The kernel's

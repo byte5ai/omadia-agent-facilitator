@@ -41,10 +41,10 @@ import { onClosed, onConcluding } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
 import { PRIORITY, isPositiveReaction, normaliseCommand, registerInboundHandler } from './inbound.js';
 import { scheduleJob } from './jobs.js';
-import { onAborted } from './lifecycle.js';
+import { abortInWork, onAborted } from './lifecycle.js';
 import { isAgreement } from './proposals.js';
 import { closingEventId, confirmationWindowMs, finalPatch, getClosingByEvent, markDocument, openClosing, patchClosing, resultStatusWords, stoppedMark, undeliveredMark } from './resultStatus.js';
-import { registerJobHandler } from './scheduler.js';
+import { onDeadlineWait, registerJobHandler } from './scheduler.js';
 import { onConfirmingAnswer, sessionTitleOf } from './sessionLinks.js';
 
 const SESSIONS = 'plg_omadia_agent_facilitator_sessions';
@@ -161,6 +161,7 @@ async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resen
   if (session && session.status !== 'closed') await update(w.tx, SESSIONS, { id: session.id }, { status: 'closed', endedAt: session.endedAt ?? w.now });
   w.bump();
   await w.event('session_closing_final', 'engine', { closingId: closing.id, sessionId: closing.sessionId, status: mark.status, ...(mark.status === 'not_confirmed' ? { reason: mark.reason } : {}) });
+  await resumeDeadline(w);
   if (!session) return;
   protocolToHome(w, session, closing, mark);
   const t = sessionTexts(w.f.language);
@@ -355,7 +356,67 @@ const homeConsentAnswers: InboundHandler = async ({ w, record }) => {
   return consentAnswer(w, record);
 };
 
+// ── the deadline waits for session closings (spec 5.6, criterion 59) ───────
+
+const openConfirmations = (w: Work): Promise<Closing[]> =>
+  rows<Closing>(w.tx, `SELECT * FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND ended_at IS NULL`, [w.f.id]);
+
+/**
+ * At the deadline: every live session is closed first; while session
+ * closings that require confirmation are open, the evaluation waits (the
+ * `active` scope is held in its bounded deadline wait, and only consent
+ * answers, status and stop are taken). When they have ended it runs once
+ * with their outcomes: a summary that was not confirmed ends the
+ * facilitation with an abort report naming it.
+ */
+async function deadlineWait(w: Work): Promise<boolean> {
+  if (w.f.phase !== 'active') return false;
+  for (const session of await store.listSessions(w.tx, w.f.id)) {
+    if (session.kind === 'live' && session.status === 'live') await endLive(w, session);
+  }
+  const open = await openConfirmations(w);
+  if (open.length > 0) {
+    if (w.f.settings.deadlineWait !== true) {
+      await w.patch({ settings: { ...w.f.settings, deadlineWait: true } });
+      await w.event('deadline_wait', 'engine', { closings: open.map((c) => c.id) });
+    }
+    return true;
+  }
+  if (w.f.settings.deadlineWait !== true) return false;
+  const { deadlineWait: _done, ...settings } = w.f.settings;
+  await w.patch({ settings });
+  const waited = (await w.event('deadline_wait_ended', 'engine', {}), await listClosingsOf(w));
+  const failed = waited.find((c) => c.kind === 'session' && c.requiresConfirmation && c.resultStatus === 'not_confirmed');
+  if (!failed) return false;
+  const session = failed.sessionId ? await getSession(w.tx, failed.sessionId) : undefined;
+  const t = sessionTexts(w.f.language);
+  await abortInWork(w, {
+    reason: t.notConfirmedAtDeadline(session ? sessionTitleOf(session, w.f) : '', resultStatusWords(w.f.language, { status: 'not_confirmed', reason: failed.resultReason ?? 'objection' })),
+    actor: 'engine',
+    detail: { closingId: failed.id },
+  });
+  return true;
+}
+
+const listClosingsOf = (w: Work): Promise<Closing[]> => rows<Closing>(w.tx, `SELECT * FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 ORDER BY started_at`, [w.f.id]);
+
+/** During the deadline wait nothing else changes: only consent answers to
+ *  the waiting summaries (read before this), status and stop. */
+const duringDeadlineWait: InboundHandler = async ({ w, record }) => {
+  if (w.f.settings.deadlineWait !== true || w.f.phase !== 'active' || record.kind === 'reaction') return undefined;
+  return { outcome: 'deadline_wait' };
+};
+
+/** A waiting session closing ended: the deadline is evaluated now. */
+async function resumeDeadline(w: Work): Promise<void> {
+  if (w.f.settings.deadlineWait !== true || w.f.phase !== 'active') return;
+  if ((await openConfirmations(w)).length > 0) return;
+  await scheduleJob(w, 'deadline', `after-sessions:${String(w.now.getTime())}`, w.now, {});
+}
+
 export function installSessionClose(): void {
+  onDeadlineWait(deadlineWait);
+  registerInboundHandler(duringDeadlineWait, PRIORITY.proposals + 5);
   registerInboundHandler(homeConsentAnswers, PRIORITY.proposals - 1);
   onConfirmingAnswer((w, session, record) => consentAnswer(w, record, session));
   registerJobHandler('session_confirmation', async (w, job) => windowEnded(w, String(job.payload['closingId'])));

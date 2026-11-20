@@ -210,6 +210,9 @@ export interface FacilitationSettings {
   scoped?: boolean;
   /** How the kernel was last told to deliver the conversation's messages. */
   readMode?: 'all' | 'addressed' | 'none';
+  /** The deadline passed and the evaluation waits for session closings that
+   *  require confirmation (spec 5.6). */
+  deadlineWait?: boolean;
   /** Refusals of the execution authorization the group or the operator was
    *  told about, by code: each is said once. */
   refusalsSaid?: string[];

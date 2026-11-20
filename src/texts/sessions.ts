@@ -44,6 +44,7 @@ const enTexts = {
   adoptOutdated: (name: string): string => `${name}, that transcript text was corrected since. Reply "mine" to the corrected version.`,
   adoptNoStep: (name: string): string => `${name}, no step is open, so there is nothing to adopt it for right now.`,
   adoptedMarker: 'adopted from the transcript',
+  notConfirmedAtDeadline: (session: string, status: string): string => `the summary of the session "${session}" is ${status}, so the definition of done is not met at the deadline`,
 };
 
 export type SessionTexts = typeof enTexts;
@@ -89,6 +90,7 @@ const deTexts: SessionTexts = {
   adoptOutdated: (name) => `${name}, dieser Transkript-Text wurde inzwischen korrigiert. Antworte mit „meins“ auf die korrigierte Fassung.`,
   adoptNoStep: (name) => `${name}, gerade ist kein Schritt offen, für den du es übernehmen könntest.`,
   adoptedMarker: 'aus dem Transkript übernommen',
+  notConfirmedAtDeadline: (session, status) => `die Zusammenfassung der Sitzung „${session}“ ist ${status}, damit ist die Definition of Done zur Deadline nicht erfüllt`,
 };
 
 export const sessionTexts = (language: 'de' | 'en'): SessionTexts => (language === 'de' ? deTexts : enTexts);
