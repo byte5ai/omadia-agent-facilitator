@@ -25,6 +25,7 @@ import { onFollowupEnded } from './actionItems.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
+import { onClosingEnded } from './closing.js';
 import { onAborted } from './lifecycle.js';
 import { getClosing, listClosings } from './resultStatus.js';
 import { scheduleJob } from './jobs.js';
@@ -545,17 +546,20 @@ export function installCapabilities(): void {
     // A stop revokes the scheduling: an agreed invitation survives a regular
     // close, never a stop (spec 5.2, criterion 52).
     if (w.f.followupPolicy.meeting && w.f.closeReason !== 'stopped') await scheduleJob(w, 'followup_meeting', 'once', w.now, {});
-    // With action items the grant ends with their follow-up; otherwise after
-    // a fixed time.
-    if (w.f.followupState !== 'active') await scheduleJob(w, 'grant_revoke', 'end', new Date(w.now.getTime() + w.config.followupGrantDays * DAY_MS), {});
+    // With action items the grant ends with their follow-up; after a stop
+    // with the dispatch of its protocol (spec 5.2); otherwise after a fixed time.
+    if (w.f.followupState !== 'active' && w.f.closeReason !== 'stopped') await scheduleJob(w, 'grant_revoke', 'end', new Date(w.now.getTime() + w.config.followupGrantDays * DAY_MS), {});
+  });
+  onClosingEnded(async (w) => {
+    if (w.f.closeReason === 'stopped' || w.f.phase === 'aborted') await revoke(w, 'period_ended');
   });
   // An abort dispatches its protocol too, marked `aborted`, to the same
   // recipients (spec 5.11, criterion 39). Nothing to dispatch for one that
   // was never opened.
   onAborted(async (w) => {
     if (w.f.activatedAt === null) return;
+    // The grant ends with the dispatch of the abort's protocol.
     await dispatchFinalProtocol(w);
-    await scheduleJob(w, 'grant_revoke', 'end', new Date(w.now.getTime() + w.config.followupGrantDays * DAY_MS), {});
   });
   registerExternalJob('protocol_mail', protocolMail);
   registerExternalJob('followup_meeting', followupMeeting);

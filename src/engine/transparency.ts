@@ -22,6 +22,7 @@ import { openProposal, registerProposalKind } from './proposals.js';
 import { voteCardFits } from './cards.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
+import { listClosings } from './resultStatus.js';
 
 export type HandshakeNote = (w: Work) => Promise<{ perception?: string; notes?: string[] }>;
 const handshakeNotes: HandshakeNote[] = [];
@@ -96,7 +97,9 @@ async function reportToInitiator(w: Work, outcome: string): Promise<void> {
   }
   const t = texts(w.f.language);
   const protocol = await buildProtocol(w.tx, w.f);
-  sendWithProtocol(w, { principalId: initiator.principalId }, { purpose: 'initiator_report', key: 'report', text: t.initiatorReport(initiator.displayName, outcome, protocol) }, protocol);
+  // Part of the closing: never after its dispatch limit.
+  const closing = (await listClosings(w.tx, w.f.id)).find((c) => c.kind === (w.f.phase === 'aborted' ? 'abort' : 'result'));
+  sendWithProtocol(w, { principalId: initiator.principalId }, { purpose: 'initiator_report', key: 'report', text: t.initiatorReport(initiator.displayName, outcome, protocol) }, protocol, closing);
   await w.event('initiator_report', 'engine', { to: initiator.principalId });
 }
 

@@ -325,7 +325,7 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
       return;
     }
     // A refusal that does not pass on its own is not tried twenty times.
-    if (isFinalRefusal(refusedBy) || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
+    if (isFinalRefusal(refusedBy) || (attempts >= MAX_ESSENTIAL_ATTEMPTS && row.closingId === null)) {
       await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
       await store.appendEvent(client, { facilitationId: f.id, kind: 'delivery_failed', actor: 'engine', occurredAt: engine.now(), payload: { purpose: row.purpose, to: row.targetKind === 'group' ? 'group' : row.targetPrincipal, error, attempts } });
       engine.log(`facilitation ${f.id}: essential ${row.purpose} is given up, it is not authorized (${error})`);
@@ -351,7 +351,9 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
     return;
   }
   const permanent = row.targetKind === 'direct' && PERMANENT_DIRECT_FAILURES.has(result.code);
-  if (permanent || attempts >= MAX_ESSENTIAL_ATTEMPTS) {
+  // A closing document is bounded by its closing's own limits (7 days of
+  // delivery, spec 5.2), not by the retry count.
+  if (permanent || (attempts >= MAX_ESSENTIAL_ATTEMPTS && row.closingId === null)) {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'failed', lastError: error });
     await store.appendEvent(client, {
       facilitationId: f.id,

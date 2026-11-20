@@ -123,8 +123,14 @@ test('44. a result that never gets delivered: delivery status "not delivered", r
   await startActive(h, conv, FREE);
   for (let i = 0; i < 40; i += 1) h.kernel.sendFaults.push({ code: 'throttled', message: 'try later' });
   await tool(conv, 'facilitation_close');
-  for (let i = 0; i < 30; i += 1) {
-    h.clock.advance(2 * HOUR_MS);
+  // Retried for the whole delivery part (7 days), not for a retry count.
+  for (let i = 0; i < 6; i += 1) {
+    h.clock.advance(DAY_MS);
+    await h.tick();
+  }
+  assert.equal((await closingOf(conv)).deliveryStatus, 'pending', 'still within its 7 days');
+  for (let i = 0; i < 2; i += 1) {
+    h.clock.advance(DAY_MS);
     await h.tick();
   }
   h.kernel.sendFaults.length = 0;

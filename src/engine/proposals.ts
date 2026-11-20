@@ -227,6 +227,9 @@ const proposalAnswers: InboundHandler = async ({ w, record, author, command }) =
   if (!proposal) return undefined;
   // After `concluding` only the consent answers to the final summary count.
   if (w.f.phase === 'concluding' && kindOf(proposal).windowOnly !== true) return undefined;
+  // A window decided at its end takes no answer after it (while its
+  // electorate is verified again, nothing new counts).
+  if (kindOf(proposal).windowOnly === true && w.now.getTime() >= proposal.windowEndsAt.getTime()) return undefined;
   const t = texts(w.f.language);
 
   if (record.kind === 'reaction') {

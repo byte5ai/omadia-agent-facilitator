@@ -100,6 +100,14 @@ export function parseFacilitatorLimits(raw: string): Record<string, FacilitatorL
   return out;
 }
 
+/** The grace must leave room under the horizon, or no due date could ever
+ *  be agreed: otherwise both fall back to their defaults. */
+function followupWindow(grace: number, horizon: number, invalid: (key: string, value: unknown, fallback: unknown) => void): { followupGraceDays: number; followupHorizonDays: number } {
+  if (grace < horizon) return { followupGraceDays: grace, followupHorizonDays: horizon };
+  invalid('followup_grace_days', grace, CONFIG_DEFAULTS.followupGraceDays);
+  return { followupGraceDays: CONFIG_DEFAULTS.followupGraceDays, followupHorizonDays: CONFIG_DEFAULTS.followupHorizonDays };
+}
+
 export type ConfigReader = <T>(key: string) => T | undefined;
 
 export function isValidTimezone(zone: string): boolean {
@@ -222,8 +230,7 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     followupGrantDays: positive('followup_grant_days', CONFIG_DEFAULTS.followupGrantDays),
     // At most 72 hours (spec 5.2): a larger value is capped, not refused.
     finalConfirmWindowHours: Math.min(positive('final_confirm_window_hours', CONFIG_DEFAULTS.finalConfirmWindowHours), 72),
-    followupGraceDays: positive('followup_grace_days', CONFIG_DEFAULTS.followupGraceDays),
-    followupHorizonDays: positive('followup_horizon_days', CONFIG_DEFAULTS.followupHorizonDays, { integer: true }),
+    ...followupWindow(positive('followup_grace_days', CONFIG_DEFAULTS.followupGraceDays), positive('followup_horizon_days', CONFIG_DEFAULTS.followupHorizonDays, { integer: true }), invalid),
     facilitatorLimits: (() => {
       const raw = read<unknown>('facilitator_limits');
       if (raw === undefined || raw === null || String(raw).trim() === '') return CONFIG_DEFAULTS.facilitatorLimits;
