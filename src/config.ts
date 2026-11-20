@@ -244,3 +244,86 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     mediaConsentExplicit: read<unknown>('media_consent_explicit') === true || read<unknown>('media_consent_explicit') === 'true',
   };
 }
+
+// ---------------------------------------------------------------------------
+// Per-facilitator defaults (spec 2043 §5.6, §7; byte5ai/omadia#2066)
+// ---------------------------------------------------------------------------
+
+/** Decision methods a facilitator may name as its default for a vote. */
+export const DEFAULT_DECISION_METHODS = ['ranked', 'single', 'approval', 'consent'] as const;
+export type DefaultDecisionMethod = (typeof DEFAULT_DECISION_METHODS)[number];
+
+/** Methods a facilitator may name as its default for a prioritisation. */
+export const DEFAULT_PRIORITISATION_METHODS = ['ranked', 'approval'] as const;
+export type DefaultPrioritisationMethod = (typeof DEFAULT_PRIORITISATION_METHODS)[number];
+
+/** The keys of the archetype's `agent_settings` (manifest.yaml) the engine reads. */
+export const FACILITATOR_SETTING_KEYS = ['default_decision_method', 'default_prioritisation_method', 'ranked_points', 'reminder_offsets_hours'] as const;
+
+/** At most this many entries in a list setting; the kernel enforces the same. */
+const MAX_LIST_ITEMS = 10;
+
+/** The instance configuration with one facilitator's own defaults applied. */
+export interface FacilitatorConfig extends EngineConfig {
+  /** Method of a deciding step whose template names a vote, and of a vote
+   *  that names options without a method. Absent: the template's method. */
+  readonly defaultDecisionMethod?: DefaultDecisionMethod;
+  /** Method of a prioritising step. Absent: the template's method. */
+  readonly defaultPrioritisationMethod?: DefaultPrioritisationMethod;
+}
+
+const isRecord = (raw: unknown): raw is Record<string, unknown> => raw !== null && typeof raw === 'object' && !Array.isArray(raw);
+
+/** A list of positive numbers, as the kernel stores it (or as a '24, 2' text). */
+function readNumberList(raw: unknown): number[] | undefined {
+  if (typeof raw === 'string') return parseNumberList(raw);
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_LIST_ITEMS) return undefined;
+  return raw.every((v) => typeof v === 'number' && Number.isFinite(v) && v > 0) ? [...(raw as number[])] : undefined;
+}
+
+/**
+ * The defaults the operator set for ONE facilitator (the kernel's archetype
+ * agent settings, `AgentProfile.archetypeSettings`) over the instance
+ * settings. Pure. A setting that is absent leaves the instance value; one
+ * that is not valid is ignored and logged, so a bad value never takes a
+ * facilitation down. A kernel without agent settings passes `undefined`.
+ */
+export function facilitatorConfig(base: EngineConfig, settings: unknown, log: (msg: string) => void = () => {}): FacilitatorConfig {
+  if (!isRecord(settings)) return base;
+  const ignored = (key: string, value: unknown): void => {
+    log(`facilitator setting '${key}' = ${JSON.stringify(value)} is not valid — the instance setting applies`);
+  };
+  const out: { -readonly [K in keyof FacilitatorConfig]?: FacilitatorConfig[K] } = {};
+
+  const decision = settings['default_decision_method'];
+  if (decision !== undefined && decision !== null) {
+    if (typeof decision === 'string' && (DEFAULT_DECISION_METHODS as readonly string[]).includes(decision)) out.defaultDecisionMethod = decision as DefaultDecisionMethod;
+    else ignored('default_decision_method', decision);
+  }
+  const prioritisation = settings['default_prioritisation_method'];
+  if (prioritisation !== undefined && prioritisation !== null) {
+    if (typeof prioritisation === 'string' && (DEFAULT_PRIORITISATION_METHODS as readonly string[]).includes(prioritisation)) {
+      out.defaultPrioritisationMethod = prioritisation as DefaultPrioritisationMethod;
+    } else ignored('default_prioritisation_method', prioritisation);
+  }
+  const points = settings['ranked_points'];
+  if (points !== undefined && points !== null) {
+    const parsed = readNumberList(points);
+    if (parsed) out.rankedPoints = parsed;
+    else ignored('ranked_points', points);
+  }
+  const offsets = settings['reminder_offsets_hours'];
+  if (offsets !== undefined && offsets !== null) {
+    const parsed = readNumberList(offsets);
+    // Descending, like the instance setting: "first reminder" is the furthest.
+    if (parsed) out.reminderOffsetsHours = [...parsed].sort((a, b) => b - a);
+    else ignored('reminder_offsets_hours', offsets);
+  }
+  return { ...base, ...out };
+}
+
+/** The settings of a kernel profile, read without trusting its type: a kernel
+ *  older than the agent-settings contract has no such field. */
+export function profileSettings(profile: unknown): unknown {
+  return isRecord(profile) ? profile['archetypeSettings'] : undefined;
+}

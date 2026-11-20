@@ -5,6 +5,7 @@ import { test } from 'node:test';
 
 import { FACILITATION_ENGINE_CAPABILITY } from '@omadia/plugin-api';
 
+import { DEFAULT_DECISION_METHODS, DEFAULT_PRIORITISATION_METHODS, FACILITATOR_SETTING_KEYS } from '../src/config.js';
 import { KERNEL_SERVICE_NAMES } from '../src/kernel.js';
 import { ENGINE_VERSION } from '../src/plugin.js';
 
@@ -55,6 +56,22 @@ test('the archetype block states the facilitator descriptor the kernel enforces'
 test('working modes are not omitted: a moderation mode is allowed, the kernel refuses identity replacement (spec 2043 §2.3)', () => {
   assert.ok(!archetypeList('omits').includes('persona_skill'));
   assert.ok(!/^    persona_skill:/m.test(manifest));
+});
+
+test('the archetype declares the per-facilitator defaults the engine reads, each in en and de', () => {
+  const block = /^  agent_settings:\n((?:    .*\n)+)/m.exec(manifest)?.[1] ?? '';
+  const keys = [...block.matchAll(/^    - key: "([^"]+)"$/gm)].map((m) => m[1]);
+  assert.deepEqual(keys, [...FACILITATOR_SETTING_KEYS]);
+  const fields = block.split(/^    - key: /m).slice(1);
+  for (const field of fields) {
+    const key = /^"([^"]+)"/.exec(field)?.[1] ?? '';
+    assert.match(field, /^      type: "(enum|number_list)"$/m, `${key}: type`);
+    for (const text of ['label', 'help']) assert.match(field, new RegExp(`^      ${text}:\\n        en: "[^"]+"\\n        de: "[^"]+"$`, 'm'), `${key}: ${text} in en and de`);
+    const options = [...field.matchAll(/^        - value: "([^"]+)"$/gm)].map((m) => m[1]);
+    if (key === 'default_decision_method') assert.deepEqual(options, [...DEFAULT_DECISION_METHODS]);
+    if (key === 'default_prioritisation_method') assert.deepEqual(options, [...DEFAULT_PRIORITISATION_METHODS]);
+    if (/type: "number_list"/.test(field)) assert.match(field, /^      max_items: 10$/m, `${key}: max_items`);
+  }
 });
 
 test('the German manifest texts use the product terms', () => {

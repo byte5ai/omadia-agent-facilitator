@@ -104,7 +104,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           deadlineInMinutes: { type: 'number', description: 'A deadline given as a span from now: the minutes, e.g. 90 for "in 90 minutes" or "in anderthalb Stunden", 120 for "in two hours". The engine works out the time; you need not know what time it is. Never drop a deadline the request names: pass it here or in deadline.' },
           timezone: { type: 'string', description: 'IANA timezone of the group.' },
           language: { type: 'string', enum: ['de', 'en'] },
-          method: { type: 'string', enum: [...METHODS], description: 'When the facilitation is one decision: ranked (points per rank), single (one option), approval (any set), consent (no standing objection), assignment (one confirmed name per item).' },
+          method: { type: 'string', enum: [...METHODS], description: 'When the facilitation is one decision: ranked (points per rank), single (one option), approval (any set), consent (no standing objection), assignment (one confirmed name per item). When the group names options but no method, leave it out: the facilitator\'s default method is used if the operator set one.' },
           options: { type: 'array', items: { type: 'string' }, description: 'The options to decide between, or the items to assign. The engine labels them A, B, C.' },
           points: { type: 'array', items: { type: 'number' }, description: 'Ranked vote: points per rank, first rank first. Default 3, 2, 1.' },
           statement: { type: 'string', description: 'Consent: the proposal put to the group.' },
@@ -186,6 +186,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(typeof args['protocolByMail'] === 'boolean' ? { protocolByMail: args['protocolByMail'] } : {}),
           ...(statusAt ? { followUpStatusAt: statusAt } : {}),
           ...(method ? { decision: { method, options: stringList(args, 'options') ?? [], ...(points ? { points } : {}), ...(statement ? { statement } : {}) } } : {}),
+          ...(!method && (stringList(args, 'options') ?? []).length > 0 ? { undecidedOptions: stringList(args, 'options') ?? [] } : {}),
         });
         engine.ensureAttached(ctx.agentSlug);
         const people = [...result.participants.map((p) => p.displayName), ...result.expected].join(', ') || 'not known yet';
