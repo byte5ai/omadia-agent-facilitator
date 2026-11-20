@@ -136,9 +136,13 @@ byte5ai/omadia `docs/adr/`.
 
 ## Contributions (spec 5.3, 5.14; #2061 criteria 23, 50; ADR 0025)
 
-- Recording is quiet: a contribution in the announced format posts nothing (no
-  kernel contract for a reaction exists; add one there, never post an echo instead).
-  Only free-text readings ask their author once; a declined reading gets one line.
+- Recording is quiet: a contribution in the announced format posts no text. Where the
+  channel declares reactions (`conversationSend@2` `capabilities(channelType).reactions` and
+  `react`, plugin-api 1.82.0) the engine queues an outbox row with `reaction` (purpose
+  `reaction`, droppable, not a message) that sets a thumbs-up on the person's message,
+  named by its stored event id; elsewhere nothing is said. Card answers get no reaction
+  (no message of their own). Only free-text readings ask their author once; a declined
+  reading gets one line.
 - One message, several parts: `part_index` (migration 0009); `recordParts` retires
   all parts of the older revision; `listLiveBySourceMessage` lists them.
 - A step that closed keeps what it counted: edits and deletions of its messages are

@@ -177,7 +177,35 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
   if ((input.partIndex ?? 0) === 0) await supersedeByMessage(w, input.record.messageId);
   const contribution = await writePart(w, input);
   if (input.interpreted && !input.quiet) await askToConfirm(w, input, [contribution], [input.summary]);
+  else if (!input.interpreted && !input.quiet) acknowledge(w, input.record);
   return contribution;
+}
+
+/** The channel can set a reaction as the facilitator (kernel `react`, and
+ *  the channel declares `reactions`). */
+export function canReact(w: Pick<Work, 'engine' | 'f'>): boolean {
+  const sends = w.engine.deps.kernel.conversationSend();
+  return typeof sends?.react === 'function' && sends.capabilities(w.f.channelType)?.reactions === true;
+}
+
+/**
+ * Recording is quiet (spec 5.3, 5.14): a contribution in the announced format
+ * gets a reaction on its message where the channel supports reactions, and
+ * nothing otherwise. A card answer has no message of its own to react to.
+ */
+export function acknowledge(w: Work, record: ConversationMessageRecord): void {
+  if (record.kind !== 'created' && record.kind !== 'edited') return;
+  if (!canReact(w)) return;
+  w.post({
+    purpose: 'reaction',
+    key: record.eventId,
+    to: 'group',
+    deliveryClass: 'droppable',
+    versionBound: false,
+    requiredPhases: ['configuring', 'active', 'concluding'],
+    text: '',
+    reaction: { messageEventId: record.eventId },
+  });
 }
 
 /** One part of a message with several contributions. */
@@ -203,6 +231,7 @@ export async function recordParts(
     written.push(await writePart(w, { ...input, ...part, partIndex: index }));
   }
   if (input.interpreted && !input.quiet) await askToConfirm(w, input, written, input.parts.map((p) => p.summary));
+  else if (!input.interpreted && !input.quiet) acknowledge(w, input.record);
   return written;
 }
 

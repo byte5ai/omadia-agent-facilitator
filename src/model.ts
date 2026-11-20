@@ -500,6 +500,9 @@ export interface OutboxPayload {
   cardFallbackText?: string;
   /** Not a post: an update of a card that was posted before. */
   cardUpdate?: { cardId: string; update: CardUpdate };
+  /** Not a post: a reaction on a person's message (spec 5.14), named by the
+   *  kernel's id of its stored inbound event. */
+  reaction?: { messageEventId: string };
 }
 
 export interface OutboxRow {

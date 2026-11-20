@@ -11,6 +11,12 @@
   meeting chat ends only the session membership. Migration `0011_session_electorate`.
 - **Guests answer the media consent of their session** (spec 6.3): asked in the meeting chat,
   decided by the session's members; anyone there can object.
+- **Quiet recording with a reaction (spec 5.14, #2061).** Where the channel
+  declares reactions (kernel `conversationSend@2` `react`, plugin-api 1.82.0),
+  a contribution in the announced format gets a thumbs-up on its message,
+  set as the facilitator's own identity; elsewhere recording stays silent. A
+  reaction is not counted as a message of the facilitation. Feature-detected:
+  an older kernel or a channel without reactions changes nothing.
 
 ### Added
 

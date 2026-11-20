@@ -46,6 +46,7 @@ import type {
   ScopedAgentTurnService,
   ScopedConversationSendRequest,
   ScopedConversationSendService,
+  ScopedReactionOutcome,
   ScopedSendOutcome,
   SendAuthorization,
   SessionCapabilitiesService,
@@ -324,6 +325,10 @@ export class FakeKernel {
   /** What the channel declares about question cards. Undefined: a kernel or a
    *  channel without them (no `capabilities`, no `updateCard`). */
   cardSupport: CardSupport | undefined;
+  /** The channel sets reactions as the facilitator (spec 5.14). */
+  reactionSupport = false;
+  /** Every reaction the facilitator set. */
+  readonly reactions: Array<{ as: string; conversationId: string; messageId: string; reaction: string }> = [];
   /** Every card update the engine asked for. */
   readonly cardUpdates: Array<{ as: string; conversationId: string; cardMessageId: string; update: CardUpdate }> = [];
   /** The channel declares cards and still refuses the next ones (too large, ...). */
@@ -1261,7 +1266,19 @@ export class FakeKernel {
   }
 
   private readonly sendService: ScopedConversationSendService = {
-    capabilities: () => (this.cardSupport ? { asOwnIdentity: true, mentions: true, poll: true, card: this.cardSupport } : { asOwnIdentity: true, mentions: true, poll: true }),
+    capabilities: () => ({ asOwnIdentity: true, mentions: true, poll: true, ...(this.cardSupport ? { card: this.cardSupport } : {}), reactions: this.reactionSupport }),
+    // As the kernel (plugin-api 1.82.0): drawn like a post, set only on a
+    // message stored for this process in this conversation.
+    react: async (request): Promise<ScopedReactionOutcome> => {
+      if (!this.reactionSupport) return { outcome: 'unreachable', code: 'channel_error', message: 'this channel cannot set reactions' };
+      const granted = this.authorizeSend(request.agentSlug, { ...request.authorization, emission: 'data' } as never, 'post', { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId });
+      if ('outcome' in granted) return granted;
+      const scope = { agentSlug: request.agentSlug, channelType: request.channelType, conversationId: request.conversationId, processId: request.authorization.processId };
+      const record = this.forScope(scope as never).find((e) => e.eventId === request.messageEventId);
+      if (!record) return { outcome: 'unreachable', code: 'not_permitted', message: 'no such message of this process in this conversation', authorizationId: granted.authorizationId };
+      this.reactions.push({ as: request.agentSlug, conversationId: request.conversationId, messageId: record.messageId, reaction: request.reaction });
+      return { outcome: 'reacted', authorizationId: granted.authorizationId };
+    },
     sendToConversation: async (request): Promise<ScopedSendOutcome> => {
       const granted = this.authorizeSend(request.agentSlug, request.authorization, 'post', { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId });
       if ('outcome' in granted) return granted;
