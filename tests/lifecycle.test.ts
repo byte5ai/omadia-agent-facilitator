@@ -81,7 +81,7 @@ test('"status" and "stop" from the group work without mentioning the facilitator
   await h.settle();
   const status = h.kernel.groupPosts(conv).at(-1)?.text ?? '';
   assert.match(status, /Status: running/);
-  assert.match(status, /Still open: Anna, Bert, Cara, Dave/);
+  assert.match(status, /Still open: 4 contributions/);
 
   await h.kernel.say(conv, 'dave', 'stop');
   await h.settle();
@@ -159,13 +159,13 @@ test('membership: joining is welcomed and counted, leaving keeps contributions, 
   assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /Welcome, Dave/);
   let people = await store.listParticipants(h.db.pool, f.id);
   assert.deepEqual(people.find((p) => p.principalId === 'user:dave')?.source, 'joined');
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Anna, Bert, Cara, Dave/);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: 4 contributions/);
 
   h.kernel.leave(conv, 'cara');
   await h.settle();
   people = await store.listParticipants(h.db.pool, f.id);
   assert.equal(people.find((p) => p.principalId === 'user:cara')?.status, 'left');
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Anna, Bert, Dave$/m);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: 3 contributions$/m);
 
   h.kernel.leave(conv, 'anna');
   await h.settle();

@@ -73,7 +73,10 @@ async function statusAfterClose(q: Queryable, f: Facilitation): Promise<string> 
   // Everybody whose contribution counted, over all steps: the step that was
   // open when it ended is not what the question is about any more.
   const counted = new Set((await store.listContributions(q, f.id)).filter((c) => c.status === 'valid').map((c) => c.participantPrincipal));
-  const items = (await store.listActionItems(q, f.id)).filter((a) => a.status !== 'declined');
+  // A nomination nobody accepted is no action item but an open point (criterion 37).
+  const all = await store.listActionItems(q, f.id);
+  const items = all.filter((a) => a.status === 'confirmed' || a.status === 'done');
+  const notAccepted = all.filter((a) => a.status === 'proposed').map((a) => t.notAccepted(a.number, a.description, name(a.ownerPrincipal)));
   // Taking on an action item is a contribution as well.
   for (const item of items) if (item.status === 'confirmed' || item.status === 'done') counted.add(item.ownerPrincipal);
   const decisions = Array.isArray(f.result?.['decisions']) ? (f.result['decisions'] as unknown[]).filter((d): d is string => typeof d === 'string') : [];
@@ -85,11 +88,16 @@ async function statusAfterClose(q: Queryable, f: Facilitation): Promise<string> 
     contributed: participants.filter((p) => counted.has(p.principalId)).map((p) => p.displayName),
     actions: items.map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), formatWhen(a.dueDate, f.timezone, f.language), t.actionStatusWords[a.status])),
     open: items.filter((a) => a.status === 'confirmed').length,
+    notAccepted,
     ...(f.followupState === 'active' && f.followupEndsAt ? { until: formatWhen(f.followupEndsAt, f.timezone, f.language) } : {}),
   });
 }
 
-export async function statusText(q: Queryable, f: Facilitation): Promise<string> {
+/** Who asks: the group gets counts and never the names of who is missing;
+ *  a home participant asking privately gets the names (spec 5.7, crit. 16). */
+export type StatusAudience = 'group' | 'private';
+
+export async function statusText(q: Queryable, f: Facilitation, audience: StatusAudience = 'group'): Promise<string> {
   if (f.phase === 'closed' || f.phase === 'aborted') return statusAfterClose(q, f);
   const t = texts(f.language);
   const participation = await participationOf(q, f);
@@ -105,9 +113,10 @@ export async function statusText(q: Queryable, f: Facilitation): Promise<string>
     ...(step && steps.length > 1 ? { step: `${String(step.position)}/${String(steps.length)} ${step.title}` } : {}),
     dodVersion: dod?.version ?? 1,
     definitionOfDone: dod?.text ?? '',
-    contributed: participation.contributed.map((p) => p.displayName),
     // The named people nobody was matched to are still to come.
-    missing: [...participation.missing.map((p) => p.displayName), ...(step ? expectedNames(f) : [])],
+    ...(audience === 'private'
+      ? { contributed: participation.contributed.map((p) => p.displayName), missing: [...participation.missing.map((p) => p.displayName), ...(step ? expectedNames(f) : [])] }
+      : { contributed: participation.contributed.length, missing: participation.missing.length + (step ? expectedNames(f).length : 0) }),
     ...(step?.method && options.length > 0 ? { options: t.options(options) } : {}),
     ...(counted && counted.tally.votes + counted.tally.abstentions > 0
       ? { tally: options.map((o) => `${o.label} ${String(counted.tally.scores[o.key] ?? 0)}`).join(', ') }

@@ -37,3 +37,23 @@ byte5ai/omadia `docs/adr/`.
 - `facilitations.ended_at`: when `ended` or `aborted` was reached; retention counts from here.
 - `stakeholders.disclosure` (`full`, `existence`, `none`, default `existence`): what a
   stakeholder's protocol says about parts left out for them.
+
+## Status and personal acceptance (spec 5.4, 5.7; criteria 16, 37)
+
+- `statusText(q, f, audience)`: `group` (default; status command in the group and the
+  `facilitation_status` tool) gives counts only ("Contributed: 2 of 4", "Still open: 2
+  contributions") and never names anybody; `private` (a home participant asking in a private
+  chat) gets the names. Before the close the group status names nobody, also not who
+  contributed. After the close it names who contributed: the protocol every participant
+  received lists the contributions with their authors anyway, and nobody is "missing" then.
+- A nomination its owner has not accepted when the result is frozen is an open point
+  ("#2 Order drinks: proposed for Cara, not accepted") in the result, the protocol and the
+  status after close, never an action item; it gets no reminder and starts no follow-up.
+- A "yes" to such a nomination after the freeze (a reply to or reaction on its own message, or
+  a free-standing one when nothing else is open) is answered once (`late_acceptance`) and
+  changes nothing. It is only seen while the conversation is still read for this facilitation
+  (`concluding`, a confirmation window, or `following_up`); an `ended` facilitation reads
+  nothing, so a "yes" after that gets no answer (deliberate: nothing is tracked after `ended`).
+- Assignment steps are not affected: an assignment is decided only with every item confirmed
+  by its nominee, otherwise it stays open (and aborts at the deadline), so no unaccepted
+  assignment nomination reaches a frozen result.

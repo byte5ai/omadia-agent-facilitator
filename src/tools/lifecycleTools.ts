@@ -210,7 +210,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       engine,
       {
         name: 'facilitation_status',
-        description: 'The current state of this facilitation as the engine computed it: phase, who has contributed, who has not, deadline. Use it instead of counting yourself. Also works after the close while action items are followed up.',
+        description: 'The current state of this facilitation as the engine computed it: phase, how many have contributed and how many contributions are still open (never names: in the group nobody is named as missing), deadline. Use it instead of counting yourself. Also works after the close while action items are followed up.',
       },
       async (_args, ctx) => {
         // Also after the close while action items are followed up: then a

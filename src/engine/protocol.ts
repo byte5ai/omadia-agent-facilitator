@@ -20,10 +20,16 @@ export async function closingSummary(w: { tx: Queryable; f: Facilitation }): Pro
   const participants = await store.listParticipants(w.tx, w.f.id);
   const name = (id: string): string => participants.find((p) => p.principalId === id)?.displayName ?? t.unnamedPerson;
   const decisions = (await store.listDecisions(w.tx, w.f.id)).map((d) => d.statement);
-  const actions = (await store.listActionItems(w.tx, w.f.id))
-    .filter((a) => a.status !== 'declined')
+  const items = await store.listActionItems(w.tx, w.f.id);
+  // Only what its owner accepted is an action item; a nomination nobody
+  // accepted is an open point (spec 5.4, criterion 37).
+  const actions = items
+    .filter((a) => a.status === 'confirmed' || a.status === 'done')
     .map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), formatWhen(a.dueDate, w.f.timezone, w.f.language), t.actionStatusWords[a.status]));
-  const open = (await store.listEvents(w.tx, w.f.id, ['parked'])).map((e) => String(e.payload['topic']));
+  const open = [
+    ...items.filter((a) => a.status === 'proposed').map((a) => t.notAccepted(a.number, a.description, name(a.ownerPrincipal))),
+    ...(await store.listEvents(w.tx, w.f.id, ['parked'])).map((e) => String(e.payload['topic'])),
+  ];
   return { decisions, actions, open };
 }
 
@@ -81,8 +87,11 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     ...section(p.clusters, clusters.map((c) => `${c.label} (${String(c.memberContributionIds.length)})`)),
     ...section(p.summaries, of(['summary_confirmed']).map((e) => String(e.payload['text']))),
     ...section(p.decisions, decisions.map((d) => (d.rationale ? `${d.statement} (${p.rationale}: ${d.rationale})` : d.statement))),
-    ...section(p.actions, actions.map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), when(a.dueDate), t.actionStatusWords[a.status]))),
-    ...section(p.parked, of(['parked']).map((e) => String(e.payload['topic']))),
+    ...section(p.actions, actions.filter((a) => a.status === 'confirmed' || a.status === 'done').map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), when(a.dueDate), t.actionStatusWords[a.status]))),
+    ...section(p.parked, [
+      ...actions.filter((a) => a.status === 'proposed').map((a) => t.notAccepted(a.number, a.description, name(a.ownerPrincipal))),
+      ...of(['parked']).map((e) => String(e.payload['topic'])),
+    ]),
     ...section(p.changes, of(CHANGE_EVENTS).map((e) => `${when(e.occurredAt)}: ${changeLine(e)}`)),
     ...section(p.capabilities, of(CAPABILITY_EVENTS).map((e) => `${when(e.occurredAt)}: ${String(e.payload['summary'] ?? e.kind)}`)),
     '',

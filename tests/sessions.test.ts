@@ -220,11 +220,11 @@ test('adaptation mid-session: transcribed speech appears, the facilitator announ
   assert.equal(last(conv), 'Anna, I heard you say: Thai. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.');
   let spoken = (await store.listContributions(h.db.pool, f.id)).find((c) => c.source === 'speech');
   assert.deepEqual([spoken?.status, spoken?.sourceMessageId], ['unconfirmed', null]);
-  assert.match(await tool(conv, 'facilitation_status'), /Contributed: nobody yet/);
+  assert.match(await tool(conv, 'facilitation_status'), /Contributed: 0 of \d+/);
   await say(conv, 'anna', 'yes');
   spoken = (await store.listContributions(h.db.pool, f.id)).find((c) => c.source === 'speech');
   assert.equal(spoken?.status, 'valid');
-  assert.match(await tool(conv, 'facilitation_status'), /Contributed: Anna\n/);
+  assert.match(await tool(conv, 'facilitation_status'), /Contributed: 1 of \d+\n/);
 
   await say(conv, 'bert', 'stop listening');
   assert.equal(last(conv), 'Bert asked me to stop. I no longer process the speech of this call.');

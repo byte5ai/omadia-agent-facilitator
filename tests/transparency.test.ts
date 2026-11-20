@@ -70,7 +70,7 @@ test('status: phase, who contributed, who is missing, provisional tally, deadlin
   await say(conv, 'bert', 'B');
   await say(conv, 'cara', 'status');
   const status = last(conv);
-  assert.match(status, /^Status: running\. Goal: Pick a venue\nDefinition of done \(version 1\): A venue is chosen\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: A = Harbour, B = Old Town, C = Castle Hill\nProvisional tally: Harbour 3, Old Town 5, Castle Hill 0\nDeadline: /);
+  assert.match(status, /^Status: running\. Goal: Pick a venue\nDefinition of done \(version 1\): A venue is chosen\nContributed: 2 of 4\nStill open: 2 contributions\nOptions: A = Harbour, B = Old Town, C = Castle Hill\nProvisional tally: Harbour 3, Old Town 5, Castle Hill 0\nDeadline: /);
 });
 
 test('the result goes to the group first, then to the initiator with the protocol; an initiator who left receives nothing', { skip: PG_SKIP }, async () => {
@@ -185,7 +185,7 @@ test('definition of done changes without a restart: proposal, consent window, an
   const tail = posts(conv).slice(-2);
   assert.match(tail[0] ?? '', /^Accepted, nobody objected: change the definition of done to \(version 3\): A venue is chosen and booked/);
   assert.equal(tail[1], 'The definition of done is now version 3: A venue is chosen and booked');
-  assert.match(await tool(conv, 'facilitation_status'), /Definition of done \(version 3\): A venue is chosen and booked\nContributed: Anna\n/);
+  assert.match(await tool(conv, 'facilitation_status'), /Definition of done \(version 3\): A venue is chosen and booked\nContributed: 1 of \d+\n/);
   assert.equal((await h.facilitation(conv)).phase, 'active', 'the facilitation ran on; the vote Anna cast still counts');
 });
 
@@ -227,14 +227,14 @@ test('changing the method: ballots that no longer fit are retired and the people
   await tool(conv, 'facilitation_propose_change', { change: 'method', points: [5, 3, 1] });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
   assert.match(last(conv), /^"Pick a venue" is now decided like this\. .*Points per rank: 5\/3\/1/);
-  assert.match(await tool(conv, 'facilitation_status'), /Contributed: Anna, Bert\nStill open: Cara\nOptions: A = Harbour, B = Old Town, C = Castle Hill\nProvisional tally: Harbour 5, Old Town 8, Castle Hill 0/);
+  assert.match(await tool(conv, 'facilitation_status'), /Contributed: 2 of 3\nStill open: 1 contribution\nOptions: A = Harbour, B = Old Town, C = Castle Hill\nProvisional tally: Harbour 5, Old Town 8, Castle Hill 0/);
 
   await tool(conv, 'facilitation_propose_change', { change: 'method', method: 'single', options: ['Harbour', 'Old Town'], replaceOptions: true });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
   const tail = posts(conv).slice(-2);
   assert.match(tail[0] ?? '', /is now decided like this\. How to vote: write the one option you choose/);
   assert.equal(tail[1], 'Contributions made under the old rules no longer fit. Please contribute again: Anna and Bert.');
-  assert.match(await tool(conv, 'facilitation_status'), /Contributed: nobody yet\nStill open: Anna, Bert, Cara/);
+  assert.match(await tool(conv, 'facilitation_status'), /Contributed: 0 of 3\nStill open: 3 contributions/);
   await say(conv, 'anna', 'A');
   await say(conv, 'bert', 'A');
   await say(conv, 'cara', 'B');

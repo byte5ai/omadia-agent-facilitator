@@ -42,11 +42,11 @@ test('ranked vote: every ballot is recorded and echoed without a model, the last
 
   await say(conv, 'anna', 'A > C > B');
   assert.equal(last(conv), 'Recorded for you, Anna: A (Harbour) > C (Castle Hill) > B (Old Town)');
-  assert.match(await status(conv), /Contributed: Anna\nStill open: Bert, Cara, Dave/);
+  assert.match(await status(conv), /Contributed: 1 of 4\nStill open: 3 contributions/);
   await say(conv, 'bert', 'a, b');
-  assert.match(await status(conv), /Contributed: Anna, Bert\nStill open: Cara, Dave/);
+  assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
   await say(conv, 'cara', 'Castle Hill > Harbour');
-  assert.match(await status(conv), /Still open: Dave/);
+  assert.match(await status(conv), /Still open: 1 contribution/);
   assert.equal((await h.facilitation(conv)).phase, 'active');
 
   await say(conv, 'dave', 'B > A > C');
@@ -76,7 +76,7 @@ test('a ballot can be changed until the conclusion: by a new message and by edit
   const all = await contributions(conv);
   assert.deepEqual(all.map((c) => c.status).sort(), ['superseded', 'superseded', 'valid']);
   assert.equal(all.find((c) => c.status === 'valid')?.sourceRevision, 1, 'the edited ballot counts in its latest revision');
-  assert.match(await status(conv), /Contributed: Anna\n/);
+  assert.match(await status(conv), /Contributed: 1 of \d+\n/);
 });
 
 test('a duplicate option is refused with one hint and does not count; a quoted ballot records nothing', { skip: PG_SKIP }, async () => {
@@ -87,12 +87,12 @@ test('a duplicate option is refused with one hint and does not count; a quoted b
   const posts = h.kernel.groupPosts(conv).length;
   await h.engine.receive('mira', bad);
   assert.equal(h.kernel.groupPosts(conv).length, posts);
-  assert.match(await status(conv), /Contributed: nobody yet/);
+  assert.match(await status(conv), /Contributed: 0 of \d+/);
 
   await say(conv, 'cara', 'A > B > C', { quoted: true });
   await say(conv, 'cara', 'B > A', { forwarded: true });
   assert.deepEqual((await contributions(conv)).map((c) => c.status), ['ambiguous']);
-  assert.match(await status(conv), /Still open: Anna, Bert, Cara, Dave/);
+  assert.match(await status(conv), /Still open: 4 contributions/);
 });
 
 test('a ballot the facilitator read from free text counts only after its author confirmed, then concludes', { skip: PG_SKIP }, async () => {
@@ -126,7 +126,7 @@ test('a tie starts a runoff among the tied options; the runoff decides', { skip:
   assert.equal(step?.round, 2);
   assert.deepEqual(step?.roundOptions?.map((o) => o.key), ['A', 'B']);
   assert.equal(step?.roundDeadline?.toISOString(), new Date(h.clock.now().getTime() + 12 * 3600_000).toISOString(), 'default runoff window: 12 h');
-  assert.match(await status(conv), /Still open: Anna, Bert, Cara, Dave/, 'the runoff is a new round');
+  assert.match(await status(conv), /Still open: 4 contributions/, 'the runoff is a new round');
 
   await say(conv, 'anna', 'C');
   assert.equal(last(conv), 'Anna, the runoff is only between Harbour and Old Town. Please choose among these.');

@@ -44,7 +44,7 @@ test('the status lists the options with their keys', { skip: PG_SKIP }, async ()
   await startActive(h, conv, WEEKEND);
   await ask(conv, 'anna', 'A');
   await ask(conv, 'bert', 'status');
-  assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /Noch offen: Bert, Cara, Dave\nOptionen: A = Samstag, B = Sonntag\nVorläufiger Stand: Samstag 1, Sonntag 0\n/);
+  assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /Noch offen: 3 Beiträge\nOptionen: A = Samstag, B = Sonntag\nVorläufiger Stand: Samstag 1, Sonntag 0\n/);
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Optionen: A = Samstag, B = Sonntag/);
 });
 

@@ -228,7 +228,7 @@ test('retrospective: ideas without mentions, clusters and decisions by consent, 
   assert.match(protocol, /Decisions:\n- Standups are capped at 10 minutes \(Rationale: they ran long and cost focus\)\n- One meeting-free day per week \(Rationale: too many meetings\)/);
   assert.match(protocol, /Action items:\n- #1 Set a 10-minute timer in standups \(Cara, due .*\): open\n- #2 Block Wednesdays in the team calendar \(Bert, due .*\): open/);
   assert.match(protocol, /Clusters confirmed by the group:\n- Meetings \(2\)\n- Working together \(2\)/);
-  assert.match(protocol, /Open points \(parking lot\):\n- Tooling for release notes/);
+  assert.match(protocol, /Open points:\n- Tooling for release notes/);
 
   // Follow-up: the owner is reminded before the due date.
   const dms = h.kernel.dms.length;

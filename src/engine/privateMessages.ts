@@ -55,7 +55,7 @@ async function answerStatus(engine: EngineCore, taking: readonly Taking[], numbe
   const meant = number !== undefined ? taking[number - 1] : taking.length === 1 ? first : undefined;
   // Several facilitations and no number that names one: ask, do not guess.
   if (!meant) return reply(engine, first.f, texts(first.f.language).privateStatus.which(taking.map((t) => t.f.goal)), 'status');
-  const text = await statusText(engine.db(), meant.f);
+  const text = await statusText(engine.db(), meant.f, 'private');
   await engine.work(meant.f.id, (w) => w.event('private_status', meant.person.principalId, {}));
   return reply(engine, meant.f, text, 'status');
 }

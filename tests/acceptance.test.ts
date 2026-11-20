@@ -73,18 +73,18 @@ test('1. field scenario: four people, ranked vote 3/2/1, deadline in three days,
 
   await say(conv, 'anna', '@Mira A > C > B');
   assert.equal(last(conv), 'Recorded for you, Anna: A (Harbour) > C (Castle Hill) > B (Old Town)');
-  assert.match(await status(conv), /Contributed: Anna\nStill open: Bert, Cara, Dave/);
+  assert.match(await status(conv), /Contributed: 1 of 4\nStill open: 3 contributions/);
 
   await say(conv, 'bert', 'B > A'); // no mention
   assert.equal(last(conv), 'Recorded for you, Bert: B (Old Town) > A (Harbour)');
-  assert.match(await status(conv), /Contributed: Anna, Bert\nStill open: Cara, Dave/);
+  assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
 
   await h.restart(); // a middleware restart between the second and the third vote
-  assert.match(await status(conv), /Contributed: Anna, Bert\nStill open: Cara, Dave/);
+  assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
 
   await say(conv, 'cara', 'A > B > C'); // no mention
   assert.equal(last(conv), 'Recorded for you, Cara: A (Harbour) > B (Old Town) > C (Castle Hill)');
-  assert.match(await status(conv), /Contributed: Anna, Bert, Cara\nStill open: Dave/);
+  assert.match(await status(conv), /Contributed: 3 of 4\nStill open: 1 contribution/);
   assert.equal((await h.facilitation(conv)).phase, 'active');
 
   const dms = h.kernel.dms.length;
@@ -292,7 +292,7 @@ test('6. ambiguity: exactly one clarifying question, not counted until resolved'
   assert.equal(posts(conv).filter((t) => t.startsWith('Anna, ')).length, 1);
   await say(conv, 'bert', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'active', 'the ambiguous ballot does not count');
-  assert.match(await status(conv), /Still open: Anna/);
+  assert.match(await status(conv), /Still open: 1 contribution/);
   await say(conv, 'anna', 'A > B');
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   assert.equal((await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'ambiguous').length, 1);
@@ -318,21 +318,31 @@ test('7. definition of done changes without a restart: proposal, consent window,
   const current = await store.currentDod(h.db.pool, f.id);
   assert.deepEqual([current?.version, current?.text, current?.proposedBy], [3, 'A venue is chosen by all four', 'user:bert']);
   assert.equal((await h.facilitation(conv)).id, f.id, 'the same facilitation, no restart of the facilitation');
-  assert.match(await status(conv), /Definition of done \(version 3\).*\nContributed: Anna/);
+  assert.match(await status(conv), /Definition of done \(version 3\).*\nContributed: 1 of \d+/);
 });
 
-test('8. membership: a joiner is welcomed and counted, a leaver keeps the contribution and is no longer missing, an initiator who leaves gets neither contributions nor the report', { skip: PG_SKIP }, async () => {
+test('8. membership: a joiner is welcomed and counted, a leaver keeps the contribution and is no longer missing (the group status gives counts, a private one names), an initiator who leaves gets neither contributions nor the report', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('ac-08', [ANNA, BERT, CARA]);
   await startActive(h, conv, VENUES);
   await say(conv, 'bert', 'A');
   h.kernel.join(conv, DAVE);
   await h.settle();
   assert.match(last(conv), /^Welcome, Dave\./);
-  assert.match(await status(conv), /Still open: Anna, Cara, Dave/);
+  assert.match(await status(conv), /Still open: 3 contributions/);
 
   h.kernel.leave(conv, 'bert');
   await h.settle();
-  assert.match(await status(conv), /Contributed: Bert\nStill open: Anna, Cara, Dave/, 'the contribution stays; Bert is not "missing"');
+  assert.match(await status(conv), /Contributed: 1 of 4\nStill open: 3 contributions/, 'the contribution stays; Bert is not "missing"');
+  // Criterion 16: in the group nobody is named as missing, also on request;
+  // the same question in a private chat gets the names.
+  await say(conv, 'cara', 'status');
+  assert.doesNotMatch(last(conv), /Anna|Cara|Dave/, 'the group status names nobody');
+  assert.match(last(conv), /Still open: 3 contributions/);
+  // Cara takes part in earlier facilitations of this suite too: the newest one is this one.
+  const which = (await h.kernel.privateMessage('mira', 'cara', 'status')) ?? '';
+  const n = which.split('\n').filter((l) => /^\d+\. /.test(l)).length;
+  const own = n === 0 ? which : ((await h.kernel.privateMessage('mira', 'cara', `status ${String(n)}`)) ?? '');
+  assert.match(own, /Contributed: Bert\nStill open: Anna, Cara, Dave/);
 
   const dms = h.kernel.dms.length;
   h.kernel.leave(conv, 'anna');
@@ -366,9 +376,9 @@ test('9. several facilitators: two facilitators in two chats and one facilitator
   await say(two, 'bert', 'B');
   await say(one, 'bert', 'C');
   await say(three, 'bert', 'C');
-  assert.match(await status(one), /Goal: Venue for the summer party\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Harbour 3, Old Town 2, Castle Hill 3/);
-  assert.match(await status(two), /Goal: Name of the new product\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Nova 1, Atlas 1/);
-  assert.match(await tool(three, 'facilitation_status', {}, 'jonas'), /Goal: Budget round\n.*\nContributed: Anna, Bert\nStill open: Cara, Dave\nOptions: .*\nProvisional tally: Tools 1, Travel 0, Training 2/);
+  assert.match(await status(one), /Goal: Venue for the summer party\n.*\nContributed: 2 of 4\nStill open: 2 contributions\nOptions: .*\nProvisional tally: Harbour 3, Old Town 2, Castle Hill 3/);
+  assert.match(await status(two), /Goal: Name of the new product\n.*\nContributed: 2 of 4\nStill open: 2 contributions\nOptions: .*\nProvisional tally: Nova 1, Atlas 1/);
+  assert.match(await tool(three, 'facilitation_status', {}, 'jonas'), /Goal: Budget round\n.*\nContributed: 2 of 4\nStill open: 2 contributions\nOptions: .*\nProvisional tally: Tools 1, Travel 0, Training 2/);
 
   // Every post comes from the right bot.
   assert.ok(h.kernel.groupPosts(one).every((p) => p.as === 'mira') && h.kernel.groupPosts(two).every((p) => p.as === 'mira'));
@@ -672,9 +682,9 @@ test('19. adaptation: transcribed audio appears mid-session; announced, consent 
   const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Bert', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Recorded for Bert as unconfirmed/);
-  assert.match(await status(conv), /Contributed: Anna\nStill open: Bert, Cara/, 'not counted before Bert confirmed');
+  assert.match(await status(conv), /Contributed: 1 of 3\nStill open: 2 contributions/, 'not counted before Bert confirmed');
   await say(conv, 'bert', 'yes');
-  assert.match(await status(conv), /Contributed: Anna, Bert\nStill open: Cara/);
+  assert.match(await status(conv), /Contributed: 2 of 3\nStill open: 1 contribution/);
   const now = await h.facilitation(conv);
   assert.deepEqual([now.id, now.phase], [f.id, 'active'], 'the same facilitation, no restart');
   assert.match(await status(conv), /Provisional tally: Thai 1, Pizza 1/, "Anna's earlier vote still counts");
