@@ -152,7 +152,7 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
       if (!step || step.status === 'closed') throw new Refusal('bad_input', 'That step is not open or still to come.');
       const methodConfig = {
         ...step.methodConfig,
-        ...(change.method === 'ranked' ? { points: change.points ?? step.methodConfig['points'] ?? [...w.config.rankedPoints] } : {}),
+        ...(change.method === 'ranked' ? { points: change.points ?? step.methodConfig['points'] ?? [...(w.f.settings.rankedPoints ?? w.config.rankedPoints)] } : {}),
         ...(change.method === 'consent' ? { statement: change.statement ?? step.title } : {}),
       };
       const rules = rulesOf(w.f, { ...step, method: change.method, options: change.options, roundOptions: null, methodConfig }).join(' ');
@@ -179,7 +179,7 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
     case 'deadline': {
       const deadline = new Date(String(payload['deadline']));
       // Reminders nobody asked for follow the new deadline.
-      await w.patch({ deadline, ...(w.f.reminderPolicy.asked === true ? {} : { reminderPolicy: { offsetsHours: reminderOffsetsFor(deadline.getTime() - w.now.getTime(), w.config.reminderOffsetsHours) } }) });
+      await w.patch({ deadline, ...(w.f.reminderPolicy.asked === true ? {} : { reminderPolicy: { offsetsHours: reminderOffsetsFor(deadline.getTime() - w.now.getTime(), w.f.reminderPolicy.baseHours ?? w.config.reminderOffsetsHours), ...(w.f.reminderPolicy.baseHours ? { baseHours: w.f.reminderPolicy.baseHours } : {}) } }) });
       await scheduleDeadlineJobs(w);
       announce(t.changed.deadline(formatWhen(deadline, w.f.timezone, w.f.language)));
       return;

@@ -43,10 +43,10 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(opts: { config?: Partial<EngineConfig>; start?: string; poolMax?: number } = {}): Promise<Harness> {
+export async function createHarness(opts: { config?: Partial<EngineConfig>; start?: string; poolMax?: number; channel?: string } = {}): Promise<Harness> {
   const db = await openTestDb(opts.poolMax);
   const clock = fakeClock(opts.start);
-  const kernel = new FakeKernel(db.pool, clock);
+  const kernel = new FakeKernel(db.pool, clock, opts.channel);
   const logs: string[] = [];
   const hooks: EngineHooks = {};
   const config = { ...CONFIG_DEFAULTS, language: 'en' as const, ...(opts.config ?? {}) };

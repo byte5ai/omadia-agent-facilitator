@@ -17,7 +17,8 @@ import { randomUUID } from 'node:crypto';
 import type { ChannelReadinessReport } from '@omadia/plugin-api';
 
 import { DAY_MS, MINUTE_MS } from '../clock.js';
-import { isValidTimezone } from '../config.js';
+import { facilitatorConfig, isValidTimezone, profileSettings } from '../config.js';
+import type { FacilitatorConfig } from '../config.js';
 import { missingServices, rosterStatusOf } from '../kernel.js';
 import type { Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
@@ -76,6 +77,9 @@ export interface ConfigureInput extends ConversationRef {
   reminderMinutesBefore?: unknown;
   /** The decision the facilitation is about, when it is one vote. */
   decision?: DecisionSetup;
+  /** Options the request named without a method: they become a vote with
+   *  the facilitator's default decision method, when it has one. */
+  undecidedOptions?: string[];
   /** An agenda of its own instead of the format's template. */
   agenda?: AgendaStepInput[];
   /** Action items are followed up after the close. */
@@ -138,7 +142,7 @@ const isCompleteVote = (d: DecisionSetup | undefined): d is DecisionSetup =>
  *  agenda of their own. */
 export function agendaFor(
   input: Pick<ConfigureInput, 'goal' | 'decision' | 'format' | 'agenda' | 'language'>,
-  config: { rankedPoints: readonly number[]; language: 'de' | 'en' },
+  config: Pick<FacilitatorConfig, 'rankedPoints' | 'language' | 'defaultDecisionMethod' | 'defaultPrioritisationMethod'>,
 ): NewStep[] {
   const language = input.language ?? config.language;
   if (input.agenda && input.agenda.length > 0) {
@@ -157,7 +161,7 @@ export function agendaFor(
       // deciding step without options gets them during the facilitation.
       const fromSetup = !applied && input.decision ? input.decision : undefined;
       applied = true;
-      return decidingStep(fromSetup ? input.goal : title, fromSetup ?? { method: template.method, options: [] }, config, template.kind);
+      return decidingStep(fromSetup ? input.goal : title, fromSetup ?? { method: templateMethod(template.kind, template.method, config), options: [] }, config, template.kind);
     });
   }
   const d = input.decision;
@@ -167,6 +171,20 @@ export function agendaFor(
     throw new Refusal('bad_options', d.method === 'assignment' ? 'Name at least one item to assign.' : 'A vote needs at least two options.');
   }
   return [decidingStep(input.goal, d, config)];
+}
+
+/** The method of a template's deciding step: the facilitator's default for
+ *  its kind, else the template's. A consent step stays consent: it is what
+ *  its format is about (alignment), not a choice between options. */
+function templateMethod(
+  kind: NewStep['kind'],
+  method: MethodId,
+  config: Pick<FacilitatorConfig, 'defaultDecisionMethod' | 'defaultPrioritisationMethod'>,
+): MethodId {
+  if (method === 'consent' || method === 'assignment') return method;
+  if (kind === 'decide') return config.defaultDecisionMethod ?? method;
+  if (kind === 'prioritise') return config.defaultPrioritisationMethod ?? method;
+  return method;
 }
 
 /** The definition of done an agenda implies when the set-up names none. */
@@ -288,11 +306,20 @@ async function storeRoll(tx: Queryable, facilitationId: string, roll: Roll, lang
 }
 
 /** Create a facilitation in `configuring`, or adjust the one being set up. */
-export async function configureFacilitation(engine: EngineCore, input: ConfigureInput): Promise<ConfigureResult> {
+export async function configureFacilitation(engine: EngineCore, request: ConfigureInput): Promise<ConfigureResult> {
   const db = engine.db();
   const now = engine.now();
-  const { kernel, config } = engine.deps;
+  const { kernel } = engine.deps;
   const notes: string[] = [];
+  // Name, language and the facilitator's own defaults come from the kernel's
+  // record of the facilitator, not from the model. Its defaults sit over the
+  // instance settings; what it does not set, the instance decides.
+  const profile = await kernel.agentTurn()?.getProfile(request.agentSlug);
+  const config = facilitatorConfig(engine.deps.config, profileSettings(profile), (m) => engine.log(`${request.agentSlug}: ${m}`));
+  const input: ConfigureInput =
+    !request.decision && config.defaultDecisionMethod && request.undecidedOptions && request.undecidedOptions.length > 0
+      ? { ...request, decision: { method: config.defaultDecisionMethod, options: request.undecidedOptions } }
+      : request;
 
   let deadline: Date | undefined;
   if (input.deadline !== undefined) {
@@ -379,7 +406,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         // The rule that only the missing list had forced goes with it.
         ...(forced ? { closeRule: forced } : roll && existing.settings.openRoster === true ? { closeRule: 'all_contributed' as const } : {}),
         ...(roll ? { settings } : {}),
-        ...(askedHours ? { reminderPolicy: { offsetsHours: askedHours, asked: true } } : derivedHours && existing.reminderPolicy.asked !== true ? { reminderPolicy: { offsetsHours: derivedHours } } : {}),
+        ...(askedHours ? { reminderPolicy: { offsetsHours: askedHours, asked: true } } : derivedHours && existing.reminderPolicy.asked !== true ? { reminderPolicy: { offsetsHours: derivedHours, baseHours: [...config.reminderOffsetsHours] } } : {}),
         ...(input.followUp !== undefined || statusAt || input.protocolByMail !== undefined
           ? { followupPolicy: { ...existing.followupPolicy, ...(input.followUp !== undefined ? { actionItems: input.followUp } : {}), ...(statusAt ? { statusAt: statusAt.toISOString() } : {}), ...(input.protocolByMail !== undefined ? { protocolMail } : {}) } }
           : {}),
@@ -388,9 +415,6 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
     return { facilitation, created: false, participants: await store.listParticipants(db, existing.id), expected: [...expectedNames(facilitation)], notes };
   }
 
-  // Name and language come from the kernel's record of the facilitator, not
-  // from the model.
-  const profile = await kernel.agentTurn()?.getProfile(input.agentSlug);
   for (const check of startChecks) await check(engine, input.agentSlug, input.language ?? profileLanguage(profile?.language) ?? config.language);
 
   // Without execution scopes nothing a facilitation does would be authorized:
@@ -514,12 +538,16 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         timezone: input.timezone ?? config.timezone,
         closeRule,
         electorateSource: roll.source,
-        reminderPolicy: askedHours ? { offsetsHours: askedHours, asked: true } : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a) },
+        reminderPolicy: askedHours
+          ? { offsetsHours: askedHours, asked: true }
+          : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a), baseHours: [...config.reminderOffsetsHours] },
         followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}), ...(protocolMail ? { protocolMail: true } : {}) },
         settings: {
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
+          rankedPoints: [...config.rankedPoints],
+          ...(config.defaultDecisionMethod ? { defaultDecisionMethod: config.defaultDecisionMethod } : {}),
           scoped: true,
           readMode: 'all',
           ...(profile?.displayName ? { facilitatorName: profile.displayName } : {}),

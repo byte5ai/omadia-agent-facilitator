@@ -124,6 +124,10 @@ export interface ReminderPolicy {
   offsetsHours: number[];
   /** The group asked for these; otherwise they follow from the deadline. */
   asked?: boolean;
+  /** The offsets the derived ones come from: the facilitator's own default,
+   *  else the instance setting, as at the start. A deadline change derives
+   *  from them again. Absent before 1.6: the instance setting. */
+  baseHours?: number[];
 }
 
 export interface FollowupPolicy {
@@ -155,6 +159,11 @@ export interface FacilitationSettings {
   changeWindowHours: number;
   runoffWindowHours: number;
   confirmWindowMinutes: number;
+  /** Points per rank for a ranked vote set later, as at the start (the
+   *  facilitator's default, else the instance setting). */
+  rankedPoints?: number[];
+  /** The facilitator's default method for a vote that names none. */
+  defaultDecisionMethod?: MethodId;
   /** The facilitator's display name, from the kernel's profile at start. */
   facilitatorName?: string;
   /** The initiator's name as the kernel stated it with the starting call,

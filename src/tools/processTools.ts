@@ -142,7 +142,8 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
           const open = steps.find((s) => s.status === 'open');
           const target = open && (open.method !== null || ['decide', 'prioritise', 'assign'].includes(open.kind)) ? open : steps.find((s) => s.status === 'pending' && s.method !== null);
           if (!target) throw new Refusal('no_deciding_step', 'The agenda has no deciding step that is open or still to come.');
-          const finalMethod = method ?? target.method;
+          // Named here, else the step's own, else the facilitator's default.
+          const finalMethod = method ?? target.method ?? w.f.settings.defaultDecisionMethod;
           if (!finalMethod) throw new Refusal('bad_input', "'method' is required for this step.");
           if (finalMethod !== 'consent' && (!options || options.length < (finalMethod === 'assignment' ? 1 : 2))) throw new Refusal('bad_options', 'Name the options (at least two; for an assignment at least one item).');
           await setDecision(w, target, {
@@ -150,7 +151,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             options: toOptions(options ?? []),
             methodConfig: {
               ...target.methodConfig,
-              ...(finalMethod === 'ranked' ? { points: points ?? target.methodConfig['points'] ?? [...w.config.rankedPoints] } : {}),
+              ...(finalMethod === 'ranked' ? { points: points ?? target.methodConfig['points'] ?? [...(w.f.settings.rankedPoints ?? w.config.rankedPoints)] } : {}),
               ...(finalMethod === 'consent' ? { statement: statement ?? title ?? target.title } : {}),
             },
             ...(title ? { title } : {}),
