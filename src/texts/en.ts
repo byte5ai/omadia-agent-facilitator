@@ -78,6 +78,12 @@ export const en = {
   left: (name: string): string => `${name} has left the conversation. Their contributions so far stay counted.`,
   initiatorLeft: (name: string): string =>
     `${name} started this facilitation and has left the conversation. From now on ${name} receives neither further contributions nor the report.`,
+  /** The fresh member list is not complete: nothing is decided automatically. */
+  electorateUnverified: (): string =>
+    'I cannot verify right now who belongs to this conversation, so I decide nothing automatically for the moment. I check again with the next contribution or reminder.',
+  /** Somebody put a missing person on the list; that person confirms by writing. */
+  participantNamed: (name: string, by: string): string =>
+    `${by} named ${name} as a participant. ${name}, please write here once; from then on you count.`,
 
   words: { abstention: 'abstention', consent: 'consent', objection: 'objection', declined: 'declined' },
 

@@ -213,6 +213,12 @@ const reminder: JobHandler = async (w, job) => {
     await w.event('reminder_skipped', 'engine', { hoursBefore: job.payload['hoursBefore'], lateMinutes: Math.round(lateMs / MINUTE_MS) });
     return;
   }
+  // A decision held for want of a verified list is tried again first (spec
+  // 5.5): if it is taken now, nothing is waiting any more.
+  if (w.f.settings.electorateUnverifiedSince !== undefined) {
+    await advance(w, 'contribution');
+    if (w.f.phase !== 'active') return;
+  }
   const { open, people } = await waitingFor(w);
   const t = texts(w.f.language);
   const deadline = w.f.deadline ? formatWhen(w.f.deadline, w.f.timezone, w.f.language) : undefined;

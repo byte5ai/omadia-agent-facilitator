@@ -51,6 +51,9 @@ export const de: Texts = {
   left: (name) => `${name} hat die Unterhaltung verlassen. Die bisherigen Beiträge bleiben gezählt.`,
   initiatorLeft: (name) =>
     `${name} hat diese Moderation gestartet und die Unterhaltung verlassen. Ab jetzt erhält ${name} weder weitere Beiträge noch den Bericht.`,
+  electorateUnverified: () =>
+    'Ich kann gerade nicht prüfen, wer zu dieser Unterhaltung gehört, und entscheide deshalb vorerst nichts automatisch. Ich prüfe es beim nächsten Beitrag oder bei der nächsten Erinnerung erneut.',
+  participantNamed: (name, by) => `${by} hat ${name} als Teilnehmende:n genannt. ${name}, bitte schreib hier einmal; ab dann zählst du mit.`,
 
   words: { abstention: 'Enthaltung', consent: 'Zustimmung', objection: 'Einwand', declined: 'abgelehnt' },
 

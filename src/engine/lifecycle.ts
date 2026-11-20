@@ -18,18 +18,19 @@ import type { ChannelReadinessReport } from '@omadia/plugin-api';
 
 import { DAY_MS, MINUTE_MS } from '../clock.js';
 import { isValidTimezone } from '../config.js';
-import { missingServices } from '../kernel.js';
+import { missingServices, rosterStatusOf } from '../kernel.js';
 import type { Queryable } from '../db/pool.js';
 import { insertIfAbsent } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { toOptions } from '../methods/ballot.js';
+import { electorateSourceAtStart } from './electorate.js';
 import { FORMATS } from './formats.js';
 import { lifetimeEnd } from './lifetime.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { askedOffsets, reminderOffsetsFor } from './reminders.js';
 import { buildRoll, effectiveCloseRule, expectedNames } from './roll.js';
 import type { Roll } from './roll.js';
-import type { CloseRule, DodCriteria, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
+import type { CloseRule, DodCriteria, ElectorateSource, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
@@ -236,18 +237,23 @@ const PARTICIPANTS_UNKNOWN =
   "The channel cannot list who is in this conversation, so I cannot tell when everybody has voted. Either name the participants (argument 'participants': the names from the request; the person who asked always takes part), then it closes when all of them have voted. Or set a deadline and leave closeRule out, then it is evaluated at the deadline; the definition of done must then not say that it is done when everybody has voted. Nothing was created.";
 
 /** Who takes part, from the channel's member list and the request. */
-async function rollFor(engine: EngineCore, input: ConfigureInput): Promise<Roll> {
+async function rollFor(engine: EngineCore, input: ConfigureInput): Promise<Roll & { source: ElectorateSource }> {
   // Read as the facilitator: its own bot is the one that is in the conversation.
-  const roster = await engine.deps.kernel.rosters()?.getRoster(input.channelType, input.conversationId, { agentSlug: input.agentSlug });
+  // Fresh: the source of the electorate is fixed on this answer (spec 5.5).
+  const roster = await engine.deps.kernel.rosters()?.getRoster(input.channelType, input.conversationId, { agentSlug: input.agentSlug, fresh: true });
   const members = (roster?.participants ?? []).filter((p) => p.isBot !== true);
   const statedName = input.callerDisplayName && !isPlaceholderName(input.callerDisplayName, input.callerPrincipalId) ? input.callerDisplayName : undefined;
-  return buildRoll({
-    members,
-    // A member list without a single person is no answer either.
-    complete: roster !== undefined && !roster.partial && members.length > 0,
-    initiator: { principalId: input.callerPrincipalId, displayName: statedName },
-    named: input.participants,
-  });
+  const source = electorateSourceAtStart(rosterStatusOf(roster), members.length);
+  return {
+    ...buildRoll({
+      members,
+      // A member list without a single person is no answer either.
+      complete: source === 'platform_roster',
+      initiator: { principalId: input.callerPrincipalId, displayName: statedName },
+      named: input.participants,
+    }),
+    source,
+  };
 }
 
 /**
@@ -507,6 +513,7 @@ export async function configureFacilitation(engine: EngineCore, input: Configure
         language,
         timezone: input.timezone ?? config.timezone,
         closeRule,
+        electorateSource: roll.source,
         reminderPolicy: askedHours ? { offsetsHours: askedHours, asked: true } : { offsetsHours: derivedHours ?? [...config.reminderOffsetsHours].sort((a, b) => b - a) },
         followupPolicy: { actionItems: input.followUp === true, leadHours: config.actionReminderLeadHours, ...(statusAt ? { statusAt: statusAt.toISOString() } : {}), ...(protocolMail ? { protocolMail: true } : {}) },
         settings: {

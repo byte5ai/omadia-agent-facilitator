@@ -57,3 +57,31 @@ byte5ai/omadia `docs/adr/`.
 - Assignment steps are not affected: an assignment is decided only with every item confirmed
   by its nominee, otherwise it stays open (and aborts at the deadline), so no unaccepted
   assignment nomination reaches a frozen result.
+
+## Known electorate (spec 5.5, #2061 criteria 35 and 44)
+
+- `facilitations.electorate_source` is fixed at start on a fresh roster
+  query: `platform_roster` when the channel answers `complete` with at least
+  one person, else `declared_list`. The engine reads the roster's `status`
+  (falling back to `partial` only for an older kernel).
+- Platform roster: every automatic completeness or consent decision (a vote
+  closing because everybody voted, a proposal passing at its window's end, a
+  questionnaire complete, the only participant closing) first asks the roster
+  with `fresh: true`. Anything but `complete` holds the decision: one notice
+  in the group, a retry with the next contribution or reminder (a held
+  proposal also an hour later, bounded by the deadline; at the deadline it
+  fails). A `complete` answer brings the participants up to date (missed
+  joins and leaves).
+- Where the initiator named the participants on a complete roster, the list
+  is theirs: the fresh roster takes over departures, never additions.
+- Declared list: participant sources `declared` (named by the initiator),
+  `named` (named by a participant with `facilitation_name_participant`,
+  counted once they wrote themselves), `posted` (wrote here and was on no
+  list; welcomed), plus `roster` and `joined`. Nobody is removed by others.
+  Without any declared names ("open roster") there is no "everybody": votes
+  close at the deadline, and a person who writes takes part without a
+  welcome.
+- Final consent of a closing: `finalConsentElectorate(w, windowEnd)` in
+  `src/engine/electorate.ts` answers `verified`, `retry` (hourly) or
+  `unverifiable` (24 h after the window: result `not confirmed`, reason
+  "participants could not be verified"). The closing procedure calls it.

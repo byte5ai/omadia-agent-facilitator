@@ -41,7 +41,7 @@ async function handshakeOf(conv: string, kernel: { rosterAsAgent: boolean; state
 test('the roster is asked for as the facilitator of the facilitation', { skip: PG_SKIP }, async () => {
   const conv = meetingChat('rf-asks');
   await handshakeOf(conv, { rosterAsAgent: true, statesCallerName: false });
-  assert.deepEqual(h.kernel.rosterAsks.filter((a) => a.conversationId === conv), [{ conversationId: conv, agentSlug: 'mira' }]);
+  assert.deepEqual(h.kernel.rosterAsks.filter((a) => a.conversationId === conv), [{ conversationId: conv, agentSlug: 'mira', fresh: true }]);
 });
 
 test('new kernel: the members are listed through the own bot and the initiator is named', { skip: PG_SKIP }, async () => {

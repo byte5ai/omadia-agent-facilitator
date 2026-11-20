@@ -87,11 +87,26 @@ export interface RosterParticipant {
   userPrincipalName?: string | null;
 }
 
+/** How much of a conversation's membership the channel could read (#2091). */
+export type RosterStatus = 'complete' | 'partial' | 'unknown';
+
 export interface ConversationRoster {
   conversationType: 'direct' | 'group';
   participants: readonly RosterParticipant[];
-  /** The channel could only list a lower bound of the members. */
+  /** The channel could only list a lower bound of the members. Kept for a
+   *  kernel that predates `status`; read through {@link rosterStatusOf}. */
   partial: boolean;
+  /** `complete`, `partial` or `unknown` (#2091). Absent on an older kernel. */
+  status?: RosterStatus;
+  /** When the platform answered (ISO 8601); a cached answer keeps its time. */
+  readAt?: string;
+}
+
+/** The status of a roster: the kernel's statement, else derived from
+ *  `partial`. No answer at all is `unknown`. */
+export function rosterStatusOf(roster: Pick<ConversationRoster, 'status' | 'partial'> | undefined): RosterStatus {
+  if (!roster) return 'unknown';
+  return roster.status ?? (roster.partial ? 'partial' : 'complete');
 }
 
 /** Kernel `conversationRosters` (#330 B1): who is in a conversation. */
@@ -101,8 +116,9 @@ export interface ConversationRostersService {
    * agent without an identity yields `undefined`). Without it the instance's
    * default bot is asked, which is often not a member of a conversation a
    * facilitator moderates. A kernel that predates the option ignores it.
+   * `fresh: true` (#2091) bypasses the channel's cache.
    */
-  getRoster(channelType: string, conversationId: string, opts?: { agentSlug?: string }): Promise<ConversationRoster | undefined>;
+  getRoster(channelType: string, conversationId: string, opts?: { agentSlug?: string; fresh?: boolean }): Promise<ConversationRoster | undefined>;
 }
 
 export interface Kernel {

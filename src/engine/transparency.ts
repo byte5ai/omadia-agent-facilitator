@@ -16,6 +16,7 @@ import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake, announceVote } from './lifecycle.js';
 import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
+import { verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames, listKnown } from './roll.js';
 import { agree, openProposal, registerProposalKind } from './proposals.js';
 import { voteCardFits } from './cards.js';
@@ -235,6 +236,8 @@ export async function proposeDodMet(w: Work): Promise<Proposal> {
   return openProposal(w, { kind: 'dod_met', summary, proposedBy: 'facilitator', windowMinutes: Math.min(w.f.settings.confirmWindowMinutes, w.f.settings.changeWindowHours * 60) });
 }
 
+const activeCount = async (w: Work): Promise<number> => (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active').length;
+
 /**
  * Somebody asked to close on a free-text definition of done. The one who
  * asked agrees by asking. Where that person is the only participant there is
@@ -247,7 +250,7 @@ export async function closeOnRequest(w: Work, askedBy: string | undefined): Prom
   if (dod?.criteria) throw new Refusal('machine_checkable', 'This definition of done is checked automatically. The facilitation concludes by itself when it is met; there is nothing to confirm.');
   const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
   const asker = askedBy === undefined ? undefined : active.find((p) => p.principalId === askedBy);
-  if (asker && active.length === 1 && everybodyKnown(w.f) && !(await store.openProposal(w.tx, w.f.id))) {
+  if (asker && active.length === 1 && everybodyKnown(w.f) && !(await store.openProposal(w.tx, w.f.id)) && (await verifyElectorate(w)).verified && (await activeCount(w)) === 1) {
     await w.event('dod_met', asker.principalId, { by: 'the only participant' });
     await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
     w.bump();
