@@ -23,7 +23,8 @@ export type Table =
   | 'plg_omadia_agent_facilitator_acks'
   | 'plg_omadia_agent_facilitator_access_audit'
   | 'plg_omadia_agent_facilitator_cards'
-  | 'plg_omadia_agent_facilitator_scopes';
+  | 'plg_omadia_agent_facilitator_scopes'
+  | 'plg_omadia_agent_facilitator_closings';
 
 const toSnake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const toCamel = (key: string): string => key.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());

@@ -58,6 +58,61 @@ export type MediaConsent = 'not_needed' | 'pending' | 'granted' | 'refused' | 'w
  *  for a session whose summary waits for the group's consent. */
 export type SessionStatus = 'scheduled' | 'live' | 'confirming' | 'closed' | 'cancelled';
 export type StakeholderRole = 'receives_protocol' | 'invited_to_followups';
+/** How much a stakeholder may know of what their protocol leaves out (spec
+ *  5.8, AVE 5.11): `full` every part it may know, `existence` a note that
+ *  something was left out, `none` neither content nor a hint. */
+export type Disclosure = 'full' | 'existence' | 'none';
+
+// ── closing events, result status and delivery status (spec 5.2, 5.11) ─────
+
+/**
+ * The result status of a final document (session protocol or facilitation
+ * protocol): `published` needed no confirmation, `confirmed` passed its
+ * consent window without a standing objection and with a verified
+ * electorate, `not_confirmed` carries its reason, `aborted` is an abort
+ * report. Nothing is ever marked confirmed that was not.
+ */
+export type ResultStatus = 'published' | 'confirmed' | 'not_confirmed' | 'aborted';
+export type NotConfirmedReason = 'objection' | 'electorate_unverified' | 'not_delivered' | 'stopped';
+/** Separate from the result status, per document. */
+export type DeliveryStatus = 'pending' | 'delivered' | 'not_delivered';
+/** What closed: the result of `concluding`, an abort, or one session. */
+export type ClosingKind = 'result' | 'abort' | 'session';
+/** The parts of the closing procedure, in order (spec 5.2). */
+export type ClosingPart = 'waiting' | 'delivery' | 'confirmation' | 'dispatch' | 'done';
+export const CLOSING_PARTS: readonly ClosingPart[] = ['waiting', 'delivery', 'confirmation', 'dispatch', 'done'];
+
+/** A result status as one value, with its reason where it has one. */
+export type ResultMark =
+  | { status: 'published' | 'confirmed' | 'aborted' }
+  | { status: 'not_confirmed'; reason: NotConfirmedReason };
+
+/** One closing event and its frozen closing document (spec 5.2, 5.6). */
+export interface Closing {
+  id: string;
+  facilitationId: string;
+  kind: ClosingKind;
+  sessionId: string | null;
+  /** The event id of its `closing` scope at the kernel. */
+  eventId: string;
+  document: string;
+  documentVersion: number;
+  requiresConfirmation: boolean;
+  part: ClosingPart;
+  partStartedAt: Date;
+  resultStatus: ResultStatus | null;
+  resultReason: NotConfirmedReason | null;
+  objections: ProposalObjection[];
+  deliveryStatus: DeliveryStatus;
+  deliveredAt: Date | null;
+  windowEndsAt: Date | null;
+  verifyUntil: Date | null;
+  finalAt: Date | null;
+  dispatchUntil: Date | null;
+  absoluteUntil: Date;
+  startedAt: Date;
+  endedAt: Date | null;
+}
 
 export interface StepOption {
   /** Short handle a ballot can use ('A', 'B', ...). */
@@ -170,6 +225,8 @@ export interface Facilitation {
   closedAt: Date | null;
   closeReason: string | null;
   purgeAfter: Date | null;
+  /** When it reached `ended` or `aborted`; retention counts from here. */
+  endedAt: Date | null;
 }
 
 export interface Session {
@@ -200,6 +257,7 @@ export interface Stakeholder {
   addedBy: string;
   confirmed: boolean;
   confirmedAt: Date | null;
+  disclosure: Disclosure;
   createdAt: Date;
 }
 
@@ -369,6 +427,9 @@ export interface OutboxRow {
   lastError: string | null;
   dropReason: string | null;
   channelMessageId: string | null;
+  /** A closing document: its closing event and document version. */
+  closingId: string | null;
+  documentVersion: number | null;
   createdAt: Date;
   sentAt: Date | null;
 }
