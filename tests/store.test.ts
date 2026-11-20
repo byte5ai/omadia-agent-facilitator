@@ -56,9 +56,11 @@ const EXPECTED_TABLES = [
   'plg_omadia_agent_facilitator_participants',
   'plg_omadia_agent_facilitator_proposals',
   'plg_omadia_agent_facilitator_scopes',
+  'plg_omadia_agent_facilitator_session_participants',
   'plg_omadia_agent_facilitator_sessions',
   'plg_omadia_agent_facilitator_stakeholders',
   'plg_omadia_agent_facilitator_steps',
+  'plg_omadia_agent_facilitator_transcript_segments',
 ];
 
 test('migrations create every table of spec 5.1 and are recorded in the plugin ledger', { skip: PG_SKIP }, async () => {

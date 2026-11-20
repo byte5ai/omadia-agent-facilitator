@@ -23,6 +23,7 @@ import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { expectedNames, sameName, sourceOfName } from './roll.js';
 import { namesOf, withoutMention } from './addressing.js';
 import { wantedMode } from './scopes.js';
+import { advanceSessionCursor, gateSessionRecord, sessionStatusText } from './sessionLinks.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -84,7 +85,10 @@ export const isPositiveReaction = (name: string): boolean => POSITIVE_REACTIONS.
 const commands: InboundHandler = async ({ w, record, author, command }) => {
   if (record.kind !== 'created' || !author) return undefined;
   if (STATUS.test(command)) {
-    w.post({ purpose: 'status', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: await statusText(w.tx, w.f) });
+    // In a linked session conversation: that session's status only, nothing
+    // of the home conversation (5.3, 5.8).
+    const text = w.within !== undefined ? await sessionStatusText(w, w.within) : await statusText(w.tx, w.f);
+    w.post({ purpose: 'status', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text });
     return { outcome: 'status' };
   }
   if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring' || w.f.phase === 'concluding')) {
@@ -174,7 +178,16 @@ const acknowledgements: InboundHandler = async ({ w, record, author, command }) 
   } else {
     return undefined;
   }
-  const ack = await pickAck(w, pending, record.kind === 'reaction' ? record.messageId : record.replyToMessageId);
+  // A reply to a question that is no longer open (its text was corrected
+  // since, spec 5.3) confirms nothing, not even the newer question.
+  const target = record.kind === 'reaction' ? record.messageId : record.replyToMessageId;
+  if (target !== undefined && !pending.some((a) => a.promptMessageId === target)) {
+    // Only a question retired by a corrected transcript segment; other
+    // cancelled questions keep their own answers (the freeze, 5.2).
+    const outdated = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_acks WHERE facilitation_id = $1 AND principal = $2 AND prompt_message_id = $3 AND status = 'cancelled' AND detail ? 'segmentId'`, [w.f.id, author.principalId, target]);
+    if (outdated.rows.length > 0) return { outcome: 'confirmation_outdated' };
+  }
+  const ack = await pickAck(w, pending, target);
   if (!ack) return undefined;
   if (ack === 'ambiguous') {
     w.post({
@@ -260,6 +273,9 @@ export function registerAfterInbound(hook: AfterInbound): void {
 async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promise<Participant | undefined> {
   const key = principalKey(record.author);
   let author = await store.getParticipant(w.tx, w.f.id, key);
+  // In a linked session conversation nobody becomes a home participant by
+  // writing: a person there is a session participant (5.3, 5.5).
+  if (record.conversationId !== w.f.conversationId) return author?.status === 'active' ? author : undefined;
   const live = w.f.phase === 'configuring' || w.f.phase === 'active';
   // A participant the request named and nobody was matched to: the name on
   // this message says who it is.
@@ -360,7 +376,12 @@ async function notForTheEventPath(w: Work, record: ConversationMessageRecord, op
 
 /** One stored event, inside the facilitation's unit of work. */
 export async function handleInbound(w: Work, record: ConversationMessageRecord, opts: InboundOptions = {}): Promise<InboundResult> {
-  const moveCursor = (): Promise<unknown> => (opts.keepCursor === true ? Promise.resolve() : store.advanceCursor(w.tx, w.f.id, record.eventId));
+  // A session conversation is read through its own subscription and cursor.
+  const moveCursor = async (): Promise<unknown> => {
+    if (opts.keepCursor === true) return undefined;
+    if (await advanceSessionCursor(w, record)) return undefined;
+    return store.advanceCursor(w.tx, w.f.id, record.eventId);
+  };
   const claimed = await store.claimInbound(w.tx, ledgerRow(w.f.id, record, w.now));
   if (!claimed) {
     // The event of a message the kernel asked about may have been seen here
@@ -388,6 +409,23 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord, 
     return { outcome: 'before_facilitation' };
   }
 
+  // A revision the kernel marks as superseded (a later edit or correction
+  // was stored) counts nothing: the later one is read instead (#2089).
+  if (record.superseded === true) {
+    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, 'superseded_revision');
+    await moveCursor();
+    return { outcome: 'superseded_revision' };
+  }
+
+  // A message of a linked session conversation does what its session's state
+  // allows, and is answered there (5.3).
+  const gated = await gateSessionRecord(w, record);
+  if (gated) {
+    await store.setInboundOutcome(w.tx, w.f.id, record.eventId, gated.outcome);
+    await moveCursor();
+    return gated;
+  }
+
   // A mention in follow-up has one owner, and it is not this path (see above).
   const left = await notForTheEventPath(w, record, opts);
   if (left !== undefined) {
@@ -406,7 +444,8 @@ export async function handleInbound(w: Work, record: ConversationMessageRecord, 
   if (!result) {
     const live = w.f.phase === 'configuring' || w.f.phase === 'active';
     const readable = (record.kind === 'created' || record.kind === 'edited') && (record.text ?? '').trim() !== '';
-    if (!author) result = { outcome: 'not_a_participant' };
+    // A session participant in a live session: moderated, never counted.
+    if (!author) result = live && readable && w.within !== undefined ? { outcome: 'session_guest', modelTurn: true } : { outcome: 'not_a_participant' };
     else if (live && readable) result = { outcome: 'free_text', modelTurn: true };
     else result = { outcome: 'ignored' };
   }
@@ -462,7 +501,8 @@ async function tellUnprocessed(engine: EngineCore, facilitationId: string, recor
   try {
     await engine.work(facilitationId, async (w) => {
       await w.event('message_unprocessed', 'engine', { messageId: record.messageId, eventId: record.eventId });
-      await store.advanceCursor(w.tx, w.f.id, record.eventId);
+      // A session conversation's record moves that session's cursor only.
+      if (!(await advanceSessionCursor(w, record))) await store.advanceCursor(w.tx, w.f.id, record.eventId);
       if (w.f.settings.unprocessedNoticeSent === true || (w.f.phase !== 'active' && w.f.phase !== 'configuring')) return;
       await w.tx.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET settings = settings || '{"unprocessedNoticeSent": true}'::jsonb WHERE id = $1`, [w.f.id]);
       w.post({ purpose: 'unprocessed_notice', key: 'once', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).messageUnprocessed() });

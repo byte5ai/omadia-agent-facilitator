@@ -6,8 +6,11 @@
 // same database. Authorship is whatever `say()` was called with: the channel
 // states it, the engine can only read it.
 
-import { EXECUTION_GRANT_RULES, EXECUTION_SCOPE_PHASES } from '@omadia/plugin-api';
+import { EXECUTION_GRANT_RULES, EXECUTION_SCOPE_PHASES, SESSION_CONVERSATION_TRANSITIONS } from '@omadia/plugin-api';
 import type {
+  LinkRequest,
+  LinkRequestReply,
+  SessionConversationState,
   AddressedMessageReply,
   AddressedMessageRequest,
   AuthorizeActionRequest,
@@ -134,6 +137,9 @@ export interface FakeReservation {
   role: 'home' | 'session';
   reservedAt: string;
   releasedAt?: string;
+  /** `session` role: the session state the kernel reads by (#2076). */
+  sessionState?: SessionConversationState;
+  sessionId?: string;
 }
 
 export interface FakeAuthorization {
@@ -615,6 +621,10 @@ export class FakeKernel {
     return this.reservations.some((r) => r.processId === processId && r.conversationId === conversationId && r.releasedAt === undefined);
   }
 
+  private sessionReservation(processId: string, conversationId: string): FakeReservation | undefined {
+    return this.reservations.filter((r) => r.processId === processId && r.conversationId === conversationId && r.role === 'session').at(-1);
+  }
+
   private held(processId: string, conversationId: string): boolean {
     return this.reservations.some((r) => r.processId === processId && r.conversationId === conversationId);
   }
@@ -631,7 +641,11 @@ export class FakeKernel {
   private accessChanged(): void {
     for (const sub of this.processSubscriptions) {
       if (sub.ended) continue;
+      const session = this.sessionReservation(sub.processId, sub.conversationId);
       if (this.openScopesOf(sub.processId).length === 0) sub.ended = true;
+      // A session conversation is read as its state allows (#2076).
+      else if (session?.releasedAt !== undefined) sub.ended = true;
+      else if (session?.sessionState === 'scheduled' && sub.mode === 'all') sub.mode = 'addressed';
       else if (sub.mode === 'all' && !this.holds(sub.processId, sub.conversationId)) sub.mode = 'addressed';
     }
     this.refreshSubscriptions();
@@ -811,11 +825,46 @@ export class FakeKernel {
     reserveConversation: async (request) => {
       if (this.openScopesOf(request.processId).length === 0) return this.refuse('scope_order', 'this process has no open scope');
       const holder = this.reservations.find((r) => r.conversationId === request.conversationId && r.releasedAt === undefined);
+      if (holder && holder.processId === request.processId) return { outcome: 'reserved', reservation: holder };
+      // A process takes back its own home conversation without a link.
+      if (!request.linkRequestId && this.reservations.some((r) => r.processId === request.processId && r.conversationId === request.conversationId && r.role === 'home')) {
+        if (holder || this.discussions.has(request.conversationId)) return this.refuse('conversation_busy', 'another process holds this conversation');
+        const back: FakeReservation = { agentSlug: request.agentSlug, processId: request.processId, channelType: request.channelType, conversationId: request.conversationId, role: 'home', reservedAt: this.clock.now().toISOString() };
+        this.reservations.push(back);
+        return { outcome: 'reserved', reservation: back };
+      }
+      // #2089: a session conversation is linked on a link request made inside it.
+      const link = request.linkRequestId ? this.linkRequests.get(request.linkRequestId) : undefined;
+      if (!link || link.used || link.conversationId !== request.conversationId || !link.processIds.includes(request.processId) || Date.parse(link.expiresAt) <= this.clock.now().getTime()) {
+        return this.refuse('link_not_authorized', 'a session conversation is linked only on a link request made inside it');
+      }
       if (this.discussions.has(request.conversationId)) return this.refuse('conversation_busy', 'an agent discussion holds this conversation');
-      if (holder && holder.processId !== request.processId) return this.refuse('conversation_busy', 'another process holds this conversation');
-      const reservation = holder ?? { agentSlug: request.agentSlug, processId: request.processId, channelType: request.channelType, conversationId: request.conversationId, role: 'session' as const, reservedAt: this.clock.now().toISOString() };
-      if (!holder) this.reservations.push(reservation);
+      if (holder) return this.refuse('conversation_busy', 'another process holds this conversation');
+      link.used = true;
+      const reservation: FakeReservation = { agentSlug: request.agentSlug, processId: request.processId, channelType: request.channelType, conversationId: request.conversationId, role: 'session', reservedAt: this.clock.now().toISOString(), sessionState: 'scheduled', ...(request.sessionId ? { sessionId: request.sessionId } : {}) };
+      this.reservations.push(reservation);
+      for (const scope of this.openScopesOf(request.processId)) {
+        if ((scope.kind === 'configuring' || scope.kind === 'active') && !scope.targets.some((t) => t.kind === 'conversation' && t.conversationId === request.conversationId)) {
+          scope.targets = [...scope.targets, { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId }];
+        }
+      }
+      this.accessChanged();
       return { outcome: 'reserved', reservation };
+    },
+    setSessionState: async (request) => {
+      const reservation = this.sessionReservation(request.processId, request.conversationId);
+      if (!reservation) return this.refuse('unknown_scope', 'this process never linked that conversation');
+      const from = reservation.sessionState ?? 'scheduled';
+      if (from === request.state) return { outcome: 'updated', reservation };
+      if (reservation.releasedAt !== undefined || !SESSION_CONVERSATION_TRANSITIONS[from].includes(request.state)) return this.refuse('session_state', `a session does not go from '${from}' to '${request.state}'`);
+      if (request.state === 'live') {
+        const missing = this.notReady.get(`${reservation.agentSlug}|${request.conversationId}`) ?? [];
+        if (missing.length > 0) return this.refuse('not_ready', missing.map((m) => `${m.code}: ${m.message}`).join('; '));
+      }
+      reservation.sessionState = request.state;
+      if (request.state === 'closed' || request.state === 'cancelled') reservation.releasedAt = this.clock.now().toISOString();
+      this.accessChanged();
+      return { outcome: 'updated', reservation };
     },
     releaseConversation: async (request) => {
       for (const r of this.reservations) {
@@ -931,6 +980,8 @@ export class FakeKernel {
       if (refusal && (!existing || (options.mode === 'all' && existing.mode !== 'all'))) return { outcome: 'refused', ...refusal };
       if (!this.members.has(scope.conversationId)) return { outcome: 'refused', code: 'not_present', message: 'the bot was never observed in this conversation' };
       if (this.openScopesOf(scope.processId).length === 0) return { outcome: 'refused', code: 'no_scope', message: 'this process has no open execution scope' };
+      const session = this.sessionReservation(scope.processId, scope.conversationId);
+      if (session && (session.releasedAt !== undefined || (session.sessionState === 'scheduled' && options.mode === 'all'))) return { outcome: 'refused', code: 'session_state', message: 'the session state does not allow that' };
       if (options.mode === 'all' && !this.holds(scope.processId, scope.conversationId)) return { outcome: 'refused', code: 'not_reserved', message: 'every message of a conversation is read only by the process that holds its reservation' };
       if (options.mode === 'addressed' && !this.held(scope.processId, scope.conversationId)) return { outcome: 'refused', code: 'not_reserved', message: 'this process never held the reservation of this conversation' };
       if (existing) existing.mode = options.mode;
@@ -954,6 +1005,12 @@ export class FakeKernel {
       return matching.sort((a, b) => b.revision - a.revision)[0];
     },
     getEventById: async (scope, eventId) => this.forScope(scope).find((e) => e.eventId === eventId),
+    onLinkRequest: (agentSlug, handler) => {
+      const set = this.linkHandlers.get(agentSlug) ?? new Set();
+      set.add(handler);
+      this.linkHandlers.set(agentSlug, set);
+      return () => set.delete(handler);
+    },
     listSince: async (scope, opts) => {
       const all = this.forScope(scope);
       const start = opts?.after ? all.findIndex((e) => e.eventId === opts.after) + 1 : 0;
@@ -986,7 +1043,69 @@ export class FakeKernel {
   private forScope(scope: ProcessMessageScope): ProcessConversationMessageRecord[] {
     const sub = this.subscriptionOf(scope);
     if (!sub || sub.ended) return [];
-    return (this.events as ProcessConversationMessageRecord[]).filter((e) => e.processId === scope.processId && e.conversationId === scope.conversationId);
+    const own = (this.events as ProcessConversationMessageRecord[]).filter((e) => e.processId === scope.processId && e.conversationId === scope.conversationId);
+    // #2089: an older revision says it was superseded.
+    const family = (e: ConversationMessageRecord): string | undefined => (e.kind === 'transcript_segment' ? `t:${e.messageId}` : e.kind === 'created' || e.kind === 'edited' || e.kind === 'deleted' ? `m:${e.messageId}` : undefined);
+    const latest = new Map<string, number>();
+    for (const e of own) {
+      const key = family(e);
+      if (key) latest.set(key, Math.max(latest.get(key) ?? -1, e.revision));
+    }
+    return own.map((e) => {
+      const key = family(e);
+      const newest = key ? latest.get(key) : undefined;
+      return newest !== undefined && newest > e.revision ? { ...e, superseded: true, latestRevision: newest } : e;
+    });
+  }
+
+  // ── link requests (#2089) and transcript segments ────────────────────────
+
+  private readonly linkHandlers = new Map<string, Set<(request: LinkRequest) => Promise<LinkRequestReply>>>();
+  readonly linkRequests = new Map<string, { conversationId: string; processIds: string[]; expiresAt: string; used: boolean }>();
+  /** Answers the facilitator's link handling gave as the turn's answer. */
+  readonly linkAnswers: Array<{ conversationId: string; userId: string; answer: string | undefined; handled: boolean }> = [];
+
+  /**
+   * A person mentions the facilitator in a conversation none of its
+   * processes reads. As the kernel: a typed link request to the engine,
+   * nothing stored, no read access.
+   */
+  async linkRequest(conversationId: string, userId: string, text: string, agentSlug = 'mira'): Promise<{ handled: boolean; answer?: string; linkRequestId?: string }> {
+    const reads = this.processSubscriptions.some((s) => s.agentSlug === agentSlug && s.conversationId === conversationId && !s.ended && s.mode !== 'none');
+    const processIds = [...new Set(this.scopes.filter((s) => s.agentSlug === agentSlug && s.state === 'open' && (s.kind === 'configuring' || s.kind === 'active')).map((s) => s.processId))];
+    if (reads || processIds.length === 0) return { handled: false };
+    const linkRequestId = this.nextId('link');
+    const expiresAt = new Date(this.clock.now().getTime() + 3_600_000).toISOString();
+    this.linkRequests.set(linkRequestId, { conversationId, processIds, expiresAt, used: false });
+    const user = this.user(conversationId, userId);
+    for (const handler of [...(this.linkHandlers.get(agentSlug) ?? [])]) {
+      const reply = await handler({ linkRequestId, agentSlug, channelType: this.channelType, conversationId, principalId: userId, displayName: user.displayName, text, processIds, expiresAt });
+      if (reply.handled) {
+        this.linkAnswers.push({ conversationId, userId, answer: reply.answer, handled: true });
+        return { handled: true, ...(reply.answer !== undefined ? { answer: reply.answer } : {}), linkRequestId };
+      }
+    }
+    this.linkRequests.delete(linkRequestId);
+    this.linkAnswers.push({ conversationId, userId, answer: undefined, handled: false });
+    return { handled: false };
+  }
+
+  private readonly segmentRevisions = new Map<string, number>();
+
+  /** A transcript segment of a live session (#2089). `participant`: the
+   *  media channel is bound to `userId`; `shared`: a room microphone. */
+  async transcript(conversationId: string, input: { segmentId: string; text: string; source: 'participant' | 'shared'; userId?: string; speakerHint?: string; sessionId?: string }): Promise<ConversationMessageRecord> {
+    const revision = (this.segmentRevisions.get(input.segmentId) ?? -1) + 1;
+    this.segmentRevisions.set(input.segmentId, revision);
+    const author = input.source === 'participant' ? undefined : { kind: 'custom', id: 'media:room-1', displayName: 'Room microphone' };
+    return this.emit(conversationId, input.userId ?? 'media:room-1', {
+      kind: 'transcript_segment',
+      messageId: input.segmentId,
+      revision,
+      text: input.text,
+      transcript: { sessionId: input.sessionId ?? 'session-1', segmentId: input.segmentId, source: input.source, ...(input.speakerHint ? { speakerHint: input.speakerHint } : {}) },
+      ...(author ? { author } : {}),
+    });
   }
 
   /** false: a kernel before `onAddressedMessage` (plugin-api 1.73). */

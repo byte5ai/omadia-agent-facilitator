@@ -100,11 +100,26 @@ export interface Outgoing {
    *  cannot be reached privately. */
   fallback?: GroupFallback;
   /** Row to stamp with the channel's message id once the send returned. */
-  link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
+  link?: { kind: 'ack' | 'proposal' | 'card' | 'transcript' | 'closing'; id: string };
   /** A closing document (spec 5.6): its closing event and document version.
    *  Retried while that closing is valid, whatever the state is by then. */
   closing?: { id: string; version: number };
+  /** A linked session conversation to post in (5.3); absent: home. */
+  conversationId?: string;
+  /** Drawn from the `closing` scope of this event (a session protocol). */
+  closingEvent?: string;
 }
+
+/** Answers to the person who wrote in a linked session conversation: they
+ *  go back there. */
+const ANSWERS_IN_PLACE: ReadonlySet<string> = new Set([
+  'echo', 'echo_confirmed', 'echo_withdrawn', 'echo_declined', 'clarification', 'status', 'which_confirmation',
+  'proposal_hint', 'card_answer_hint', 'vote_open_hint', 'moderation',
+  'item_taken', 'action_not_yours', 'parked', 'media_stopped', 'session_objection', 'session_consent_hint',
+  'adopted', 'adopt_outdated', 'adopt_no_step', 'transcript_shared',
+]);
+/** The agenda moving on: said at home and in the session conversation. */
+const MIRRORED_IN_SESSION: ReadonlySet<string> = new Set(['step_opened', 'step_closed', 'step_extended', 'timebox_over']);
 
 export interface Work {
   readonly tx: Queryable;
@@ -120,6 +135,11 @@ export interface Work {
   bump(): void;
   post(message: Outgoing): void;
   event(kind: string, actor: string, payload?: Record<string, unknown>): Promise<void>;
+  /** The conversation this unit of work answers in: a linked session
+   *  conversation the inbound message came from (5.3). Group posts without
+   *  a conversation of their own go there. Absent: the home conversation. */
+  readonly within: string | undefined;
+  answerIn(conversationId: string | undefined): void;
 }
 
 /** Runs after the lock was released; may use the db and call the kernel. */
@@ -133,6 +153,9 @@ export type AfterDispatch = (engine: EngineCore, client: Db, facilitationId: str
 interface ToolCallScope {
   /** Messages queued for the group. */
   groupPosts: number;
+  /** The conversation the call came from (a linked session conversation
+   *  answers there, spec 5.3). */
+  conversationId?: string;
 }
 const toolCall = new AsyncLocalStorage<ToolCallScope>();
 /** How long the engine remembers that a turn's tools posted. */
@@ -176,8 +199,8 @@ export class EngineCore {
    * its own text is not posted on top (the model is not relied on to stay
    * silent).
    */
-  async inToolCall<T>(inboundEventId: string | undefined, run: () => Promise<T>): Promise<T> {
-    const scope: ToolCallScope = { groupPosts: 0 };
+  async inToolCall<T>(inboundEventId: string | undefined, run: () => Promise<T>, conversationId?: string): Promise<T> {
+    const scope: ToolCallScope = { groupPosts: 0, ...(conversationId !== undefined ? { conversationId } : {}) };
     try {
       return await toolCall.run(scope, run);
     } finally {
@@ -277,6 +300,9 @@ export class EngineCore {
       const now = this.now();
       let current = loaded;
       let bumped = false;
+      // A tool call from a session conversation answers there.
+      const calledFrom = toolCall.getStore()?.conversationId;
+      let within: string | undefined = calledFrom !== undefined && calledFrom !== loaded.conversationId ? calledFrom : undefined;
       const queued: Outgoing[] = [];
       const w: Work = {
         tx,
@@ -297,7 +323,22 @@ export class EngineCore {
           bumped = true;
         },
         post(message) {
-          queued.push(message);
+          if (within === undefined || message.to !== 'group' || message.conversationId !== undefined) {
+            queued.push(message);
+            return;
+          }
+          // A message from a linked session conversation is answered there;
+          // what belongs to the whole facilitation stays at home, so nothing
+          // of the home conversation reaches a session's guests (5.3, 5.8).
+          if (ANSWERS_IN_PLACE.has(message.purpose)) queued.push({ ...message, conversationId: within });
+          else if (MIRRORED_IN_SESSION.has(message.purpose)) queued.push(message, { ...message, key: `${message.key ?? message.purpose}:session`, conversationId: within });
+          else queued.push(message);
+        },
+        get within() {
+          return within;
+        },
+        answerIn(conversationId) {
+          within = conversationId !== undefined && conversationId !== current.conversationId ? conversationId : undefined;
         },
         async event(kind, actor, payload = {}) {
           await store.appendEvent(tx, { facilitationId, kind, actor, payload, occurredAt: now });
@@ -336,6 +377,8 @@ export class EngineCore {
     const payload: OutboxPayload & { link?: Outgoing['link']; fallback?: Outgoing['fallback']; emission?: 'prose' } = {
       ...(m.emission && verdict.ok ? { emission: m.emission } : {}),
       text: verdict.ok ? verdict.text : texts(f.language).guardFallback(),
+      ...(m.conversationId && m.conversationId !== f.conversationId ? { conversationId: m.conversationId } : {}),
+      ...(m.closingEvent ? { closingEvent: m.closingEvent } : {}),
       ...(m.mentions && m.mentions.length > 0 ? { mentions: m.mentions } : {}),
       ...(m.poll ? { poll: m.poll } : {}),
       ...(m.card ? { card: m.card } : {}),

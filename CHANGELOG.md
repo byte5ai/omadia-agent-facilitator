@@ -75,6 +75,40 @@
   §2.3): `persona_skill` left `archetype.omits`. The kernel accepts modes that
   add moderation methods and refuses any identity replacement.
 
+- **Sessions in a linked meeting chat** (#2076, #2089, spec 5.3): a home
+  participant links a meeting chat from inside it by mentioning the
+  facilitator and naming the facilitation. The chat gets its own
+  reservation, subscription and cursor and is read as the session's state
+  allows (scheduled: addressed messages, live and confirming: everything,
+  closed: nothing). Its readiness is checked when it is linked and again
+  before the session goes live; if it is missing the session does not start
+  and the home conversation is told. People only in the meeting chat are
+  session participants: they never see the home conversation's history, and
+  a private "status" gives them only their sessions' status.
+- **Binding close per session** (#2076, spec 5.2, 6.3): an agreed session
+  ends with its summary (decisions, next steps, open points), frozen as the
+  document of its own closing event `session:<id>` with its version. It is
+  confirmed by the group only where the method or the definition of done
+  requires it (the session is `confirming` meanwhile, and the window
+  survives the facilitation's close); stop or abort ends it as "not
+  confirmed (facilitation stopped)". Scheduled sessions are cancelled with a
+  note in their chat at every end.
+- **Spoken contributions from transcript segments** (#2077, #2089, spec
+  5.3): a segment of a personal microphone waits for exactly its author to
+  confirm exactly that revision; a segment of a shared room microphone names
+  nobody, and a participant can adopt exactly that revision with "mine",
+  recorded as "adopted from the transcript".
+
+### Changed
+
+- Speaker recognition never sets authorship: the tool
+  `facilitation_record_spoken` is removed. A reply that confirms a question
+  whose text was corrected since confirms nothing.
+- Migration `0008_session_conversations`.
+- Uses plugin-api 1.79.0 where present (`setSessionState`, `onLinkRequest`,
+  `reserveConversation({ linkRequestId })`, `superseded`); on an older
+  kernel a linked session cannot go live.
+
 ## 1.5.7
 
 ### Changed

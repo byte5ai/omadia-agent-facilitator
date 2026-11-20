@@ -27,6 +27,9 @@ import type { EngineCore } from './core.js';
 import { normaliseCommand } from './inbound.js';
 import { scopeForAction, syncPeople } from './scopes.js';
 import { statusText } from './status.js';
+import { guestSessionsOf, sessionTitleOf } from './sessionLinks.js';
+import { sessionTexts } from '../texts/sessions.js';
+import { formatWhen } from '../texts/index.js';
 
 const DECLINED: PrivateMessageReply = { handled: false };
 
@@ -90,6 +93,25 @@ async function answerDone(engine: EngineCore, taking: readonly Taking[], number:
   return reply(engine, after, texts(f.language).privateStatus.done(only.item.number, only.item.description), 'other');
 }
 
+/** The status of the sessions a session participant belongs to: agenda,
+ *  session state and time slot; never names, tallies or anything of the
+ *  home conversation. */
+async function answerGuestStatus(engine: EngineCore, request: PrivateMessageRequest, principal: string): Promise<PrivateMessageReply> {
+  for (const processId of request.processIds) {
+    const f = await store.getFacilitation(engine.db(), processId);
+    if (!f || f.facilitatorAgent !== request.agentSlug || f.channelType !== request.channelType) continue;
+    const sessions = await guestSessionsOf(engine.db(), f.id, principal);
+    if (sessions.length === 0) continue;
+    const t = sessionTexts(f.language);
+    const lines = sessions.map((s) =>
+      t.guestStatusLine(sessionTitleOf(s, f), t.sessionState[s.status] ?? s.status, s.scheduledStart ? formatWhen(s.scheduledStart, f.timezone, f.language) : undefined),
+    );
+    await engine.work(f.id, (w) => w.event('private_status', principal, { scope: 'session' }));
+    return reply(engine, f, t.guestStatus(lines), 'status');
+  }
+  return DECLINED;
+}
+
 /**
  * Decide what a private message of a participant is, and answer it or hand
  * it back. Never throws: a failure is a decline, and the kernel gives the
@@ -111,7 +133,11 @@ export async function answerPrivateMessage(engine: EngineCore, request: PrivateM
       if (person?.status === 'active') taking.push({ f, person });
     }
     taking.sort((a, b) => a.f.createdAt.getTime() - b.f.createdAt.getTime());
-    if (taking.length === 0) return DECLINED;
+    if (taking.length === 0) {
+      // A session participant only: the status of their sessions, nothing of
+      // the home conversation (criterion 46).
+      return status ? await answerGuestStatus(engine, request, principal) : DECLINED;
+    }
 
     if (status) return await answerStatus(engine, taking, status[1] !== undefined ? Number(status[1]) : undefined);
     const number = done?.[1] ?? done?.[2];

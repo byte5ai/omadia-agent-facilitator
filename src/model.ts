@@ -116,6 +116,8 @@ export interface Closing {
   absoluteUntil: Date;
   startedAt: Date;
   endedAt: Date | null;
+  /** The message the document went out as (a reply to it answers it). */
+  messageId: string | null;
 }
 
 export interface StepOption {
@@ -266,6 +268,43 @@ export interface Session {
   startedAt: Date | null;
   endedAt: Date | null;
   createdAt: Date;
+  /** A linked session conversation (5.3); null: the session runs in the
+   *  home conversation. */
+  conversationId: string | null;
+  linkedBy: string | null;
+  linkedAt: Date | null;
+  /** Where the reading of the session conversation stands. */
+  inboundCursor: string | null;
+  /** The last readiness check of the session conversation (criterion 60). */
+  readiness: 'ready' | 'not_ready' | null;
+  readinessDetail: string | null;
+}
+
+/** A person of a session conversation who is not a home participant (5.3). */
+export interface SessionParticipant {
+  facilitationId: string;
+  sessionId: string;
+  principalId: string;
+  displayName: string;
+  status: 'active' | 'left';
+  joinedAt: Date;
+  leftAt: Date | null;
+}
+
+/** One revision of a transcript segment of a live session (5.3). */
+export interface TranscriptSegment {
+  facilitationId: string;
+  sessionId: string | null;
+  segmentId: string;
+  revision: number;
+  eventId: string;
+  source: 'participant' | 'shared';
+  /** Only for a participant-bound source; never from speaker recognition. */
+  authorPrincipal: string | null;
+  speakerHint: string | null;
+  text: string;
+  postMessageId: string | null;
+  receivedAt: Date;
 }
 
 export interface Stakeholder {
@@ -431,6 +470,12 @@ export interface CardRow {
 
 export interface OutboxPayload {
   text: string;
+  /** A linked session conversation the post goes to (5.3); absent: the home
+   *  conversation. */
+  conversationId?: string;
+  /** The closing event whose `closing` scope authorizes the post (a session
+   *  protocol: `session:<id>`); absent: the scope of the moment. */
+  closingEvent?: string;
   mentions?: { user: string; text: string }[];
   /** A poll the channel renders as a card; answers come back as card_answer
    *  events with `cardId` = `pollId`. A channel without polls posts the text. */

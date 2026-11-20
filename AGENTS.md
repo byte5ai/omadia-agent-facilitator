@@ -195,3 +195,26 @@ byte5ai/omadia `docs/adr/`.
 - The simulated transport (`tests/fakeKernel.ts`) takes a channel type and per-agent
   identities; `tests/fieldScenarioChannels.test.ts` runs the field scenario on Slack, Discord
   and Telegram without Teams.
+
+
+## Sessions and linked session conversations (spec 5.2, 5.3, 6.3; ADR-0025 in byte5ai/omadia)
+
+- `src/engine/sessionLinks.ts`: link requests (`onLinkRequest`) name a running facilitation;
+  only an active home participant, from inside the target chat, links it. The kernel's
+  session state of the reservation is the read table; the engine's session status is the
+  truth and `syncSessionConversations` (after every unit of work and on every pass) moves
+  the kernel along. `live` only through `goLiveAtKernel` (readiness, criterion 60).
+- A message of a session conversation is gated by `gateSessionRecord` (scheduled:
+  questions and status/stop; confirming: consent answers, status, stop) and answered in
+  that conversation (`Work.answerIn`, `Outgoing.conversationId`). Session conversations have
+  their own cursor (`sessions.inbound_cursor`).
+- Session participants (`session_participants`) are never home participants; they are
+  `status_only` targets and get only their sessions' status privately.
+- `src/engine/sessionClose.ts`: every agreed session closes with a frozen summary as closing
+  event `session:<id>` (F2's closings table); posts carry `closingEvent`, so they are drawn
+  from that event's `closing` scope. Jobs `session_confirmation` survive `conclude` and
+  `releaseOnEnd`; stop or abort ends them in `sessionsAtAbort`.
+- `src/engine/transcript.ts`: `transcript_segment` events only; never attribute speech to a
+  speaker name. Participant-bound: author = platform principal, confirm exactly that
+  revision. Shared: adoption by reply ("mine"), `payload.adoptedFromTranscript`.
+- Texts of these modules live in `src/texts/sessions.ts`.

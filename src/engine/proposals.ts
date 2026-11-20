@@ -62,6 +62,8 @@ export interface NewProposal {
   proposedBy: string;
   proposalMessageId?: string;
   windowMinutes: number;
+  /** Put to the people of a linked session conversation (5.3); absent: home. */
+  conversationId?: string;
 }
 
 /** Put a proposal to the group. The window never runs past the deadline. */
@@ -89,6 +91,7 @@ export async function openProposal(w: Work, input: NewProposal): Promise<Proposa
     purpose: 'proposal',
     key: proposal.id,
     to: 'group',
+    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
     deliveryClass: 'essential',
     requiredPhases: ['configuring', 'active'],
     text: t.proposalAnnounce(await definition.describe(w, proposal), formatWhen(windowEndsAt, w.f.timezone, w.f.language), definition.extend !== undefined, mustReply),

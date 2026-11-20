@@ -81,4 +81,34 @@ export async function processMembership(engine: EngineCore, event: ConversationM
     if (f.phase !== 'configuring' && f.phase !== 'active') continue;
     await engine.work(f.id, (w) => applyMembership(w, event));
   }
+  // A linked session conversation (5.5): leaving it ends only the session
+  // membership, never the home membership; joining it adds nobody at home.
+  const sessions = await db.query<{ facilitation_id: string; id: string }>(
+    `SELECT facilitation_id, id FROM plg_omadia_agent_facilitator_sessions WHERE conversation_id = $1 AND status IN ('scheduled', 'live', 'confirming')`,
+    [event.conversationId],
+  );
+  for (const row of sessions.rows) await engine.work(row.facilitation_id, (w) => applySessionMembership(w, row.id, event));
+}
+
+async function applySessionMembership(w: Work, sessionId: string, event: ConversationMembershipEvent): Promise<void> {
+  for (const raw of event.members) {
+    if (isBot(raw)) continue;
+    const principal = principalKey(raw);
+    if (event.kind === 'members_removed') {
+      const left = await w.tx.query(
+        `UPDATE plg_omadia_agent_facilitator_session_participants SET status = 'left', left_at = $3 WHERE session_id = $1 AND principal_id = $2 AND status = 'active'`,
+        [sessionId, principal, w.now],
+      );
+      if ((left.rowCount ?? 0) > 0) await w.event('session_participant_left', principal, { sessionId });
+      continue;
+    }
+    if (await store.getParticipant(w.tx, w.f.id, principal)) continue;
+    const added = await w.tx.query(
+      `INSERT INTO plg_omadia_agent_facilitator_session_participants (facilitation_id, session_id, principal_id, display_name, status, joined_at)
+       VALUES ($1, $2, $3, $4, 'active', $5)
+       ON CONFLICT (session_id, principal_id) DO UPDATE SET status = 'active', left_at = NULL WHERE plg_omadia_agent_facilitator_session_participants.status = 'left'`,
+      [w.f.id, sessionId, principal, raw.displayName ?? raw.id, w.now],
+    );
+    if ((added.rowCount ?? 0) > 0) await w.event('session_participant_joined', principal, { sessionId, by: 'membership_event' });
+  }
 }

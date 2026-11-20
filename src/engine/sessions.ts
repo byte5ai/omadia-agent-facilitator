@@ -12,10 +12,8 @@ import * as store from '../db/store.js';
 import type { Queryable } from '../db/pool.js';
 import { principalKey } from '../kernel.js';
 import type { Ballot } from '../methods/ballot.js';
-import { resolvePerson } from '../methods/ballot.js';
-import type { Ack, Contribution, Facilitation, MediaConsent, Modality, Participant, Session, Step } from '../model.js';
+import type { Facilitation, MediaConsent, Modality, Participant, Session, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
-import { mention } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { onClosed, recordBallot, roundOptions } from './decide.js';
@@ -31,6 +29,8 @@ import { registerJobHandler } from './scheduler.js';
 import { registerHandshakeNote } from './transparency.js';
 import { registerContextSection } from './turn.js';
 import { cardAnswers, closeAllCards, closeStepCards, installCardReaders, postIdeaCard, postStepCard } from './cards.js';
+import { closeSession } from './sessionClose.js';
+import { goLiveAtKernel, missedSession, notLive } from './sessionLinks.js';
 
 const TIME_NOTICE_MINUTES = 5;
 const MIN_TIMEBOX_FOR_NOTICE = 10;
@@ -48,21 +48,21 @@ export async function currentSession(q: Queryable, facilitationId: string): Prom
 
 /** The capabilities of a conversation or a meeting, asked of the kernel.
  *  Never called inside a transaction. */
-export async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f: Facilitation, sessionRef?: string): Promise<SessionCapabilitySnapshot> {
+export async function fetchSnapshot(engine: Pick<EngineCore, 'deps' | 'now'>, f: Facilitation, sessionRef?: string, conversationId = f.conversationId): Promise<SessionCapabilitySnapshot> {
   const service = engine.deps.kernel.sessionCapabilities();
-  if (!service) return real(engine, baselineSnapshot(f.channelType, f.conversationId, engine.now()));
+  if (!service) return real(engine, baselineSnapshot(f.channelType, conversationId, engine.now()));
   try {
     return real(
       engine,
       await withTimeout(
-        service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, ...(sessionRef ? { sessionRef } : {}) }),
+        service.getSnapshot({ agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId, ...(sessionRef ? { sessionRef } : {}) }),
         SNAPSHOT_TIMEOUT_MS,
         'the capability snapshot',
       ),
     );
   } catch {
     // A missing capability is information, never an error: assume the baseline.
-    return real(engine, baselineSnapshot(f.channelType, f.conversationId, engine.now()));
+    return real(engine, baselineSnapshot(f.channelType, conversationId, engine.now()));
   }
 }
 
@@ -110,15 +110,26 @@ async function ensureChatSession(w: Work): Promise<Session> {
   });
 }
 
-/** What a session start needs from the kernel, fetched before its unit of work. */
-export async function prepareSessionStart(engine: EngineCore, facilitationId: string, sessionId?: string): Promise<SessionCapabilitySnapshot | undefined> {
+/** What a session start needs from the kernel, fetched before its unit of
+ *  work: the session's capabilities and, for a linked session conversation,
+ *  the kernel's move to `live`, which needs the conversation's readiness
+ *  (criterion 60). */
+export interface PreparedStart {
+  snapshot?: SessionCapabilitySnapshot;
+  live?: { ok: true } | { ok: false; missing: string };
+}
+
+export async function prepareSessionStart(engine: EngineCore, facilitationId: string, sessionId?: string): Promise<PreparedStart | undefined> {
   const db = engine.db();
   const f = await store.getFacilitation(db, facilitationId);
   if (!f) return undefined;
   const sessions = (await store.listSessions(db, f.id)).filter((s) => s.kind === 'live');
   const session = sessionId ? sessions.find((s) => s.id === sessionId) : sessions.find((s) => s.status === 'scheduled');
   if (!session || session.status !== 'scheduled') return undefined;
-  return fetchSnapshot(engine, f, session.meetingRef ?? undefined);
+  if (f.phase !== 'active' && f.phase !== 'configuring') return undefined;
+  // A linked session: what its own conversation offers.
+  const snapshot = await fetchSnapshot(engine, f, session.meetingRef ?? undefined, session.conversationId ?? f.conversationId);
+  return { snapshot, ...(session.conversationId ? { live: await goLiveAtKernel(engine, f, session) } : {}) };
 }
 
 // ── live sessions ───────────────────────────────────────────────────────────
@@ -166,6 +177,8 @@ async function sendAgenda(w: Work, session: Session): Promise<void> {
     purpose: 'session_agenda',
     key: session.id,
     to: 'group',
+    // A linked session gets its agenda in its own conversation (5.3).
+    ...(session.conversationId ? { conversationId: session.conversationId } : {}),
     deliveryClass: 'essential',
     requiredPhases: ['configuring', 'active'],
     text: t.sessionAgenda(session.title ?? w.f.goal, formatWhen(session.scheduledStart ?? w.now, w.f.timezone, w.f.language), steps.map((s) => t.agendaLine(s.position, s.title, s.timeboxMinutes))),
@@ -173,8 +186,14 @@ async function sendAgenda(w: Work, session: Session): Promise<void> {
   await w.event('session_agenda_sent', 'engine', { sessionId: session.id });
 }
 
-export async function startSession(w: Work, session: Session, prefetched?: SessionCapabilitySnapshot): Promise<Session> {
+export async function startSession(w: Work, session: Session, prefetched?: SessionCapabilitySnapshot, live?: PreparedStart['live']): Promise<Session> {
   if (session.status !== 'scheduled') return session;
+  // A linked session conversation goes live only once the kernel moved it
+  // there, which it does only where every message can be read (criterion 60).
+  if (session.conversationId && live?.ok !== true) {
+    await notLive(w, session, live && !live.ok ? live.missing : 'the readiness of the meeting chat was not checked');
+    return session;
+  }
   const t = texts(w.f.language);
   // Without a snapshot for the meeting the chat's capabilities are assumed.
   const chat = snapshotOf(await ensureChatSession(w));
@@ -207,6 +226,7 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
       purpose: 'session_started',
       key: session.id,
       to: 'group',
+      ...(session.conversationId ? { conversationId: session.conversationId } : {}),
       deliveryClass: 'essential',
       requiredPhases: ['configuring', 'active'],
       text: t.sessionStarted(session.title ?? w.f.goal, session.scheduledEnd ? formatWhen(session.scheduledEnd, w.f.timezone, w.f.language) : undefined, perceptionStatement(perceived, t)),
@@ -216,14 +236,30 @@ export async function startSession(w: Work, session: Session, prefetched?: Sessi
   return started;
 }
 
+/**
+ * A session ends: its binding close (sessionClose.ts). Its summary goes out
+ * in its conversation and, where the method or the definition of done
+ * requires it, waits for the group's confirmation (spec 5.2, 6.3). The chat
+ * phase is not a session that ends this way.
+ */
 export async function endSession(w: Work, session: Session): Promise<void> {
+  // A linked session that never went live within its slot does not take place.
+  if (session.status === 'scheduled' && session.conversationId) {
+    await missedSession(w, session, session.readinessDetail ?? undefined);
+    return;
+  }
   if (session.status !== 'live') return;
-  await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'closed', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
-  w.bump();
-  await w.event('session_ended', 'engine', { sessionId: session.id });
-  // The end of a meeting nobody scheduled here is not announced either.
-  if (session.title === null && session.scheduledStart === null) return;
-  w.post({ purpose: 'session_ended', key: session.id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).sessionEnded(session.title ?? w.f.goal) });
+  // A meeting nobody scheduled or linked here is the chat with other means
+  // (D26): it ends without a word, as it began. A session the group agreed
+  // on ends with its binding close.
+  const adHoc = session.title === null && session.scheduledStart === null && session.conversationId === null;
+  if (session.kind !== 'live' || adHoc) {
+    await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: session.id }, { status: 'closed', endedAt: w.now, mediaConsent: session.mediaConsent === 'granted' ? 'withdrawn' : session.mediaConsent });
+    w.bump();
+    await w.event('session_ended', 'engine', { sessionId: session.id });
+    return;
+  }
+  await closeSession(w, session);
 }
 
 /**
@@ -234,7 +270,9 @@ export async function endSession(w: Work, session: Session): Promise<void> {
  */
 export async function meetingStarted(w: Work, sessionRef: string, snapshot: SessionCapabilitySnapshot | undefined): Promise<void> {
   if (w.f.phase !== 'configuring' && w.f.phase !== 'active') return;
-  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live');
+  // A linked session runs in its own conversation; a meeting of the home
+  // conversation is never it.
+  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.conversationId === null);
   if (live.some((s) => s.meetingRef === sessionRef && s.status !== 'scheduled')) return;
   const scheduled = live.find((s) => s.meetingRef === sessionRef) ?? live.find((s) => s.status === 'scheduled' && s.meetingRef === null);
   if (scheduled) {
@@ -262,17 +300,11 @@ export async function meetingStarted(w: Work, sessionRef: string, snapshot: Sess
 
 /** The meeting is over: its session ends and the chat is what counts again. */
 export async function meetingEnded(w: Work, sessionRef: string, chat: SessionCapabilitySnapshot | undefined): Promise<void> {
-  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.status === 'live');
+  const live = (await store.listSessions(w.tx, w.f.id)).filter((s) => s.kind === 'live' && s.status === 'live' && s.conversationId === null);
   const session = live.find((s) => s.meetingRef === sessionRef) ?? live[0];
   if (!session) return;
   await endSession(w, session);
   if (chat) await applySnapshot(w, chat);
-}
-
-/** A facilitation that ended has no session that is going on (D26). */
-async function closeSessions(w: Work): Promise<void> {
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'cancelled' WHERE facilitation_id = $1 AND status = 'scheduled'`, [w.f.id]);
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_sessions SET status = 'closed', ended_at = $2 WHERE facilitation_id = $1 AND status = 'live'`, [w.f.id, w.now]);
 }
 
 // ── media consent and speech ────────────────────────────────────────────────
@@ -285,7 +317,8 @@ async function askMediaConsent(w: Work, session: Session): Promise<void> {
   if (session.mediaConsent === 'pending' || session.mediaConsent === 'granted') return;
   await setConsent(w, session.id, 'pending');
   try {
-    await openProposal(w, { kind: 'media_consent', summary: texts(w.f.language).mediaConsent(), payload: { sessionId: session.id }, proposedBy: 'engine', windowMinutes: w.f.settings.confirmWindowMinutes });
+    // Asked of the people in the call: in a linked session's own conversation.
+    await openProposal(w, { kind: 'media_consent', summary: texts(w.f.language).mediaConsent(), payload: { sessionId: session.id }, proposedBy: 'engine', windowMinutes: w.f.settings.confirmWindowMinutes, ...(session.conversationId ? { conversationId: session.conversationId } : {}) });
   } catch (err) {
     if (!(err instanceof Refusal) || err.code !== 'proposal_open') throw err;
     // Another proposal is being decided: ask afterwards.
@@ -297,59 +330,20 @@ const STOP_LISTENING = /^(?:stop listening|stop audio|do not listen|nicht mithö
 
 /** Anyone can stop the processing of speech at any time. */
 const stopListening: InboundHandler = async ({ w, record, author, command }) => {
-  if (!author || record.kind !== 'created' || !STOP_LISTENING.test(command)) return undefined;
-  const session = await currentSession(w.tx, w.f.id);
+  // Anyone in the call can stop it, also a session participant of a linked
+  // session conversation (6.3).
+  const inSession = record.conversationId !== w.f.conversationId;
+  if ((!author && !inSession) || record.kind !== 'created' || !STOP_LISTENING.test(command)) return undefined;
+  const session = inSession ? (await store.listSessions(w.tx, w.f.id)).find((s) => s.conversationId === record.conversationId) : await currentSession(w.tx, w.f.id);
   if (!session || (session.mediaConsent !== 'granted' && session.mediaConsent !== 'pending')) return undefined;
   await setConsent(w, session.id, 'withdrawn');
   const proposal = await store.openProposal(w.tx, w.f.id);
   if (proposal?.kind === 'media_consent') await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE id = $1`, [proposal.id, w.now]);
   w.bump();
-  await w.event('media_stopped', author.principalId, { sessionId: session.id, messageId: record.messageId });
-  w.post({ purpose: 'media_stopped', key: record.eventId, to: 'group', deliveryClass: 'essential', text: texts(w.f.language).mediaStopped(author.displayName) });
+  await w.event('media_stopped', author?.principalId ?? principalKey(record.author), { sessionId: session.id, messageId: record.messageId });
+  w.post({ purpose: 'media_stopped', key: record.eventId, to: 'group', deliveryClass: 'essential', text: texts(w.f.language).mediaStopped(author?.displayName ?? record.author.displayName ?? record.author.id) });
   return { outcome: 'media_stopped' };
 };
-
-/** Record what somebody said in the call. It is NOT authenticated input: it
- *  stays unconfirmed until that person confirms it in the chat. */
-export async function recordSpoken(w: Work, input: { speaker: string; kind: Contribution['kind']; summary: string; ballot?: Ballot }): Promise<{ speaker: Participant; contribution: Contribution }> {
-  if (w.f.phase !== 'active') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
-  const session = await currentSession(w.tx, w.f.id);
-  if (!snapshotOf(session)?.inputs.includes('transcribed_speech')) throw new Refusal('no_speech', 'This session gives no transcribed speech. Only what is written counts; say so if somebody assumes otherwise.');
-  if (session?.mediaConsent !== 'granted') throw new Refusal('no_consent', 'The group has not consented to the processing of speech (or it was stopped). Nothing spoken may be recorded.');
-  const step = await store.openStepOf(w.tx, w.f.id);
-  if (!step) throw new Refusal('no_open_step', 'No step is open.');
-  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
-  const person = resolvePerson(input.speaker, undefined, active.map((p) => ({ id: p.principalId, name: p.displayName })));
-  if (typeof person === 'string') throw new Refusal(person, `'${input.speaker}' is not a participant I can match.`);
-  const speaker = active.find((p) => p.principalId === person.id) as Participant;
-  const contribution = await store.addContribution(w.tx, {
-    facilitationId: w.f.id,
-    stepId: step.id,
-    round: step.round,
-    participantPrincipal: speaker.principalId,
-    kind: input.kind,
-    payload: { summary: input.summary, text: input.summary, ...(input.ballot ? { ballot: input.ballot } : {}) },
-    source: 'speech',
-    status: 'unconfirmed',
-    interpreted: true,
-    recordedAt: w.now,
-  });
-  const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', { facilitationId: w.f.id, principal: speaker.principalId, kind: 'contribution', refId: contribution.id, detail: { summary: input.summary }, createdAt: w.now });
-  w.bump();
-  await w.event('contribution_recorded', speaker.principalId, { contributionId: contribution.id, kind: input.kind, summary: input.summary, status: 'unconfirmed', source: 'speech' });
-  w.post({
-    purpose: 'echo',
-    key: contribution.id,
-    to: 'group',
-    deliveryClass: 'droppable',
-    versionBound: false,
-    requiredPhases: ['active'],
-    text: texts(w.f.language).spokenEcho(speaker.displayName, input.summary),
-    mentions: [mention(speaker)],
-    link: { kind: 'ack', id: ack.id },
-  });
-  return { speaker, contribution };
-}
 
 /** The channel reported a changed snapshot mid-session: adapt, and say so. */
 export async function applySnapshot(w: Work, reported: SessionCapabilitySnapshot): Promise<void> {
@@ -357,6 +351,24 @@ export async function applySnapshot(w: Work, reported: SessionCapabilitySnapshot
   const snapshot = real(w.engine, reported);
   const t = texts(w.f.language);
   const sessions = await store.listSessions(w.tx, w.f.id);
+  // A change of a linked session conversation concerns that session alone.
+  if (snapshot.conversationId !== w.f.conversationId) {
+    const linked = sessions.find((s) => s.conversationId === snapshot.conversationId);
+    if (!linked || (linked.status !== 'live' && linked.status !== 'scheduled')) return;
+    const changed = diffSnapshots(snapshotOf(linked), snapshot);
+    if (!changed.changed) return;
+    await update(w.tx, 'plg_omadia_agent_facilitator_sessions', { id: linked.id }, { capabilitySnapshot: { ...snapshot, modality: linked.modality } });
+    w.bump();
+    await w.event('capabilities_changed', 'engine', { sessionId: linked.id, gained: changed.gained, lost: changed.lost });
+    const tl = texts(w.f.language);
+    const key = `${linked.id}:${snapshot.capturedAt}`;
+    const there = { conversationId: linked.conversationId as string };
+    if (changed.gained.length > 0) w.post({ purpose: 'capability_gained', key, to: 'group', ...there, deliveryClass: 'essential', text: tl.capabilityGained(changed.gained.map((c) => tl.perceive[c])) });
+    if (changed.lost.length > 0) w.post({ purpose: 'capability_lost', key, to: 'group', ...there, deliveryClass: 'essential', text: tl.capabilityLost(changed.lost.map((c) => tl.perceive[c])) });
+    if (changed.lost.includes('transcribed_speech') && linked.mediaConsent !== 'not_needed') await setConsent(w, linked.id, 'withdrawn');
+    if (linked.status === 'live' && changed.gained.includes('transcribed_speech')) await askMediaConsent(w, { ...linked, mediaConsent: linked.mediaConsent === 'granted' ? 'not_needed' : linked.mediaConsent });
+    return;
+  }
   const session =
     (snapshot.sessionRef ? sessions.find((s) => s.kind === 'live' && s.meetingRef === snapshot.sessionRef && s.status === 'live') : undefined) ??
     sessions.find((s) => s.kind === 'live' && s.status === 'live') ??
@@ -468,8 +480,6 @@ export function installSessions(): void {
   onStepFinished(closeStepCards);
   onAborted(async (w) => closeAllCards(w));
   onClosed(closeAllCards);
-  onAborted(async (w) => closeSessions(w));
-  onClosed(closeSessions);
   onVoteOpened(postPoll);
   onConfigured(createChatSession);
 
@@ -490,7 +500,8 @@ export function installSessions(): void {
   registerJobHandler('time_notice', async (w, job) => {
     const step = await store.getStep(w.tx, String(job.payload['stepId']));
     if (!step || step.status !== 'open' || w.f.phase !== 'active') return;
-    w.post({ purpose: 'time_notice', key: job.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], versionBound: false, text: texts(w.f.language).timeNotice(step.title, TIME_NOTICE_MINUTES) });
+    const live = await currentSession(w.tx, w.f.id);
+    w.post({ purpose: 'time_notice', key: job.id, to: 'group', ...(live?.conversationId ? { conversationId: live.conversationId } : {}), deliveryClass: 'droppable', requiredPhases: ['active'], versionBound: false, text: texts(w.f.language).timeNotice(step.title, TIME_NOTICE_MINUTES) });
   });
 
   const withSession = (fn: (w: Work, session: Session, prepared: unknown) => Promise<unknown>) => async (w: Work, job: { payload: Record<string, unknown> }, prepared: unknown): Promise<void> => {
@@ -500,7 +511,7 @@ export function installSessions(): void {
   registerJobHandler('session_agenda', withSession(sendAgenda));
   registerJobHandler(
     'session_start',
-    withSession((w, session, prepared) => startSession(w, session, prepared as SessionCapabilitySnapshot | undefined)),
+    withSession((w, session, prepared) => startSession(w, session, (prepared as PreparedStart | undefined)?.snapshot, (prepared as PreparedStart | undefined)?.live)),
     (engine, job) => prepareSessionStart(engine, job.facilitationId, String(job.payload['sessionId'])),
   );
   registerJobHandler('session_end', withSession(endSession));

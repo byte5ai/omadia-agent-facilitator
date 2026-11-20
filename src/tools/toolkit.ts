@@ -138,7 +138,7 @@ export function defineTool(
         // No database, or one whose tables are not migrated: nothing is started on it.
         if (!engine.available()) throw new EngineUnavailableError('The facilitation engine is not available: its database is missing or not migrated (see the activation log).');
         engine.ensureAttached(ctx.agentSlug);
-        return await engine.core.inToolCall(ctx.inboundEventId, () => run(asObject(input), ctx));
+        return await engine.core.inToolCall(ctx.inboundEventId, () => run(asObject(input), ctx), ctx.conversationId);
       } catch (err) {
         if (err instanceof Refusal) {
           if (err.code === 'no_context') return err.message;

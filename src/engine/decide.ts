@@ -344,12 +344,22 @@ export async function conclude(w: Work, ctx: ConcludeContext): Promise<void> {
   // Nothing time-based survives the conclusion: no reminder after completion.
   // Only the maximum duration stays, so a result that cannot be posted does
   // not keep the facilitation open forever.
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime'`, [w.f.id, w.now]);
+  // A session summary that waits for its confirmation keeps its window: it
+  // continues its closing after the conclusion (criterion 51).
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind NOT IN ('lifetime', 'session_confirmation')`, [w.f.id, w.now]);
+  for (const hook of atConclusion) await hook(w);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
   // What was still put to the group cannot be answered any more.
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
   await w.event('concluded', 'engine', { atDeadline: ctx.atDeadline, requiresConfirmation });
   await openResultClosing(w, { document: text, requiresConfirmation });
+}
+
+const atConclusion: Array<(w: Work) => Promise<void>> = [];
+/** What happens in the same transaction as entering `concluding` (the
+ *  sessions of the facilitation, spec 5.2). */
+export function onConcluding(hook: (w: Work) => Promise<void>): void {
+  if (!atConclusion.includes(hook)) atConclusion.push(hook);
 }
 
 export type AfterClose = (w: Work) => Promise<void>;

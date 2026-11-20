@@ -8,6 +8,7 @@ import type { SessionCapabilitySnapshot } from '@omadia/plugin-api';
 import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { diffSnapshots, perceptionStatement, planMeans } from '../src/engine/media.js';
+import { listClosings } from '../src/engine/resultStatus.js';
 import { texts } from '../src/texts/index.js';
 import { ANNA, BERT, CARA, FOUR, createHarness, startActive, validSummaries, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
@@ -173,9 +174,14 @@ test('a meeting: agenda before it, start on time with what is perceived, time ch
 
   await h.kernel.sessionEvent('mira', conv, 'meeting-1', 'session_ended');
   await h.settle();
-  assert.ok(posts(conv).includes('"Planning call" has ended. What is still open continues here in the chat.'));
+  // The binding close: the session's summary, frozen as the document of its
+  // own closing event; nothing here needs the group's confirmation, so it is
+  // published (spec 5.2, 6.3).
+  assert.match(last(conv), /^Result status: published\n\nSummary of the session "Planning call"\n\nDecisions:\n\(none\)\n\nNext steps:\n\(none\)\n\nOpen points:\n- Discuss priorities\n\nClosing session:[0-9a-f-]+, document version 1\.$/s);
   const sessions = await store.listSessions(h.db.pool, (await h.facilitation(conv)).id);
   assert.deepEqual(sessions.map((s) => [s.kind, s.status]), [['async', 'live'], ['live', 'closed']]);
+  const [closing] = await listClosings(h.db.pool, (await h.facilitation(conv)).id);
+  assert.deepEqual([closing?.kind, closing?.resultStatus, closing?.deliveryStatus, closing?.part], ['session', 'published', 'delivered', 'done']);
 });
 
 test('hybrid: the speaking order puts remote voices first when the room has spoken more, and rotates who starts', { skip: PG_SKIP }, async () => {
@@ -203,25 +209,34 @@ test('adaptation mid-session: transcribed speech appears, the facilitator announ
   const conv = h.kernel.conversation('se-adapt', [ANNA, BERT, CARA]);
   h.kernel.capabilities(conv, ['text'], ['text', 'private_messages']);
   const f = await startActive(h, conv, { method: 'single', options: ['Thai', 'Pizza'] });
-  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Refused \(no_speech\)/);
+  // Speech before the session gives any is not processed.
+  await h.kernel.transcript(conv, { segmentId: 'seg-0', text: 'A', source: 'participant', userId: 'anna' });
+  await h.settle();
+  assert.equal((await store.listContributions(h.db.pool, f.id)).length, 0);
 
   await h.kernel.changeCapabilities('mira', h.kernel.capabilities(conv, ['text', 'transcribed_speech'], ['text', 'private_messages']));
   await h.settle();
   const [gained, proposal] = posts(conv).slice(-2);
-  assert.equal(gained, 'Something changed in this session. I can now also perceive: what is said in the call, as a transcript with the speaker.');
+  assert.equal(gained, 'Something changed in this session. I can now also perceive: what is said in the call, as a transcript.');
   assert.match(proposal ?? '', /^Proposal: process the transcribed speech of this call.*Raw audio and video are not stored.*"stop listening"/s);
-  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Refused \(no_consent\)/, 'nothing spoken is processed before consent');
+  await h.kernel.transcript(conv, { segmentId: 'seg-1', text: 'A', source: 'participant', userId: 'anna' });
+  await h.settle();
+  assert.equal((await store.listContributions(h.db.pool, f.id)).length, 0, 'nothing spoken is processed before consent');
 
   // Consent to being listened to is given as a reply to the request, nothing else.
   const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
   await passWindow(h, conv);
   assert.match(last(conv), /^I now follow the transcript of the call\./);
-  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Recorded for Anna as unconfirmed/);
-  assert.equal(last(conv), 'Anna, I heard you say: Thai. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.');
+  await h.kernel.transcript(conv, { segmentId: 'seg-2', text: 'A', source: 'participant', userId: 'anna', speakerHint: 'Bert' });
+  await h.settle();
+  assert.equal(last(conv), 'Anna, the transcript has you saying: "A". Reply "yes" to confirm it as your contribution. It counts once you confirmed exactly this.');
   let spoken = (await store.listContributions(h.db.pool, f.id)).find((c) => c.source === 'speech');
-  assert.deepEqual([spoken?.status, spoken?.sourceMessageId], ['unconfirmed', null]);
+  assert.deepEqual([spoken?.status, spoken?.participantPrincipal, spoken?.kind], ['unconfirmed', 'user:anna', 'vote'], 'the platform principal is the author, never the speaker hint');
   assert.match(await tool(conv, 'facilitation_status'), /Contributed: 0 of \d+/);
+  // Somebody else's "yes" confirms nothing of Anna's.
+  await say(conv, 'bert', 'yes');
+  assert.equal((await store.listContributions(h.db.pool, f.id)).find((c) => c.source === 'speech')?.status, 'unconfirmed');
   await say(conv, 'anna', 'yes');
   spoken = (await store.listContributions(h.db.pool, f.id)).find((c) => c.source === 'speech');
   assert.equal(spoken?.status, 'valid');
@@ -229,7 +244,9 @@ test('adaptation mid-session: transcribed speech appears, the facilitator announ
 
   await say(conv, 'bert', 'stop listening');
   assert.equal(last(conv), 'Bert asked me to stop. I no longer process the speech of this call.');
-  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Cara', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Refused \(no_consent\)/);
+  await h.kernel.transcript(conv, { segmentId: 'seg-3', text: 'B', source: 'participant', userId: 'cara' });
+  await h.settle();
+  assert.equal((await store.listContributions(h.db.pool, f.id)).filter((c) => c.source === 'speech').length, 1, 'stopped: nothing more is processed');
   assert.equal((await h.facilitation(conv)).id, f.id, 'the same facilitation throughout');
 });
 
@@ -265,6 +282,8 @@ test('review 7: consent to processing speech is never given by a message that is
   const session = (await store.listSessions(h.db.pool, f.id)).find((s) => s.kind === 'async');
   assert.equal(session?.mediaConsent, 'pending');
   assert.ok(!posts(conv).some((t) => t.startsWith('I now follow the transcript')));
-  assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'position', summary: 'x' }), /^Refused \((no_consent|no_facilitation)\)/);
+  await h.kernel.transcript(conv, { segmentId: 'seg-r7', text: 'x', source: 'participant', userId: 'anna' });
+  await h.settle();
+  assert.equal((await store.listContributions(h.db.pool, f.id)).filter((c) => c.source === 'speech').length, 0);
   assert.ok(request?.text.includes('Reply to this message'));
 });

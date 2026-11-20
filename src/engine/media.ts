@@ -106,7 +106,7 @@ export function describeMeans(means: Means): string[] {
     means.speakingOrder === 'hand_raise' ? 'Speaking order: by raised hands.' : 'Speaking order: no raised hands here; use facilitation_speaking_order for a round-robin list.',
     means.invitation === 'private_message' ? 'Silent voices: invited privately by the engine.' : 'Silent voices: no private messages here; the engine invites with a neutral line in the group.',
     means.contributions === 'text_and_speech'
-      ? 'Speech: a transcript with speakers is available. Use facilitation_record_spoken only after the group consented; it stays unconfirmed until the person confirms in the chat.'
+      ? 'Speech: the transcript of the call arrives on its own after the group consented. The engine records it: a segment from a personal microphone waits for its speaker to confirm it; a segment of the room is shown without a name and counts only when somebody adopts it as theirs. Never say who said something in the call: the speaker recognition is a guess, not authorship.'
       : 'Speech: you do not hear the call. Only what is written counts; say so if somebody assumes otherwise.',
   ];
 }

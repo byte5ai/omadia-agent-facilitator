@@ -24,10 +24,14 @@ import { readDone } from './actionItems.js';
 import { namesOf } from './addressing.js';
 import type { EngineCore } from './core.js';
 import { normaliseCommand, processRecord } from './inbound.js';
+import { sessionOfConversation } from './sessionLinks.js';
 
 const STATUS = /^(status|stand|zwischenstand)$/u;
 
-export type AddressedDecision = { handled: false } | { handled: true; facilitationId: string; work: () => Promise<void> };
+export type AddressedDecision =
+  | { handled: false }
+  /** `work` returns the record and whether it wants a facilitator turn. */
+  | { handled: true; facilitationId: string; work: () => Promise<{ record: ProcessConversationMessageRecord; modelTurn: boolean } | void> };
 
 /** The follow-up this message is for, decided from the state alone. */
 async function meant(engine: EngineCore, request: AddressedMessageRequest): Promise<Facilitation | undefined> {
@@ -62,10 +66,23 @@ async function meant(engine: EngineCore, request: AddressedMessageRequest): Prom
   return named;
 }
 
+/** The running facilitation whose scheduled session runs in the request's
+ *  conversation, if one of the listening processes has one. */
+async function scheduledSessionTaking(engine: EngineCore, request: AddressedMessageRequest): Promise<Facilitation | undefined> {
+  for (const processId of request.processIds) {
+    const f = await store.getFacilitation(engine.db(), processId);
+    if (!f || f.facilitatorAgent !== request.agentSlug || f.conversationId === request.conversationId) continue;
+    if (f.phase !== 'configuring' && f.phase !== 'active') continue;
+    const session = await sessionOfConversation(engine.db(), f.id, request.conversationId);
+    if (session?.status === 'scheduled') return f;
+  }
+  return undefined;
+}
+
 /** The record the inbound path works on: the kernel's stored event when
  *  there is one, otherwise one built from the question. */
-async function recordFor(engine: EngineCore, f: Facilitation, request: AddressedMessageRequest): Promise<{ record: ProcessConversationMessageRecord; stored: boolean }> {
-  const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId, processId: f.id };
+async function recordFor(engine: EngineCore, f: Facilitation, request: AddressedMessageRequest, conversationId = f.conversationId): Promise<{ record: ProcessConversationMessageRecord; stored: boolean }> {
+  const scope = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId, processId: f.id };
   const messages = engine.deps.kernel.messages();
   try {
     const stored =
@@ -82,7 +99,7 @@ async function recordFor(engine: EngineCore, f: Facilitation, request: Addressed
       eventId: `addressed:${id}`,
       processId: f.id,
       channelType: f.channelType,
-      conversationId: f.conversationId,
+      conversationId,
       messageId: request.messageId ?? `addressed:${id}`,
       revision: 0,
       kind: 'created',
@@ -104,6 +121,22 @@ async function recordFor(engine: EngineCore, f: Facilitation, request: Addressed
  */
 export async function decideAddressed(engine: EngineCore, request: AddressedMessageRequest): Promise<AddressedDecision> {
   try {
+    // A linked session conversation before its session (spec 5.3): what is
+    // addressed to the facilitator there (questions, preparation) belongs to
+    // the facilitation and is answered there.
+    const linked = await scheduledSessionTaking(engine, request);
+    if (linked) {
+      return {
+        handled: true,
+        facilitationId: linked.id,
+        work: async () => {
+          const { record, stored } = await recordFor(engine, linked, request, request.conversationId);
+          if (!stored && request.messageId !== undefined) engine.noteTakenByHook(request.messageId);
+          const done = await processRecord(engine, linked.facilitatorAgent, record, { fromHook: true, keepCursor: !stored });
+          return { record, modelTurn: done?.result.modelTurn === true };
+        },
+      };
+    }
     const f = await meant(engine, request);
     if (!f) return { handled: false };
     return {
