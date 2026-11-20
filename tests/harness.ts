@@ -113,3 +113,25 @@ export async function startActive(h: Harness, conversation: string, extra: Recor
   if (!opened.startsWith('Opened')) throw new Error(opened);
   return h.facilitation(conversation);
 }
+
+/** Recording is quiet (spec 5.3, 5.14): what counts for a person is read from
+ *  the store, not from an echo. The summaries of their valid contributions. */
+export async function validSummaries(h: Harness, conversationId: string, who: string): Promise<string[]> {
+  const f = await h.facilitation(conversationId);
+  return (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid' && c.participantPrincipal === `user:${who}`).map((c) => String(c.payload['summary'] ?? ''));
+}
+
+/**
+ * Group consent ends with its window, not with everybody agreeing early (spec
+ * 5.7, criteria 24 and 31). Jump just past the window of the open proposal,
+ * or else of the open consent step, of the conversation's latest
+ * facilitation, and run the scheduler. Nothing open: only a tick.
+ */
+export async function passWindow(h: Harness, conversationId: string): Promise<void> {
+  const f = await h.facilitation(conversationId);
+  const proposal = await store.openProposal(h.db.pool, f.id);
+  const step = await store.openStepOf(h.db.pool, f.id);
+  const until = proposal?.windowEndsAt ?? (step?.method === 'consent' ? step.roundDeadline : null) ?? null;
+  if (until && until.getTime() >= h.clock.now().getTime()) h.clock.set(new Date(until.getTime() + 1000));
+  await h.tick();
+}

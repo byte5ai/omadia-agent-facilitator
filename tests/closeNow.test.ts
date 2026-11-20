@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
 import { HOUR_MS } from '../src/clock.js';
-import { ANNA, BERT, CARA, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, passWindow, validSummaries } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -43,6 +43,8 @@ test('D28: "next" in a vote proposes to close it now, and the group consents', {
   assert.match(posts(conv).at(-1) ?? '', /close the vote on "Pick the name" now and count the 2 of 3 votes cast/i);
   await say(conv, 'bert', 'yes');
   await say(conv, 'cara', 'yes');
+  assert.equal((await h.facilitation(conv)).phase, 'active', 'agreeing early does not end the window (spec 5.7)');
+  await passWindow(h, conv);
   const f = await h.facilitation(conv);
   assert.equal(f.phase, 'closed');
   assert.match(posts(conv).find((p) => /^Result for/.test(p)) ?? '', /Alpha/);
@@ -57,7 +59,7 @@ test('D28: an objection keeps the vote open until its deadline', { skip: PG_SKIP
   assert.equal((await h.facilitation(conv)).phase, 'active');
   // The vote goes on: a ballot still counts.
   await say(conv, 'cara', 'B > A > C');
-  assert.match(posts(conv).at(-1) ?? '', /^Recorded for you, Cara/);
+  assert.equal((await validSummaries(h, conv, 'cara')).length, 1);
 });
 
 test('D28: nobody objects within the window: the vote closes with the votes cast, and a tie goes to a runoff instead of an abort', { skip: PG_SKIP }, async () => {
@@ -103,6 +105,8 @@ test('D28: the facilitator can put "close now" to the group; the tool never clos
   assert.match(proposed, /not closed yet/i);
   assert.equal((await h.facilitation(conv)).phase, 'active');
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'yes');
+  assert.equal((await h.facilitation(conv)).phase, 'active', 'the group closes it when the window ends');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).phase, 'closed');
 });
 
@@ -115,15 +119,19 @@ test('D28: a vote that closes when everybody voted says so, and can be closed ea
   await say(conv, 'anna', 'next');
   await say(conv, 'bert', 'yes');
   await say(conv, 'cara', 'yes');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).phase, 'closed');
 });
 
-test('D28, as in the live run: the only participant has voted and writes "weiter": the vote closes at once', { skip: PG_SKIP }, async () => {
+test('D28, as in the live run: the only participant has voted and writes "weiter": the vote closes when the window of that consent ends', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('cn-alone', [ANNA]);
   await tool(conv, 'facilitation_start', atDeadline());
   await say(conv, 'anna', 'A > B > C');
   assert.equal((await h.facilitation(conv)).phase, 'active');
   await say(conv, 'anna', 'weiter');
+  // Asking to close is agreeing to it; the window still runs (spec 5.7).
+  assert.equal((await h.facilitation(conv)).phase, 'active');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   assert.match(posts(conv).find((p) => /^Result for/.test(p)) ?? '', /Alpha/);
 });

@@ -14,8 +14,10 @@ import * as store from '../db/store.js';
 import { principalKey } from '../kernel.js';
 import type { Ack, Contribution, InboundRow, Participant } from '../model.js';
 import { texts } from '../texts/index.js';
-import { confirmContribution, declineContribution, mention, supersedeByMessage, withdrawByMessage } from './contributions.js';
+import { confirmContribution, declineContribution, mention, ownLiveParts, supersedeByMessage, withdrawByMessage } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
+import { endFollowup } from './actionItems.js';
+import { correlate } from './correlation.js';
 import { abortInWork } from './lifecycle.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { expectedNames, sameName, sourceOfName } from './roll.js';
@@ -86,6 +88,9 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
     return { outcome: 'status' };
   }
   if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring' || w.f.phase === 'concluding')) {
+    const route = await correlate(w, record, author, { kind: 'stop' });
+    if (route === 'asked') return { outcome: 'which_process' };
+    if (route === 'others') return { outcome: 'left_to_other_process' };
     await abortInWork(w, {
       reason: `stopped by ${author.displayName}`,
       actor: author.principalId,
@@ -93,6 +98,15 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
       detail: { messageId: record.messageId },
     });
     return { outcome: 'stopped', ended: true };
+  }
+  // In follow-up, "stop" ends only this facilitation's follow-up (spec 5.3).
+  if (STOP.test(command) && w.f.phase === 'closed' && w.f.followupState === 'active') {
+    const route = await correlate(w, record, author, { kind: 'stop' });
+    if (route === 'asked') return { outcome: 'which_process' };
+    if (route === 'others') return { outcome: 'left_to_other_process' };
+    await w.event('followup_stopped', author.principalId, { messageId: record.messageId });
+    await endFollowup(w);
+    return { outcome: 'followup_stopped' };
   }
   return undefined;
 };
@@ -182,7 +196,7 @@ const acknowledgements: InboundHandler = async ({ w, record, author, command }) 
 
 /** Edits and deletions of a message that carried a contribution. */
 const revisions: InboundHandler = async (ctx) => {
-  const { w, record, author } = ctx;
+  const { w, record } = ctx;
   if (record.kind !== 'edited' && record.kind !== 'deleted') return undefined;
   // Contributions are frozen once the facilitation concludes: what was
   // counted stays what was counted. A later edit or deletion is put on
@@ -192,8 +206,18 @@ const revisions: InboundHandler = async (ctx) => {
     await w.event('late_change', principalKey(record.author), { kind: record.kind, messageId: record.messageId, revision: record.revision, contributionId: carried?.id ?? null });
     return { outcome: `late_${record.kind}` };
   }
+  // A step that closed keeps what it counted (spec 5.3): an edit or a
+  // deletion of a message it counted changes nothing there.
+  const carried = await ownLiveParts(w, record.messageId);
+  for (const part of carried) {
+    const step = await store.getStep(w.tx, part.stepId);
+    if (step?.status === 'closed') {
+      await w.event('late_change', principalKey(record.author), { kind: record.kind, messageId: record.messageId, revision: record.revision, contributionId: part.id, reason: 'step_closed' });
+      return { outcome: `late_${record.kind}` };
+    }
+  }
   if (record.kind === 'deleted') {
-    const withdrawn = await withdrawByMessage(w, record.messageId, author);
+    const withdrawn = await withdrawByMessage(w, record.messageId);
     return { outcome: withdrawn ? 'withdrawn' : 'deleted_without_contribution' };
   }
   if (record.kind !== 'edited') return undefined;

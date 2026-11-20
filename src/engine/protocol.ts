@@ -2,6 +2,7 @@
 // their rationale, open points, and action items with owner and due date.
 // Built from the tables of one facilitation, deterministically.
 
+import { importOf } from './imports.js';
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
 import type { Closing, Facilitation, ProtocolEvent } from '../model.js';
@@ -20,7 +21,7 @@ export async function closingSummary(w: { tx: Queryable; f: Facilitation }): Pro
   const t = texts(w.f.language);
   const participants = await store.listParticipants(w.tx, w.f.id);
   const name = (id: string): string => participants.find((p) => p.principalId === id)?.displayName ?? t.unnamedPerson;
-  const decisions = (await store.listDecisions(w.tx, w.f.id)).map((d) => d.statement);
+  const decisions = (await store.listDecisions(w.tx, w.f.id)).filter((d) => d.status === 'valid').map((d) => d.statement);
   const items = await store.listActionItems(w.tx, w.f.id);
   // Only what its owner accepted is an action item; a nomination nobody
   // accepted is an open point (spec 5.4, criterion 37).
@@ -93,12 +94,13 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
       p.contributions,
       contributions.map((c) => {
         const step = steps.find((s) => s.id === c.stepId);
-        return `${step ? `${step.title}: ` : ''}${name(c.participantPrincipal)}: ${String(c.payload['summary'] ?? '')}`;
+        const imported = importOf(c);
+        return `${step ? `${step.title}: ` : ''}${name(c.participantPrincipal)}: ${String(c.payload['summary'] ?? '')}${imported ? ` (${p.imported(imported.origin, name(imported.by))})` : ''}`;
       }),
     ),
     ...section(p.clusters, clusters.map((c) => `${c.label} (${String(c.memberContributionIds.length)})`)),
     ...section(p.summaries, of(['summary_confirmed']).map((e) => String(e.payload['text']))),
-    ...section(p.decisions, decisions.map((d) => (d.rationale ? `${d.statement} (${p.rationale}: ${d.rationale})` : d.statement))),
+    ...section(p.decisions, decisions.map((d) => `${d.rationale ? `${d.statement} (${p.rationale}: ${d.rationale})` : d.statement}${d.status === 'valid' ? '' : ` [${p.decisionStatus[d.status]}]`}`)),
     ...section(p.actions, actions.filter((a) => a.status === 'confirmed' || a.status === 'done').map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), when(a.dueDate), t.actionStatusWords[a.status]))),
     ...section(p.parked, [
       ...actions.filter((a) => a.status === 'proposed').map((a) => t.notAccepted(a.number, a.description, name(a.ownerPrincipal))),

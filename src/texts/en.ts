@@ -38,7 +38,12 @@ export const en = {
   echoChanged: (name: string, summary: string): string => `Changed for you, ${name}: ${summary}`,
   echoConfirmed: (name: string, summary: string): string => `Confirmed, ${name}: ${summary}`,
   echoDeclined: (name: string): string => `Understood, ${name}: I did not record that.`,
+  /** A contribution somebody recorded for another person; it waits for them. */
+  importPending: (name: string, by: string, summary: string, origin: string): string =>
+    `${name}, ${by} recorded this for you from ${origin}: ${summary}. It counts only once you confirm it yourself: reply "yes" to this message, or "no".`,
   echoWithdrawn: (name: string): string => `${name}, you deleted your message, so I withdrew the contribution it carried.`,
+  whichProcess: (name: string, processes: readonly string[]): string =>
+    `${name}, several facilitations run here, and I cannot tell which one you mean. Please reply directly to a message of that one:\n${processes.map((p) => `- ${p}`).join('\n')}`,
   whichConfirmation: (name: string, open: readonly string[]): string =>
     `${name}, several things wait for your confirmation. Please reply directly to the one you mean:\n${open.map((o) => `- ${o}`).join('\n')}`,
 
@@ -211,7 +216,7 @@ export const en = {
     media_consent: (what: string): string => what,
   },
   proposalAnnounce: (what: string, until: string, extendable: boolean, mustReply: boolean): string =>
-    `Proposal: ${what}\nIt holds if nobody objects until ${until}, or at once when everybody agreed. ${mustReply ? 'Reply to this message with' : 'Write'} "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.${mustReply ? ' Only a reply to this message (or a 👍 on it) counts for it.' : ''}`,
+    `Proposal: ${what}\nIt holds if nobody objects until ${until}. ${mustReply ? 'Reply to this message with' : 'Write'} "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.${mustReply ? ' Only a reply to this message (or a 👍 on it) counts for it.' : ''}`,
   proposalAccepted: (what: string): string => `Accepted, nobody objected: ${what}`,
   proposalRejected: (what: string, objections: readonly string[]): string =>
     `Not accepted: ${what}\nStanding objection${objections.length === 1 ? '' : 's'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,
@@ -261,7 +266,7 @@ export const en = {
   actionStatus: (lines: readonly string[]): string => `Status of the action items:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number: number, description: string, owner: string, due: string, status: string): string =>
     `#${String(number)} ${description} (${owner}, due ${due}): ${status}`,
-  actionStatusWords: { proposed: 'waiting for the owner', confirmed: 'open', done: 'done', declined: 'declined' },
+  actionStatusWords: { proposed: 'waiting for the owner', confirmed: 'open', done: 'done', declined: 'declined', void: 'no longer holds' },
   /** A nomination its owner did not accept before the result was frozen: an
    *  open point, never an action item (spec 5.4, criterion 37). */
   notAccepted: (number: number, description: string, owner: string): string => `#${String(number)} ${description}: proposed for ${owner}, not accepted`,
@@ -290,7 +295,9 @@ export const en = {
     version: 'version',
     agenda: 'Agenda',
     decisions: 'Decisions',
+    decisionStatus: { valid: '', pending_repeat: 'pending until its repeat closes', replaced: 'replaced by the repeat', void: 'no longer holds' } as Record<string, string>,
     rationale: 'Rationale',
+    imported: (origin: string, by: string): string => `imported by ${by} from ${origin}, confirmed`,
     clusters: 'Clusters confirmed by the group',
     summaries: 'Summaries confirmed by the group',
     contributions: 'Contributions',
@@ -418,6 +425,8 @@ export const en = {
     provisional: boolean;
     proposal?: string;
     deadline?: string;
+    /** Contributions recorded for somebody else that wait for that person. */
+    imports?: string[] | number;
   }): string =>
     [
       `Status: ${s.phase}. Goal: ${s.goal}`,
@@ -432,6 +441,7 @@ export const en = {
       ...(s.options ? [`Options: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Provisional tally' : 'Tally'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Open proposal: ${s.proposal}`] : []),
+      ...(s.imports === undefined ? [] : [`Imported, waiting for the person's own confirmation: ${typeof s.imports === 'number' ? String(s.imports) : s.imports.join('; ')}`]),
       s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: none',
     ].join('\n'),
 
@@ -446,6 +456,8 @@ export const en = {
     close_rule: (rule: 'all_contributed' | 'at_deadline'): string =>
       rule === 'at_deadline' ? 'evaluate at the deadline instead of when everybody has contributed' : 'evaluate as soon as everybody has contributed instead of at the deadline',
     method: (title: string, rules: string): string => `change how "${title}" is decided. ${rules}`,
+    method_repeat: (title: string, rules: string): string =>
+      `repeat the closed step "${title}" as a new step, decided like this: ${rules} The earlier contributions do not count in it; its result stands on record until the repeat replaces it.`,
     reminders: (times: string): string => (times === '' ? 'send no reminders before the deadline' : `remind ${times} before the deadline`),
     dod_met: (summary: string): string => `the definition of done is met, and we close with this:\n${summary}`,
   },
@@ -458,6 +470,13 @@ export const en = {
     reminders: (times: string): string => (times === '' ? 'No reminders are sent before the deadline any more.' : `Reminders are now sent ${times} before the deadline.`),
   },
   actAgain: (names: string): string => `Contributions made under the old rules no longer fit. Please contribute again: ${names}.`,
+  repeatTitle: (title: string): string => `${title} (repeat)`,
+  repeatOpened: (title: string): string =>
+    `"${title}" is repeated as a new step with the new rules. Contributions to the earlier step do not count in it. What followed from its result is pending until the repeat closes.`,
+  pendingRepeat: (names: string, title: string): string => `${names}: what you took on depends on "${title}" and is pending until its repeat closes.`,
+  repeatClosed: (title: string, holds: boolean): string =>
+    holds ? `The repeat of "${title}" closed with the same result. What followed from it still holds.` : `The repeat of "${title}" closed with a different result, which replaces the earlier one. What followed from the earlier result no longer holds.`,
+  actionVoid: (owner: string, number: number, description: string): string => `${owner}, action item #${String(number)} (${description}) no longer holds after the repeat.`,
 
   // ── operator, quotas, retention ──────────────────────────────────────────
   system: {

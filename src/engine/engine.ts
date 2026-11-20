@@ -2,6 +2,7 @@
 // message delivery to the units of work, replay after a restart, and the
 // queue of facilitator turns.
 
+import { installRepeats } from './repeats.js';
 import type { ConversationMessageRecord, SessionCapabilitySnapshot, SessionEventRecord } from '@omadia/plugin-api';
 
 import * as store from '../db/store.js';
@@ -52,6 +53,7 @@ function installOnce(): void {
   installProposals();
   installClosing();
   installProcess();
+  installRepeats();
   installActionItems();
   installTransparency();
   installGovernance();

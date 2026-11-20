@@ -8,7 +8,7 @@ import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { rows } from '../src/db/sql.js';
 import { reminderOffsetsFor } from '../src/engine/reminders.js';
 import type { Job } from '../src/model.js';
-import { ANNA, BERT, createHarness } from './harness.js';
+import { ANNA, BERT, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -88,6 +88,7 @@ test('the group changes the reminders by consent', { skip: PG_SKIP }, async () =
     await h.kernel.say(conv, who, 'agreed');
     await h.settle();
   }
+  await passWindow(h, conv);
   assert.ok(posts(conv).some((p) => p === 'Reminders are now sent 90 min, 10 min before the deadline.'));
   const f = await h.facilitation(conv);
   assert.deepEqual((await reminderJobs(conv)).map((j) => (f.deadline!.getTime() - j.dueAt.getTime()) / MINUTE_MS), [90, 10]);

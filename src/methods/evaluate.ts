@@ -126,6 +126,10 @@ export interface EvaluationInput {
   closeRule: CloseRule;
   /** The deadline (of the facilitation or of the runoff round) has passed. */
   deadlineReached: boolean;
+  /** Consent only: the step's consent window has ended. `undefined`: the
+   *  step has no window (opened before windows existed); then it is decided
+   *  when everybody answered, as before. */
+  windowEnded?: boolean;
   hasOpenProposal: boolean;
 }
 
@@ -154,8 +158,11 @@ export function evaluate(input: EvaluationInput): Evaluation {
 
   const contributed = new Set(input.ballots.map((b) => b.principal));
   const missing = input.activeParticipants.filter((p) => !contributed.has(p));
-  // Participation complete is not result valid: first the close rule, then the result.
-  const fires = input.deadlineReached || (input.closeRule === 'all_contributed' && missing.length === 0 && input.activeParticipants.length > 0);
+  const everybody = input.closeRule === 'all_contributed' && missing.length === 0 && input.activeParticipants.length > 0;
+  // Participation complete is not result valid: first the close rule, then
+  // the result. Consent follows the group-consent procedure (spec 5.7): it
+  // is decided when its window ends, never because everybody agreed early.
+  const fires = input.deadlineReached || (input.method === 'consent' && input.windowEnded !== undefined ? input.windowEnded : everybody);
   if (!fires) return { state: 'waiting', missing, ...withProvisional };
 
   if (input.method === 'consent') {

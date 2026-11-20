@@ -11,7 +11,7 @@ import * as store from '../src/db/store.js';
 import { withoutMention } from '../src/engine/addressing.js';
 import { normaliseCommand } from '../src/engine/inbound.js';
 import { statusText } from '../src/engine/status.js';
-import { ANNA, BERT, CARA, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, startActive, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -88,6 +88,7 @@ async function followUp(conv: string, count: number) {
     await h.kernel.say(conv, who, 'agreed');
     await h.settle();
   }
+  await passWindow(h, conv);
   const f = await h.facilitation(conv);
   assert.equal(f.settings.facilitatorName, NAME);
   assert.deepEqual([f.phase, f.followupState], ['closed', 'active']);

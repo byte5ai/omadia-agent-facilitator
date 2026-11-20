@@ -12,7 +12,7 @@ import { CARD_ID_PATTERN } from '../src/cards/types.js';
 import { readExpected } from '../src/engine/cards.js';
 import { operatorTerminate } from '../src/engine/governance.js';
 import { MINUTE_MS } from '../src/clock.js';
-import { ANNA, BERT, CARA, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, validSummaries, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -82,8 +82,10 @@ test('a ranked vote is a card where the channel has cards, chat ballots count ne
   assert.match(posted.card.intro ?? '', /in the chat/);
   assert.equal(h.kernel.groupPosts(conv).filter((p) => p.poll !== undefined).length, 0, 'no poll next to the card');
 
+  const quiet = posts(conv).length;
   await submit(conv, 'anna', rank('A', 'C', 'B'));
-  assert.equal(posts(conv).at(-1), 'Recorded for you, Anna: A (Alpha) > C (Charlie) > B (Bravo)');
+  assert.equal(posts(conv).length, quiet, 'a card ballot is recorded quietly');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['A (Alpha) > C (Charlie) > B (Bravo)']);
   await say(conv, 'bert', 'A > B > C');
   assert.equal((await h.facilitation(conv)).phase, 'active');
   await submit(conv, 'cara', rank('B', 'A'));
@@ -214,6 +216,7 @@ test('a change of the method by consent posts a new version of the card and mark
   await submit(conv, 'anna', rank('A', 'B', 'C'));
   await tool(conv, 'facilitation_propose_change', { change: 'method', method: 'single' });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   const second = card(conv);
   assert.notEqual(second.card.cardId, first.card.cardId);
   assert.equal(second.card.proposalId, first.card.proposalId);
@@ -273,7 +276,8 @@ test('assignment on a card: volunteering counts at once, naming somebody else wa
     ],
   );
   await submit(conv, 'anna', [{ questionId: 'A', kind: 'assignment', assignee: { kind: 'teams-aad', id: 'anna' } }]);
-  assert.match(posts(conv).at(-1) ?? '', /Anna/);
+  // Volunteering counts at once, quietly.
+  assert.match((await validSummaries(h, conv, 'anna')).join(' '), /Anna/);
   // Somebody who does not take part cannot be named, whatever the client sends.
   const before = (await outcomes(conv)).length;
   await submit(conv, 'bert', [{ questionId: 'B', kind: 'assignment', assignee: { kind: 'teams-aad', id: 'mallory' } }]);
@@ -522,7 +526,7 @@ test('D30: a vote step is ONE message where the channel has cards: the card carr
   assert.equal(posted?.card?.questions[0]?.label, 'Rank the options, best first.');
   // The chat still counts.
   await say(conv, 'anna', 'A > B > C');
-  assert.match(posts(conv).at(-1) ?? '', /^Recorded for you, Anna/);
+  assert.equal((await validSummaries(h, conv, 'anna')).length, 1);
 });
 
 test('D30: the handshake points to the card where there is one, and explains the chat syntax only where there is none', { skip: PG_SKIP }, async () => {

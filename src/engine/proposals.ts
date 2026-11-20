@@ -189,27 +189,23 @@ async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atD
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
   }
-  // "Everybody agreed" is said only about a list that is known to be
-  // complete, and read after the fresh check: it may have brought somebody.
-  const everybodyAgreed = async (): Promise<boolean> => {
-    const active = await activeOf(w);
-    return everybodyKnown(w.f) && active.length > 0 && standingOf(proposal, active).length === 0 && active.every((p) => proposal.consents.includes(p.principalId));
-  };
-  if (!(await everybodyAgreed()) || !(await verifyElectorate(w)).verified || !(await everybodyAgreed())) return false;
-  await decideProposal(w, proposal, true);
-  return true;
+  // Before its window ends a proposal is never decided (spec 5.7).
+  return false;
 }
 
 const deadlinePassed = (w: Work): boolean => w.f.deadline !== null && w.now.getTime() >= w.f.deadline.getTime();
 
 const OBJECTION = /^(?:objection|i object|einwand|veto|widerspruch|ich widerspreche)(?:\s*[:,-]\s*(.*))?$/is;
 const AGREED = /^(?:agreed|agree|i agree|consent|no objection|einverstanden|zustimmung|ich stimme zu|kein einwand|passt|\+1)$/;
+const WITHDRAW = /^(?:i withdraw(?: my consent)?|withdraw(?: my consent)?|ich ziehe (?:meine zustimmung )?zurück|zustimmung zurückziehen|zurückgezogen)$/u;
 const EXTEND = /^(?:extend|verlängern|verlaengern|more time|mehr zeit)(?:\s+(\d{1,3}))?(?:\s*(?:min|minutes|minuten|m))?$/;
 
 /** Words that agree to what is open: "agreed" as well as a plain "yes". */
 export const isAgreement = (command: string): boolean => AGREED.test(command) || isYes(command);
 
-/** Record that somebody agrees to the open proposal; settles it when that was everybody. */
+/** Record that somebody agrees to the open proposal. Agreement by everybody
+ *  does not end the window (spec 5.7, criteria 24 and 31): a consent may be
+ *  withdrawn, and an objection raised, until it ends. */
 export async function agree(w: Work, proposal: Proposal, author: Participant): Promise<void> {
   const consents = proposal.consents.includes(author.principalId) ? proposal.consents : [...proposal.consents, author.principalId];
   // Agreeing lifts one's own objection.
@@ -217,7 +213,13 @@ export async function agree(w: Work, proposal: Proposal, author: Participant): P
   await patchProposal(w, proposal.id, { consents, objections });
   w.bump();
   await w.event('proposal_consent', author.principalId, { proposalId: proposal.id });
-  await settleIfDue(w, { ...proposal, consents, objections }, false);
+}
+
+/** A consent is withdrawn before the window ends. */
+async function withdrawConsent(w: Work, proposal: Proposal, author: Participant): Promise<void> {
+  await patchProposal(w, proposal.id, { consents: proposal.consents.filter((c) => c !== author.principalId) });
+  w.bump();
+  await w.event('proposal_consent_withdrawn', author.principalId, { proposalId: proposal.id });
 }
 
 /** Answers to the open proposal: agreed, objection, extend. */
@@ -251,6 +253,10 @@ const proposalAnswers: InboundHandler = async ({ w, record, author, command }) =
   if (isAgreement(command)) {
     await agree(w, proposal, author);
     return { outcome: 'proposal_consent' };
+  }
+  if (WITHDRAW.test(command) && proposal.consents.includes(author.principalId)) {
+    await withdrawConsent(w, proposal, author);
+    return { outcome: 'proposal_consent_withdrawn' };
   }
 
   const extend = EXTEND.exec(command);

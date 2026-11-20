@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
 import * as store from '../src/db/store.js';
-import { ANNA, BERT, CARA, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, validSummaries } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -42,8 +42,10 @@ test('in a vote, small talk gets no model turn; ballots and commands are handled
     assert.deepEqual((await outcomes(conv)).slice(-3), ['not_addressed', 'not_addressed', 'not_addressed']);
 
     // A ballot and a command, without a model.
+    const quiet = posts().length;
     await say(conv, 'anna', 'A > C > B');
-    assert.match(posts().at(-1) ?? '', /^Recorded for you, Anna/);
+    assert.equal(posts().length, quiet, 'the ballot is recorded quietly');
+    assert.equal((await validSummaries(h, conv, 'anna')).length, 1);
     await say(conv, 'bert', 'status');
     assert.match(posts().at(-1) ?? '', /^Status: running/);
     assert.equal(turns(), before);

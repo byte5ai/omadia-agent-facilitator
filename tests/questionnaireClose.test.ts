@@ -11,6 +11,7 @@ import { after, before, beforeEach, test } from 'node:test';
 
 import type { CardAnswerValue, CardSupport } from '../src/cards/types.js';
 import { MINUTE_MS } from '../src/clock.js';
+import * as store from '../src/db/store.js';
 import { TURN_MODEL_CALLS } from '../src/engine/scopes.js';
 import { FOUR, createHarness } from './harness.js';
 import type { Harness } from './harness.js';
@@ -191,7 +192,7 @@ test('D39: a deadline given as a span from now is set by the engine, and the ans
   assert.match(await tool(other, 'facilitation_start', { goal: 'Samstag oder Sonntag?', method: 'single', options: ['Samstag', 'Sonntag'] }), /No deadline is set\. If the request named one, call facilitation_start again/);
 });
 
-test('1.5.7: a questionnaire answer is acknowledged in the group as "who, and how many", without the question or the answer; a chat ballot keeps its echo', { skip: PG_SKIP }, async () => {
+test('1.5.7: a questionnaire answer is acknowledged in the group as "who, and how many", without the question or the answer; a chat ballot is recorded quietly', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('qc-echo', FOUR);
   await tool(conv, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna', 'Bert', 'Cara'], open: true });
   await tool(conv, 'facilitation_questionnaire', PAUSE);
@@ -205,8 +206,12 @@ test('1.5.7: a questionnaire answer is acknowledged in the group as "who, and ho
 
   const vote = h.kernel.conversation('qc-echo-vote', FOUR);
   await tool(vote, 'facilitation_start', { goal: 'Samstag oder Sonntag?', method: 'single', options: ['Samstag', 'Sonntag'], participants: ['Anna', 'Bert'], open: true });
+  // A chat ballot is recorded quietly (spec 5.3, 5.14): no echo at all.
+  const quiet = posts(vote).length;
   await say(vote, 'anna', 'A');
-  assert.equal(posts(vote).at(-1), 'Für dich erfasst, Anna: A (Samstag)');
+  assert.equal(posts(vote).length, quiet);
+  const fv = await h.facilitation(vote);
+  assert.equal((await store.listContributions(h.db.pool, fv.id)).filter((c) => c.status === 'valid').length, 1);
 });
 
 test('1.5.7: a facilitation closed with a questionnaire nobody answered says so in its result; without a questionnaire the line is not there', { skip: PG_SKIP }, async () => {

@@ -133,3 +133,39 @@ byte5ai/omadia `docs/adr/`.
   `EFFECTIVE_DELETION_SQL` gives the effective time, shown in the facilitations view.
 - `facilitator_limits` (`limitsOf` in `src/engine/quota.ts`) overrides active, starts per hour
   and messages per facilitation for single facilitators; the instance limit stays shared.
+
+## Contributions (spec 5.3, 5.14; #2061 criteria 23, 50; ADR 0025)
+
+- Recording is quiet: a contribution in the announced format posts nothing (no
+  kernel contract for a reaction exists; add one there, never post an echo instead).
+  Only free-text readings ask their author once; a declined reading gets one line.
+- One message, several parts: `part_index` (migration 0009); `recordParts` retires
+  all parts of the older revision; `listLiveBySourceMessage` lists them.
+- A step that closed keeps what it counted: edits and deletions of its messages are
+  on record as `late_change` and change nothing.
+- `facilitation_record_contribution` parses the stored original text first; a
+  differing tool ballot is `content_mismatch`, an older stated revision
+  `outdated_revision`.
+- Imports: `pending_import` + ack kind `import` for the named person; the payload's
+  `import` holds `by`, `origin`, `messageId`. `personNamed` never guesses between two
+  people who share a name.
+
+## Consent, processes, repeats, ties, lifecycle (spec 5.2, 5.3, 5.5, 5.7; ADR 0025)
+
+- Group consent is decided only when its window ends (or at the deadline); full early
+  agreement never shortens it, consents may be withdrawn. Consent steps get a window
+  (`startConsentWindow`, job `consent_window`); a legacy consent step without
+  `round_deadline` still closes on completeness.
+- One process per message: `correlate()` (`src/engine/correlation.ts`) before a "stop"
+  or "done" takes effect. Several possible processes and no reply reference: exactly
+  one question, asked by the live process (else the newest); nothing changes.
+- A method change for a closed step repeats it (`src/engine/repeats.ts`); decisions get
+  `status` (`valid`, `pending_repeat`, `replaced`, `void`), action items
+  `pending_repeat`/`void`. Results, closing summaries and status count `valid`
+  decisions only; the protocol shows the others with their status.
+- Ties: v1 has one tie rule, the runoff (window `runoffWindowHours`, never past the
+  deadline). No other rule is offered until the spec names one.
+- `following_up` and `ended` are derived (`lifecycleOf`: `phase = closed` plus
+  `followup_state`), not stored phases; `phase` keeps the moderation lifecycle that the
+  "one live facilitation per conversation" index and the scopes depend on.
+

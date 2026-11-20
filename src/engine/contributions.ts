@@ -62,35 +62,51 @@ export interface RecordInput {
   step: Step;
   kind: ContributionKind;
   payload: Record<string, unknown>;
-  /** Human-readable form of the payload, for the echo. */
+  /** Human-readable form of the payload, for the confirmation question. */
   summary: string;
   /** Read from free text by the model: waits for its author. */
   interpreted: boolean;
   source?: 'message' | 'card';
   /** It replaces an earlier contribution of the same person. */
   replaces?: boolean;
-  /** No echo: the caller says something better. */
+  /** No confirmation question: the caller asks something better. */
   quiet?: boolean;
+  /** The part of the message this contribution is (several per message). */
+  partIndex?: number;
 }
 
-/** Retire whatever this message carried before (an older revision). */
-export async function supersedeByMessage(w: Work, messageId: string): Promise<Contribution | undefined> {
-  const previous = await store.findLiveBySourceMessage(w.tx, w.f.id, messageId);
-  if (!previous) return undefined;
-  await store.patchContribution(w.tx, previous.id, { status: 'superseded' });
+/** Cancel the confirmation requests that wait on these contributions. */
+async function cancelAcksFor(w: Work, contributionIds: readonly string[]): Promise<void> {
+  if (contributionIds.length === 0) return;
   await w.tx.query(
     `UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $3
-      WHERE facilitation_id = $1 AND kind = 'contribution' AND ref_id = $2 AND status = 'pending'`,
-    [w.f.id, previous.id, w.now],
+      WHERE facilitation_id = $1 AND kind IN ('contribution', 'import') AND ref_id = ANY($2::uuid[]) AND status = 'pending'`,
+    [w.f.id, contributionIds, w.now],
   );
-  return previous;
 }
 
-/** Write one contribution from a kernel record and echo it to its author. */
-export async function recordContribution(w: Work, input: RecordInput): Promise<Contribution> {
+/** Imported for somebody else (spec 5.3): such a part belongs to that person
+ *  and ends only through their answer or its step, never through the
+ *  importer's message. */
+const isImport = (c: Contribution): boolean => c.payload['import'] !== undefined;
+
+/** The live parts of a message that are its author's own (not imports). */
+export async function ownLiveParts(w: Pick<Work, 'tx' | 'f'>, messageId: string): Promise<Contribution[]> {
+  return (await store.listLiveBySourceMessage(w.tx, w.f.id, messageId)).filter((c) => !isImport(c));
+}
+
+/** Retire whatever this message carried before (an older revision): every
+ *  part of its author's own. Returns the first part that was retired. */
+export async function supersedeByMessage(w: Work, messageId: string): Promise<Contribution | undefined> {
+  const previous = await ownLiveParts(w, messageId);
+  for (const part of previous) await store.patchContribution(w.tx, part.id, { status: 'superseded' });
+  await cancelAcksFor(w, previous.map((p) => p.id));
+  return previous[0];
+}
+
+/** Write one contribution (one part of a message) from a kernel record. */
+async function writePart(w: Work, input: RecordInput): Promise<Contribution> {
   const { record, author, step } = input;
-  const t = texts(w.f.language);
-  const previous = await supersedeByMessage(w, record.messageId);
   const contribution = await store.addContribution(w.tx, {
     facilitationId: w.f.id,
     stepId: step.id,
@@ -103,6 +119,7 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
     sourceRevision: record.revision,
     sourceEventId: record.eventId,
     sourceOccurredAt: new Date(record.occurredAt),
+    partIndex: input.partIndex ?? 0,
     status: input.interpreted ? 'unconfirmed' : 'valid',
     interpreted: input.interpreted,
     recordedAt: w.now,
@@ -115,43 +132,78 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
     status: contribution.status,
     messageId: record.messageId,
     revision: record.revision,
+    part: contribution.partIndex,
   });
+  return contribution;
+}
 
-  if (input.quiet) return contribution;
-  if (input.interpreted) {
-    const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', {
-      facilitationId: w.f.id,
-      principal: author.principalId,
-      kind: 'contribution',
-      refId: contribution.id,
-      detail: { summary: input.summary },
-      createdAt: w.now,
-    });
-    w.post({
-      purpose: 'echo',
-      key: contribution.id,
-      to: 'group',
-      deliveryClass: 'droppable',
-      versionBound: false,
-      requiredPhases: ['active'],
-      text: input.source === 'card' ? t.echoUnverifiedCard(author.displayName, input.summary) : t.echoInterpreted(author.displayName, input.summary),
-      mentions: [mention(author)],
-      link: { kind: 'ack', id: ack.id },
-    });
-    return contribution;
-  }
-
+/** Ask the author once to confirm what was read from their message. */
+async function askToConfirm(w: Work, input: Pick<RecordInput, 'author' | 'source'>, parts: readonly Contribution[], summaries: readonly string[]): Promise<void> {
+  const t = texts(w.f.language);
+  const [first] = parts;
+  if (!first) return;
+  const summary = summaries.join('; ');
+  const ack = await insert<Ack>(w.tx, 'plg_omadia_agent_facilitator_acks', {
+    facilitationId: w.f.id,
+    principal: input.author.principalId,
+    kind: 'contribution',
+    refId: first.id,
+    detail: { summary, ...(parts.length > 1 ? { contributionIds: parts.map((p) => p.id) } : {}) },
+    createdAt: w.now,
+  });
   w.post({
     purpose: 'echo',
-    key: contribution.id,
+    key: first.id,
     to: 'group',
     deliveryClass: 'droppable',
     versionBound: false,
-    requiredPhases: ['active', 'concluding'],
-    text: previous || input.replaces ? t.echoChanged(author.displayName, input.summary) : t.echoRecorded(author.displayName, input.summary),
-    mentions: [mention(author)],
+    requiredPhases: ['active'],
+    text: input.source === 'card' ? t.echoUnverifiedCard(input.author.displayName, summary) : t.echoInterpreted(input.author.displayName, summary),
+    mentions: [mention(input.author)],
+    link: { kind: 'ack', id: ack.id },
   });
+}
+
+/**
+ * Write one contribution from a kernel record.
+ *
+ * Recording is quiet (spec 5.3, 5.14): a contribution in the announced
+ * format is not echoed in the group. (A reaction on the message would be the
+ * acknowledgement where the channel supports one; the kernel offers no
+ * contract for the facilitator to react, so there is nothing.) Only a
+ * reading from free text gets a short question to its author.
+ */
+export async function recordContribution(w: Work, input: RecordInput): Promise<Contribution> {
+  if ((input.partIndex ?? 0) === 0) await supersedeByMessage(w, input.record.messageId);
+  const contribution = await writePart(w, input);
+  if (input.interpreted && !input.quiet) await askToConfirm(w, input, [contribution], [input.summary]);
   return contribution;
+}
+
+/** One part of a message with several contributions. */
+export interface PartInput {
+  kind: ContributionKind;
+  payload: Record<string, unknown>;
+  summary: string;
+}
+
+/**
+ * Several contributions from one message (spec 5.3, criterion 50): each is a
+ * part with its own index; what the message carried before is retired as a
+ * whole; a reading from free text is confirmed in one question listing all
+ * parts.
+ */
+export async function recordParts(
+  w: Work,
+  input: Omit<RecordInput, 'kind' | 'payload' | 'summary' | 'partIndex'> & { parts: readonly PartInput[] },
+): Promise<Contribution[]> {
+  await supersedeByMessage(w, input.record.messageId);
+  const written: Contribution[] = [];
+  for (const [index, part] of input.parts.entries()) {
+    written.push(await writePart(w, { ...input, ...part, partIndex: index }));
+  }
+  if (input.interpreted && !input.quiet) await askToConfirm(w, input, written, input.parts.map((p) => p.summary));
+  return written;
 }
 
 /**
@@ -160,49 +212,55 @@ export async function recordContribution(w: Work, input: RecordInput): Promise<C
  * for a "yes" is superseded with it, so no later "yes" can bring it back.
  */
 export async function cancelOpenRequests(w: Work, stepId: string, principal?: string): Promise<number> {
-  const stale = await w.tx.query<{ ack_id: string; contribution_id: string }>(
-    `SELECT a.id AS ack_id, c.id AS contribution_id
+  const stale = await w.tx.query<{ ack_id: string; ref_id: string; detail: Record<string, unknown> }>(
+    `SELECT a.id AS ack_id, a.ref_id, a.detail
        FROM plg_omadia_agent_facilitator_acks a
        JOIN plg_omadia_agent_facilitator_contributions c ON c.id = a.ref_id
-      WHERE a.facilitation_id = $1 AND a.kind = 'contribution' AND a.status = 'pending'
+      WHERE a.facilitation_id = $1 AND a.kind IN ('contribution', 'import') AND a.status = 'pending'
         AND c.step_id = $2 AND ($3::text IS NULL OR a.principal = $3)`,
     [w.f.id, stepId, principal ?? null],
   );
   for (const row of stale.rows) {
     await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: row.ack_id }, { status: 'cancelled', resolvedAt: w.now });
-    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_contributions SET status = 'superseded' WHERE id = $1 AND status = 'unconfirmed'`, [row.contribution_id]);
+    // Every part the request stood for, and an import that waited for it.
+    const ids = partsOf({ refId: row.ref_id, detail: row.detail });
+    await w.tx.query(
+      `UPDATE plg_omadia_agent_facilitator_contributions SET status = 'superseded' WHERE id = ANY($1::uuid[]) AND status IN ('unconfirmed', 'pending_import')`,
+      [ids],
+    );
   }
   return stale.rows.length;
 }
 
-const summaryOf = (c: Contribution): string => String(c.payload['summary'] ?? '');
+/** The contributions a confirmation request stands for: one, or every part
+ *  of a message that was read as several. */
+const partsOf = (ack: Pick<Ack, 'refId' | 'detail'>): string[] => {
+  const ids = ack.detail['contributionIds'];
+  return Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? (ids as string[]) : [ack.refId];
+};
 
-/** The author confirmed the echo: the contribution counts from now on. */
+/** The author confirmed the reading: it counts from now on. Quiet: the
+ *  author's "yes" needs no answer. */
 export async function confirmContribution(w: Work, ack: Ack, author: Participant, messageId: string): Promise<Contribution | undefined> {
-  const contribution = await store.getContribution(w.tx, ack.refId);
   await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'confirmed', resolvedAt: w.now, resolvedByMessageId: messageId });
-  if (!contribution || contribution.status !== 'unconfirmed') return undefined;
-  const confirmed = await store.patchContribution(w.tx, contribution.id, { status: 'valid' });
-  w.bump();
-  await w.event('contribution_confirmed', author.principalId, { contributionId: contribution.id, messageId });
-  w.post({
-    purpose: 'echo_confirmed',
-    key: contribution.id,
-    to: 'group',
-    deliveryClass: 'droppable',
-    versionBound: false,
-    requiredPhases: ['active', 'concluding'],
-    text: texts(w.f.language).echoConfirmed(author.displayName, summaryOf(contribution)),
-    mentions: [mention(author)],
-  });
-  return confirmed;
+  let first: Contribution | undefined;
+  for (const id of partsOf(ack)) {
+    const contribution = await store.getContribution(w.tx, id);
+    if (!contribution || contribution.status !== 'unconfirmed') continue;
+    const confirmed = await store.patchContribution(w.tx, contribution.id, { status: 'valid' });
+    first ??= confirmed;
+    w.bump();
+    await w.event('contribution_confirmed', author.principalId, { contributionId: contribution.id, messageId });
+  }
+  return first;
 }
 
 /** The author said the reading was wrong: nothing is recorded. */
 export async function declineContribution(w: Work, ack: Ack, author: Participant, messageId: string): Promise<void> {
   await update(w.tx, 'plg_omadia_agent_facilitator_acks', { id: ack.id }, { status: 'declined', resolvedAt: w.now, resolvedByMessageId: messageId });
-  const contribution = await store.getContribution(w.tx, ack.refId);
-  if (contribution && contribution.status === 'unconfirmed') {
+  for (const id of partsOf(ack)) {
+    const contribution = await store.getContribution(w.tx, id);
+    if (!contribution || contribution.status !== 'unconfirmed') continue;
     await store.patchContribution(w.tx, contribution.id, { status: 'withdrawn' });
     w.bump();
     await w.event('contribution_declined', author.principalId, { contributionId: contribution.id, messageId });
@@ -218,30 +276,17 @@ export async function declineContribution(w: Work, ack: Ack, author: Participant
   });
 }
 
-/** The source message was deleted: what it carried no longer counts. */
-export async function withdrawByMessage(w: Work, messageId: string, author: Participant | undefined): Promise<boolean> {
-  const live = await store.findLiveBySourceMessage(w.tx, w.f.id, messageId);
-  if (!live) return false;
-  await store.patchContribution(w.tx, live.id, { status: 'withdrawn' });
-  await w.tx.query(
-    `UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $3
-      WHERE facilitation_id = $1 AND kind = 'contribution' AND ref_id = $2 AND status = 'pending'`,
-    [w.f.id, live.id, w.now],
-  );
-  w.bump();
-  await w.event('contribution_withdrawn', live.participantPrincipal, { contributionId: live.id, messageId });
-  if (author) {
-    w.post({
-      purpose: 'echo_withdrawn',
-      key: live.id,
-      to: 'group',
-      deliveryClass: 'droppable',
-      versionBound: false,
-      requiredPhases: ['active'],
-      text: texts(w.f.language).echoWithdrawn(author.displayName),
-      mentions: [mention(author)],
-    });
+/** The source message was deleted: what it carried no longer counts. Quiet:
+ *  the author deleted it themselves. */
+export async function withdrawByMessage(w: Work, messageId: string): Promise<boolean> {
+  const live = await ownLiveParts(w, messageId);
+  if (live.length === 0) return false;
+  for (const part of live) {
+    await store.patchContribution(w.tx, part.id, { status: 'withdrawn' });
+    await w.event('contribution_withdrawn', part.participantPrincipal, { contributionId: part.id, messageId });
   }
+  await cancelAcksFor(w, live.map((p) => p.id));
+  w.bump();
   return true;
 }
 
@@ -250,7 +295,7 @@ export async function askClarification(
   w: Work,
   input: { record: ConversationMessageRecord; author: Participant; step: Step; question: string },
 ): Promise<'asked' | 'already_asked'> {
-  const existing = await store.findLiveBySourceMessage(w.tx, w.f.id, input.record.messageId);
+  const [existing] = await ownLiveParts(w, input.record.messageId);
   if (existing && existing.sourceRevision === input.record.revision) {
     if (existing.status === 'ambiguous') return 'already_asked';
     throw new Refusal('already_recorded', 'That message already carries a recorded contribution.');

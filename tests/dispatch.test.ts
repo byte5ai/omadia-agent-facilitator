@@ -13,7 +13,7 @@ import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { resultClosingOf } from '../src/engine/closing.js';
 import { listClosings } from '../src/engine/resultStatus.js';
-import { ANNA, BERT, CARA, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, passWindow, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { FakeFollowup } from './fakeKernel.js';
 import { PG_SKIP } from './pg.js';
@@ -40,6 +40,8 @@ const say = async (conv: string, who: string, text: string): Promise<void> => {
 };
 const all = async (conv: string, text: string): Promise<void> => {
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, text);
+  // Group consent is decided when its window ends, never early (spec 5.7).
+  if (text === 'agreed' && (await h.facilitation(conv)).phase === 'active') await passWindow(h, conv);
 };
 const stakeholder = async (conv: string, name: string, address: string, disclosure?: string): Promise<void> => {
   await tool(conv, 'facilitation_stakeholder', { name, address, role: 'receives_protocol', ...(disclosure ? { disclosure } : {}) });

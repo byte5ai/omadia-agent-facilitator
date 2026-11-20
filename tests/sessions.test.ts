@@ -9,7 +9,7 @@ import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { diffSnapshots, perceptionStatement, planMeans } from '../src/engine/media.js';
 import { texts } from '../src/texts/index.js';
-import { ANNA, BERT, CARA, FOUR, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, FOUR, createHarness, startActive, validSummaries, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -107,10 +107,10 @@ test('a vote goes out as a poll card where the session has polls; poll answers a
 
   await h.kernel.answerCard(conv, 'anna', pollId, { optionId: 'A' }, card);
   await h.settle();
-  assert.equal(last(conv), 'Recorded for you, Anna: A (Thai)');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['A (Thai)']);
   await h.kernel.answerCard(conv, 'anna', pollId, { optionId: 'B' }, card);
   await h.settle();
-  assert.equal(last(conv), 'Changed for you, Anna: B (Pizza)');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['B (Pizza)']);
   await say(conv, 'bert', 'B');
 
   await h.kernel.answerCard(conv, 'cara', 'some-other-poll', { optionId: 'A' }, card);
@@ -215,6 +215,7 @@ test('adaptation mid-session: transcribed speech appears, the facilitator announ
   // Consent to being listened to is given as a reply to the request, nothing else.
   const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
+  await passWindow(h, conv);
   assert.match(last(conv), /^I now follow the transcript of the call\./);
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Anna', kind: 'vote', summary: 'Thai', ballot: 'A' }), /^Recorded for Anna as unconfirmed/);
   assert.equal(last(conv), 'Anna, I heard you say: Thai. Reply "yes" in the chat to confirm, or correct me. It counts once you confirmed.');

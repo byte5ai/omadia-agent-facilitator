@@ -8,7 +8,7 @@ import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { rows } from '../src/db/sql.js';
 import * as store from '../src/db/store.js';
 import type { Job, OutboxRow } from '../src/model.js';
-import { ANNA, BERT, CARA, FOUR, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, FOUR, createHarness, startActive, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -200,6 +200,8 @@ test('a pending change proposal blocks the conclusion; once it is decided the ev
   await say(conv, 'anna', 'agreed');
   await say(conv, 'bert', 'agreed');
   await say(conv, 'cara', 'agreed');
+  assert.equal((await h.facilitation(conv)).phase, 'active', 'the proposal is decided when its window ends');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   const texts = posts(conv);
   assert.ok(texts.indexOf('The definition of done is now version 2: A venue is chosen and booked') < texts.findIndex((t) => t.startsWith('Result for')));
@@ -226,11 +228,13 @@ test('changing the method: ballots that no longer fit are retired and the people
   await say(conv, 'bert', 'B');
   await tool(conv, 'facilitation_propose_change', { change: 'method', points: [5, 3, 1] });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   assert.match(last(conv), /^"Pick a venue" is now decided like this\. .*Points per rank: 5\/3\/1/);
   assert.match(await tool(conv, 'facilitation_status'), /Contributed: 2 of 3\nStill open: 1 contribution\nOptions: A = Harbour, B = Old Town, C = Castle Hill\nProvisional tally: Harbour 5, Old Town 8, Castle Hill 0/);
 
   await tool(conv, 'facilitation_propose_change', { change: 'method', method: 'single', options: ['Harbour', 'Old Town'], replaceOptions: true });
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   const tail = posts(conv).slice(-2);
   assert.match(tail[0] ?? '', /is now decided like this\. How to vote: write the one option you choose/);
   assert.equal(tail[1], 'Contributions made under the old rules no longer fit. Please contribute again: Anna and Bert.');
@@ -248,6 +252,7 @@ test('moving the deadline moves the reminders with it', { skip: PG_SKIP }, async
   await tool(conv, 'facilitation_propose_change', { change: 'deadline', deadline: next });
   await say(conv, 'anna', 'agreed');
   await say(conv, 'bert', 'agreed');
+  await passWindow(h, conv);
   assert.match(last(conv), /^The deadline is now .*Reminders move with it\./);
   assert.equal((await h.facilitation(conv)).deadline?.toISOString(), next);
   const pending = (await rows<Job>(h.db.pool, `SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime' ORDER BY due_at`, [f.id])).map((j) => [j.kind, j.dueAt.toISOString()]);

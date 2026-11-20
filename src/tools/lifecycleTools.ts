@@ -5,13 +5,16 @@ import * as store from '../db/store.js';
 import type { ContributionKind, MethodId } from '../model.js';
 import { parseBallot } from '../methods/ballot.js';
 import { advance, putAgain, recordBallot, roundOptions, withoutTakenItems } from '../engine/decide.js';
-import { askClarification, authorOf, recordContribution } from '../engine/contributions.js';
+import { askClarification, authorOf, ownLiveParts, recordContribution, recordParts } from '../engine/contributions.js';
+import { namesOf, withoutMention } from '../engine/addressing.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
 import type { AgendaStepInput } from '../engine/lifecycle.js';
 import { nameMissingPerson } from '../engine/electorate.js';
+import { personNamed, recordImport } from '../engine/imports.js';
+import type { Ballot } from '../methods/ballot.js';
 import { statusText } from '../engine/status.js';
 import { formatWhen } from '../texts/index.js';
 import { asObject, defineTool, liveFacilitation, requireReadable, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
@@ -65,6 +68,20 @@ async function openAndReport(engine: FacilitationEngine, facilitationId: string)
     };
   }
   return { posted: true, text: `The opening message with goal, rules and participants was posted in the group. Do not repeat it. Answer ${'[silent]'} now unless something else needs saying.` };
+}
+
+/** The `parts` argument: points of one message, each with kind and summary. */
+function partsOf(args: Record<string, unknown>): { kind: ContributionKind; summary: string }[] | undefined {
+  const raw = args['parts'];
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0) throw new Refusal('bad_input', "'parts' must be a non-empty list of { kind, summary }.");
+  return raw.map((part, index) => {
+    const entry = asObject(part);
+    const kind = oneOf(entry, 'kind', CONTRIBUTION_KINDS);
+    const summary = optionalString(entry, 'summary');
+    if (!kind || !summary) throw new Refusal('bad_input', `Part ${String(index + 1)} needs a kind and a summary.`);
+    return { kind, summary };
+  });
 }
 
 const METHODS: readonly MethodId[] = ['ranked', 'single', 'approval', 'consent', 'assignment'];
@@ -227,43 +244,115 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       {
         name: 'facilitation_record_contribution',
         description:
-          'Record what ONE person said in free text, for the author of that message. Pass the message id from the turn input. The engine takes author, time and revision from the stored message, asks the author to confirm, and counts it only after they did. Refused for a message from another conversation, from before the start, from a non-participant, or one that quotes or forwards somebody else.',
+          'Record what ONE person said in free text, for the author of that message. Pass the message id from the turn input. The engine takes author, time, revision and the original text from the stored message, asks the author to confirm, and counts it only after they did. A message with several points (for example three ideas) is recorded as several parts with `parts`, confirmed in one question. Refused for a message from another conversation, from before the start, from a non-participant, one that quotes or forwards somebody else, an outdated revision, and a ballot that differs from what the message says in the announced format.',
         properties: {
           messageId: { type: 'string', description: 'The message id from the turn input.' },
+          revision: { type: 'number', description: 'The revision of the message you read, if the turn input states it. An older one is refused.' },
           kind: { type: 'string', enum: [...CONTRIBUTION_KINDS] },
           summary: { type: 'string', description: 'What the person said, in one sentence, in the language of the group. Shown to them for confirmation.' },
           ballot: { type: 'string', description: 'Only while a vote is open: what you read as their ballot, written in the announced format (e.g. "A > C > B", "B", "abstain", "objection: too expensive", "A: Anna"). The engine parses it; it counts after the author confirmed.' },
+          parts: {
+            type: 'array',
+            description: 'Instead of kind and summary: several points of one message, each with its kind and its one-sentence summary.',
+            items: { type: 'object', properties: { kind: { type: 'string', enum: [...CONTRIBUTION_KINDS] }, summary: { type: 'string' } }, required: ['kind', 'summary'] },
+          },
         },
-        required: ['messageId', 'kind', 'summary'],
+        required: ['messageId'],
       },
       async (args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
         const record = await storedMessage(engine, ctx, requiredString(args, 'messageId'));
+        const parts = partsOf(args);
         const kind = oneOf(args, 'kind', CONTRIBUTION_KINDS);
-        if (!kind) throw new Refusal('bad_input', "'kind' is required.");
-        const summary = requiredString(args, 'summary');
+        const summary = optionalString(args, 'summary');
+        if (!parts && (!kind || summary === undefined)) throw new Refusal('bad_input', "'kind' and 'summary' are required (or 'parts').");
+        const revision = optionalNumber(args, 'revision');
+        if (revision !== undefined && revision !== record.revision) {
+          throw new Refusal('outdated_revision', `That message has been edited since (revision ${String(record.revision)}); what you read is no longer what it says. Read the current text first.`);
+        }
         return engine.core.work(f.id, async (w) => {
           const author = await authorOf(w, record);
           const step = await store.openStepOf(w.tx, w.f.id);
           if (!step) throw new Refusal('no_open_step', 'No step is open; there is nothing to contribute to right now.');
-          const existing = await store.findLiveBySourceMessage(w.tx, w.f.id, record.messageId);
-          if (existing && existing.sourceRevision === record.revision && existing.status !== 'ambiguous') {
+          const [existing] = await ownLiveParts(w, record.messageId);
+          const ballotText = optionalString(args, 'ballot');
+          const recorded = existing && existing.sourceRevision === record.revision && existing.status !== 'ambiguous';
+          if (recorded && (ballotText === undefined || !step.method)) {
             return `Already recorded for ${author.displayName} (${existing.status}).`;
           }
-          const ballotText = optionalString(args, 'ballot');
           if (ballotText !== undefined && step.method) {
             const people = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active').map((p) => ({ id: p.principalId, name: p.displayName }));
-            const parsed = parseBallot({ method: step.method, options: roundOptions(step), text: ballotText, author: { id: author.principalId, name: author.displayName }, people });
+            const parse = (text: string) => parseBallot({ method: step.method as MethodId, options: roundOptions(step), text, author: { id: author.principalId, name: author.displayName }, people });
+            const parsed = parse(ballotText);
             if (parsed.kind !== 'ballot') {
               throw new Refusal('bad_ballot', `'${ballotText}' is not a valid ballot for this step${parsed.kind === 'invalid' ? ` (${parsed.problem}: ${parsed.detail})` : ''}. If the message is unclear, use facilitation_clarify instead.`);
             }
+            // Content comes from the stored original text (spec 5.3): where
+            // the message itself is in the announced format, that is the
+            // ballot, and a different reading is refused.
+            const original = parse(withoutMention(record.text ?? '', namesOf(w.f), record.addressedToBot === true));
+            if (original.kind === 'invalid') {
+              throw new Refusal('content_mismatch', 'The message is written in the announced format but is not a valid ballot; its author was asked about it. Nothing was recorded.');
+            }
+            if (original.kind === 'ballot' && JSON.stringify(original.ballot) !== JSON.stringify(parsed.ballot)) {
+              throw new Refusal('content_mismatch', `The message says '${(record.text ?? '').trim()}', which is a different ballot than '${ballotText}'. Only what the message says counts. Nothing was recorded.`);
+            }
+            if (recorded) return `Already recorded for ${author.displayName} (${existing.status}).`;
             const ballot = await withoutTakenItems(w, step, author, parsed.ballot, record.eventId);
             if (!ballot) return 'That item is already taken; that was said in the group. Nothing was recorded.';
-            await recordBallot(w, { record, author, step, ballot, interpreted: true });
+            // A ballot in the announced format counts at once, read from the text.
+            await recordBallot(w, { record, author, step, ballot, interpreted: original.kind !== 'ballot' });
+            if (original.kind === 'ballot') return `Recorded for ${author.displayName} as written; it counts. Say nothing about it.`;
+          } else if (parts && parts.length > 1) {
+            await recordParts(w, { record, author, step, interpreted: true, parts: parts.map((p) => ({ kind: p.kind, payload: { text: p.summary }, summary: p.summary })) });
+            return `Recorded ${String(parts.length)} points for ${author.displayName} as unconfirmed. ${author.displayName} was asked in the group to confirm all of them in one answer; they count once confirmed. Do not repeat the question.`;
           } else {
-            await recordContribution(w, { record, author, step, kind, payload: { text: summary }, summary, interpreted: true });
+            const one = parts?.[0] ?? { kind: kind as ContributionKind, summary: summary as string };
+            await recordContribution(w, { record, author, step, kind: one.kind, payload: { text: one.summary }, summary: one.summary, interpreted: true });
           }
           return `Recorded for ${author.displayName} as unconfirmed. ${author.displayName} was asked in the group to confirm; it counts once they did. Do not repeat the question.`;
+        });
+      },
+    ),
+
+    defineTool(
+      engine,
+      {
+        name: 'facilitation_record_import',
+        description:
+          'Somebody brings in what ANOTHER participant said elsewhere (for example older votes in a screenshot, a list from another chat). Record it for that person, one call per person. It does not count until that person confirms it in their own message; the engine asks them. Pass the message id of the message that brought it in, the person\'s name (the full name where two share a first name) and where it comes from.',
+        properties: {
+          messageId: { type: 'string', description: 'The message id of the message that brought the contributions in.' },
+          person: { type: 'string', description: 'Whose contribution it is, by name.' },
+          origin: { type: 'string', description: 'Where it comes from, in the language of the group (e.g. "the screenshot of last week\'s poll").' },
+          kind: { type: 'string', enum: [...CONTRIBUTION_KINDS] },
+          summary: { type: 'string', description: 'What the person said, in one sentence.' },
+          ballot: { type: 'string', description: 'While a vote is open: their ballot in the announced format.' },
+        },
+        required: ['messageId', 'person', 'origin', 'summary'],
+      },
+      async (args, ctx) => {
+        const f = await liveFacilitation(engine, ctx);
+        const record = await storedMessage(engine, ctx, requiredString(args, 'messageId'));
+        const person = requiredString(args, 'person');
+        const origin = requiredString(args, 'origin');
+        const summary = requiredString(args, 'summary');
+        const ballotText = optionalString(args, 'ballot');
+        return engine.core.work(f.id, async (w) => {
+          const importer = await authorOf(w, record);
+          const step = await store.openStepOf(w.tx, w.f.id);
+          if (!step) throw new Refusal('no_open_step', 'No step is open; there is nothing to contribute to right now.');
+          let ballot: Ballot | undefined;
+          if (ballotText !== undefined && step.method) {
+            const people = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+            const target = personNamed(people, person);
+            const parsed = parseBallot({ method: step.method, options: roundOptions(step), text: ballotText, author: { id: target.principalId, name: target.displayName }, people: people.map((p) => ({ id: p.principalId, name: p.displayName })) });
+            if (parsed.kind !== 'ballot') throw new Refusal('bad_ballot', `'${ballotText}' is not a valid ballot for this step. Nothing was recorded.`);
+            ballot = parsed.ballot;
+          }
+          const kind = oneOf(args, 'kind', CONTRIBUTION_KINDS) ?? (ballot ? 'vote' : 'position');
+          const { person: target } = await recordImport(w, { record, importer, step, person, kind, summary, origin, ...(ballot ? { ballot } : {}) });
+          return `Recorded for ${target.displayName} as imported; ${target.displayName} was asked in the group to confirm it in their own message. It does not count before. Do not repeat the question.`;
         });
       },
     ),

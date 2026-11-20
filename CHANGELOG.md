@@ -4,6 +4,47 @@
 
 ### Added
 
+- **Repeat after a rule change (#2062 criterion 57; migration 0010).** A
+  change of the method of a closed step repeats it as a new step linked to it
+  (`repeats_step_id`), opened at once with fresh contributions; a step that was
+  running waits and resumes after it. The old decision and what followed from
+  it are `pending_repeat` until the repeat closes, then `replaced`; with a
+  different outcome what followed is `void`, its people are told and asked to
+  contribute again. The old step and its protocol stay as they were.
+- **One process per message (criterion 29).** Where several processes of the
+  same facilitator share a conversation, an unreferenced "stop" or "erledigt"
+  that more than one could take gets exactly one question and changes nothing;
+  a reply to one process's message goes to that one.
+
+- **Several contributions per message (criterion 50; migration 0009).** A
+  contribution is keyed by its message and a part index. A message written as
+  a list in a collecting step becomes one idea per point; the model records a
+  free-text message with several points as `parts`, confirmed in one question.
+  A new revision before the step closes replaces exactly that message's parts;
+  an edit or deletion after the step closed changes nothing.
+- **Imported contributions (#2061).** `facilitation_record_import` records what
+  another participant said elsewhere (older votes from a screenshot) as
+  `pending_import` for that person, with who imported it and from where. It
+  counts only once the person confirms it in their own message; status and
+  protocol show the origin. A name shared by two participants is refused with
+  both full names.
+
+### Changed
+
+- **Consent windows (criteria 24, 31).** Agreement by everybody no longer ends
+  a proposal's window early; a consent may be withdrawn until the window ends.
+  A consent step has its own window (the change window, never past the
+  deadline) and closes at its end without a standing objection, not when
+  everybody consented.
+- **Quiet recording (spec 5.3, 5.14).** A contribution in the announced format
+  is no longer echoed in the group, nor are confirmations, changes and
+  deletions. Only a reading from free text gets its one confirmation question.
+  (The kernel has no contract for the facilitator to react to a message; see
+  ADR 0025.)
+- **Content authenticity (criterion 23).** `facilitation_record_contribution`
+  refuses a ballot that differs from what the stored message says in the
+  announced format, and a stated revision that is not the latest.
+
 - **Known electorate (spec 5.5, #2061 criteria 35 and 44).** The source of
   the list of participants is fixed at start (`platform_roster` or
   `declared_list`, migration 0008). With the platform roster the engine asks

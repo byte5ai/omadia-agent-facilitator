@@ -10,6 +10,7 @@ import type { Contribution, Facilitation, Participant, Step } from '../model.js'
 import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { listClosings, markOf, resultStatusWords } from './resultStatus.js';
+import { importOf } from './imports.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export interface Participation {
@@ -129,5 +130,25 @@ export async function statusText(q: Queryable, f: Facilitation, audience: Status
     provisional: counted?.provisional ?? false,
     ...(proposal ? { proposal: `${proposal.summary} (${formatWhen(proposal.windowEndsAt, f.timezone, f.language)})` } : {}),
     ...(f.deadline ? { deadline: formatWhen(f.deadline, f.timezone, f.language) } : {}),
+    ...(await importsLine(q, f, audience)),
   });
+}
+
+/** Contributions imported for somebody that wait for that person, with
+ *  their origin; the group gets the count and the origins, no names. */
+async function importsLine(q: Queryable, f: Facilitation, audience: StatusAudience): Promise<{ imports?: string[] | number }> {
+  // Only what the open step can still count.
+  const step = await store.openStepOf(q, f.id);
+  if (!step) return {};
+  const pending = (await store.listContributions(q, f.id, step.id)).filter((c) => c.status === 'pending_import' && c.round === step.round);
+  if (pending.length === 0) return {};
+  const participants = await store.listParticipants(q, f.id);
+  const name = (principal: string): string => participants.find((p) => p.principalId === principal)?.displayName ?? texts(f.language).unnamedPerson;
+  return {
+    imports: pending.map((c) => {
+      const origin = importOf(c);
+      const from = origin ? ` (${origin.origin}, ${name(origin.by)})` : '';
+      return audience === 'private' ? `${name(c.participantPrincipal)}: ${String(c.payload['summary'] ?? '')}${from}` : `${String(c.payload['summary'] ?? '')}${origin ? ` (${origin.origin})` : ''}`;
+    }),
+  };
 }

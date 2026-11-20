@@ -33,7 +33,7 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
           deadline: { type: 'string', description: 'For deadline: ISO 8601 with offset.' },
           closeRule: { type: 'string', enum: ['all_contributed', 'at_deadline'] },
           reminderMinutesBefore: { type: 'array', items: { type: 'number' }, description: 'For reminders: when to remind, in minutes before the deadline (e.g. [1440, 120]); an empty list for no reminders.' },
-          step: { type: 'number', description: 'For method: position of the step that is decided by a vote (never a collecting or discussing step). Default: the open one.' },
+          step: { type: 'number', description: 'For method: position of the step that is decided by a vote (never a collecting or discussing step). Default: the open one. A step that is already closed is never re-opened: the change repeats it as a new linked step with fresh contributions.' },
           method: { type: 'string', enum: [...METHODS] },
           options: { type: 'array', items: { type: 'string' }, description: "For method: leave out to keep the step's options. Other options are accepted only with replaceOptions." },
           replaceOptions: { type: 'boolean', description: 'For method: the group proposed to vote on different options than the step has. Only then pass new options.' },
