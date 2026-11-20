@@ -1,6 +1,6 @@
 {
   "name": "@omadia/agent-facilitator",
-  "version": "1.5.7",
+  "version": "1.6.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -27,7 +27,7 @@
     "clean": "rm -rf dist out .test-build *.tsbuildinfo"
   },
   "peerDependencies": {
-    "@omadia/plugin-api": ">=1.69.0"
+    "@omadia/plugin-api": ">=1.82.0"
   },
   "devDependencies": {
     "@omadia/plugin-api": "file:../odoo-bot/middleware/packages/plugin-api",
