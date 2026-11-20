@@ -9,6 +9,8 @@ export const de: Texts = {
   },
 
   echoRecorded: (name, summary) => `Für dich erfasst, ${name}: ${summary}`,
+  questionnaireAnswered: (name, answered, of, changed) => `Antwort von ${name} ${changed ? 'geändert' : 'erfasst'} (${String(answered)} von ${String(of)})`,
+  questionnaireNoAnswer: 'keine Antwort',
   echoInterpreted: (name, summary) =>
     `${name}, ich habe deine Nachricht so verstanden: ${summary}. Antworte mit "ja" (oder reagiere mit 👍), um zu bestätigen, oder korrigiere mich. Es zählt, sobald du bestätigt hast.`,
   echoUnverifiedCard: (name, summary) =>
@@ -102,6 +104,7 @@ export const de: Texts = {
       `Ergebnis zu "${r.goal}":`,
       ...r.decisions.map((d) => `- ${d}`),
       ...(r.answers && r.answers.length > 0 ? ['Antworten:', ...r.answers.map((a) => `- ${a}`)] : []),
+      ...(r.unanswered !== undefined ? [`Auf den Fragebogen "${r.unanswered}" hat niemand geantwortet, deshalb gibt es keine Antworten zu berichten.`] : []),
       ...(r.actions && r.actions.length > 0 ? ['Nächste Schritte:', ...r.actions.map((a) => `- ${a}`)] : []),
       ...(r.open && r.open.length > 0 ? ['Offene Punkte:', ...r.open.map((o) => `- ${o}`)] : []),
       ...(r.atDeadline ? [`Die Deadline ist erreicht; ${String(r.atDeadline.contributed)} von ${String(r.atDeadline.of)} haben beigetragen, und dies ist das Ergebnis der abgegebenen Beiträge.`] : []),

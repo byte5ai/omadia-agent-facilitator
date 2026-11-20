@@ -230,8 +230,8 @@ export function setAfterStepDecided(hook: StepClosedHook): void {
   afterStepDecided = hook;
 }
 
-export type ResultAnswers = (w: Pick<Work, 'tx' | 'f'>) => Promise<string[]>;
-let resultAnswers: ResultAnswers = async () => [];
+export type ResultAnswers = (w: Pick<Work, 'tx' | 'f'>) => Promise<{ answers: string[]; unanswered?: string }>;
+let resultAnswers: ResultAnswers = async () => ({ answers: [] });
 /** What the group answered on a questionnaire belongs to the result. */
 export function setResultAnswers(provider: ResultAnswers): void {
   resultAnswers = provider;
@@ -254,11 +254,12 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
       .map((c) => c.participantPrincipal),
   );
   const summary = await closingSummary(w);
-  const answers = await resultAnswers(w);
+  const { answers, unanswered } = await resultAnswers(w);
   const text = t.result({
     goal: w.f.goal,
     decisions: decisions.map((d) => d.statement),
     ...(answers.length > 0 ? { answers } : {}),
+    ...(unanswered !== undefined ? { unanswered } : {}),
     actions: summary.actions,
     open: summary.open,
     ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length + expectedNames(w.f).length } } : {}),

@@ -13,6 +13,8 @@ export interface ResultInput {
   open?: string[];
   /** What the group answered on its questionnaire, one line per question. */
   answers?: string[];
+  /** The title of a questionnaire nobody answered. */
+  unanswered?: string;
   /** Set when the deadline closed it before everybody contributed. */
   atDeadline?: { contributed: number; of: number };
 }
@@ -24,6 +26,10 @@ export const en = {
   },
 
   echoRecorded: (name: string, summary: string): string => `Recorded for you, ${name}: ${summary}`,
+  /** A questionnaire answer: who, and how many have answered. Not what. */
+  questionnaireAnswered: (name: string, answered: number, of: number, changed: boolean): string =>
+    `${changed ? 'Answer changed by' : 'Answer recorded from'} ${name} (${String(answered)} of ${String(of)})`,
+  questionnaireNoAnswer: 'no answer',
   echoInterpreted: (name: string, summary: string): string =>
     `${name}, I read your message as: ${summary}. Reply "yes" (or react with 👍) to confirm, or correct me. It counts once you confirmed.`,
   /** A card answer the platform did not verify: its owner confirms it here. */
@@ -125,6 +131,7 @@ export const en = {
       `Result for "${r.goal}":`,
       ...r.decisions.map((d) => `- ${d}`),
       ...(r.answers && r.answers.length > 0 ? ['Answers:', ...r.answers.map((a) => `- ${a}`)] : []),
+      ...(r.unanswered !== undefined ? [`Nobody answered the questionnaire "${r.unanswered}", so there are no answers to report.`] : []),
       ...(r.actions && r.actions.length > 0 ? ['Next steps:', ...r.actions.map((a) => `- ${a}`)] : []),
       ...(r.open && r.open.length > 0 ? ['Open points:', ...r.open.map((o) => `- ${o}`)] : []),
       ...(r.atDeadline ? [`The deadline has passed; ${String(r.atDeadline.contributed)} of ${String(r.atDeadline.of)} contributed, and this is the result of what was contributed.`] : []),
