@@ -53,8 +53,8 @@ test('D37: one participant answers the questionnaire the facilitation is for: it
   await answer(conv, 'anna', '15min');
 
   const said = posts(conv);
-  // O3: the person reads what was taken over, not what was typed.
-  assert.ok(said.some((p) => /Anna/.test(p) && /Wie viele Minuten soll die Pause dauern\?: 15(?!min)/.test(p)), `no receipt with the value taken over in: ${JSON.stringify(said)}`);
+  // 1.5.7: the group reads that Anna answered, not what; the result names it.
+  assert.ok(said.includes('Antwort von Anna erfasst (1 von 1)'), `no short acknowledgement in: ${JSON.stringify(said)}`);
   const f = await h.facilitation(conv);
   assert.equal(f.phase, 'closed', 'it finished by itself');
   const result = String(f.result?.['text'] ?? '');
@@ -182,4 +182,41 @@ test('D39: a deadline given as a span from now is set by the engine, and the ans
   assert.match(await tool(other, 'facilitation_start', { goal: 'x', deadlineInMinutes: 90, deadline: '2026-11-21T17:00:00+01:00' }), /^Refused \(bad_deadline\)/);
   assert.match(await tool(other, 'facilitation_start', { goal: 'x', deadlineInMinutes: 0 }), /^Refused \(bad_deadline\)/);
   assert.match(await tool(other, 'facilitation_start', { goal: 'Samstag oder Sonntag?', method: 'single', options: ['Samstag', 'Sonntag'] }), /No deadline is set\. If the request named one, call facilitation_start again/);
+});
+
+test('1.5.7: a questionnaire answer is acknowledged in the group as "who, and how many", without the question or the answer; a chat ballot keeps its echo', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('qc-echo', FOUR);
+  await tool(conv, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna', 'Bert', 'Cara'], open: true });
+  await tool(conv, 'facilitation_questionnaire', PAUSE);
+  const before = posts(conv).length;
+  await answer(conv, 'anna', '15min');
+  await answer(conv, 'bert', '10');
+  await answer(conv, 'anna', '20');
+  const echoes = posts(conv).slice(before);
+  assert.deepEqual(echoes, ['Antwort von Anna erfasst (1 von 3)', 'Antwort von Bert erfasst (2 von 3)', 'Antwort von Anna geändert (2 von 3)']);
+  assert.ok(echoes.every((e) => !/Minuten|15|10|20/.test(e.replace(/\(\d von \d\)/, ''))), 'neither the question nor an answer');
+
+  const vote = h.kernel.conversation('qc-echo-vote', FOUR);
+  await tool(vote, 'facilitation_start', { goal: 'Samstag oder Sonntag?', method: 'single', options: ['Samstag', 'Sonntag'], participants: ['Anna', 'Bert'], open: true });
+  await say(vote, 'anna', 'A');
+  assert.equal(posts(vote).at(-1), 'Für dich erfasst, Anna: A (Samstag)');
+});
+
+test('1.5.7: a facilitation closed with a questionnaire nobody answered says so in its result; without a questionnaire the line is not there', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('qc-unanswered', FOUR);
+  await tool(conv, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna'], open: true });
+  await tool(conv, 'facilitation_questionnaire', PAUSE);
+  assert.match(await tool(conv, 'facilitation_close'), /^Concluded/);
+  await h.settle();
+  const f = await h.facilitation(conv);
+  assert.equal(f.phase, 'closed');
+  const result = String(f.result?.['text'] ?? '');
+  assert.equal(result, 'Ergebnis zu "Pause planen":\nAuf den Fragebogen "Pause" hat niemand geantwortet, deshalb gibt es keine Antworten zu berichten.\nDiese Moderation ist abgeschlossen. Danke euch.');
+  assert.ok(posts(conv).includes(result));
+
+  const plain = h.kernel.conversation('qc-no-questionnaire', FOUR);
+  await tool(plain, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna'], open: true });
+  await tool(plain, 'facilitation_close');
+  await h.settle();
+  assert.doesNotMatch(String((await h.facilitation(plain)).result?.['text'] ?? ''), /Fragebogen/);
 });

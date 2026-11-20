@@ -37,7 +37,7 @@ import { Refusal } from './core.js';
 import { conclude, recordBallot, roundOptions, setResultAnswers, withoutTakenItems } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
 import { DONE_WHEN_ALL, rulesOf } from './lifecycle.js';
-import { everybodyKnown } from './roll.js';
+import { everybodyKnown, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
 
 /** The one question of a card that puts a step to the vote. */
@@ -607,7 +607,7 @@ interface QuestionnaireState {
 }
 
 /** The latest questionnaire of a facilitation and what was answered on it. */
-async function questionnaireState(q: Queryable, f: Facilitation): Promise<QuestionnaireState | undefined> {
+async function questionnaireState(q: Queryable, f: Facilitation, none = 'no answer yet'): Promise<QuestionnaireState | undefined> {
   const card = (await store.listCards(q, f.id)).filter((c) => c.purpose === QUESTIONNAIRE).at(-1);
   if (!card) return undefined;
   const active = (await store.listParticipants(q, f.id)).filter((p) => p.status === 'active');
@@ -625,7 +625,7 @@ async function questionnaireState(q: Queryable, f: Facilitation): Promise<Questi
       return `${question.label}: ${question.options.map((o) => `${o.label} ${String(chosen.filter((id) => id === o.id).length)}`).join(', ')}`;
     }
     const said = given.map(({ principal, a }) => `${name(principal)}: ${answerInWords(question, a)}`);
-    return `${question.label}: ${said.length > 0 ? said.join('; ') : 'no answer yet'}`;
+    return `${question.label}: ${said.length > 0 ? said.join('; ') : none}`;
   });
   return { card, active, latest, lines };
 }
@@ -666,8 +666,25 @@ const readQuestionnaire: CardAnswerReader = async (w, { card, answers, record, a
   const step = w.f.phase === 'active' ? await store.openStepOf(w.tx, w.f.id) : undefined;
   if (step && step.method === null) {
     const summary = card.card.questions.flatMap((q) => { const a = answers.get(q.id); return a ? [`${q.label}: ${answerInWords(q, a)}`] : []; }).join('; ');
-    await recordContribution(w, { record: ownRecord(record, false), author, step, kind: 'position', payload: { questionnaire: card.cardId }, summary, interpreted: !verified, source: 'card' });
-    if (verified) await concludeWhenAllAnswered(w, card);
+    const before = await store.findLiveBySourceMessage(w.tx, w.f.id, ownRecord(record, false).messageId);
+    // A verified answer is acknowledged in the group without its content: who
+    // answered and how many have. What was answered is on the card's receipt
+    // and in the result. An unverified one still asks its author to confirm
+    // what was read, so that goes out with the reading.
+    const contribution = await recordContribution(w, { record: ownRecord(record, false), author, step, kind: 'position', payload: { questionnaire: card.cardId }, summary, interpreted: !verified, source: 'card', quiet: verified });
+    if (verified) {
+      const state = await questionnaireState(w.tx, w.f);
+      w.post({
+        purpose: 'echo',
+        key: contribution.id,
+        to: 'group',
+        deliveryClass: 'droppable',
+        versionBound: false,
+        requiredPhases: ['active', 'concluding'],
+        text: texts(w.f.language).questionnaireAnswered(author.displayName, state?.latest.size ?? 1, (state?.active.length ?? 1) + expectedNames(w.f).length, before !== undefined),
+      });
+      await concludeWhenAllAnswered(w, card);
+    }
   }
   return { outcome: verified ? 'card_answer' : 'card_answer_unverified' };
 };
@@ -685,8 +702,10 @@ export function installCardReaders(): void {
   registerCardReader(QUESTIONNAIRE, readQuestionnaire);
   // The answers are part of the result, and of what a turn knows.
   setResultAnswers(async (w) => {
-    const state = await questionnaireState(w.tx, w.f);
-    return state && state.card.state !== 'superseded' && state.latest.size > 0 ? state.lines : [];
+    const state = await questionnaireState(w.tx, w.f, texts(w.f.language).questionnaireNoAnswer);
+    if (!state || state.card.state === 'superseded') return { answers: [] };
+    // A questionnaire nobody answered is said as that, not passed over.
+    return state.latest.size > 0 ? { answers: state.lines } : { answers: [], unanswered: state.card.card.title };
   });
   registerContextSection(async (q, f) => {
     const state = await questionnaireState(q, f);

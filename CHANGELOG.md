@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.7
+
+### Changed
+
+- **A questionnaire answer is acknowledged in the group without its content:**
+  "Answer recorded from Anna (2 of 5)" / "Antwort von Anna erfasst (2 von 5)",
+  or "changed" for a newer answer. The question and the answer are not
+  repeated; the card's receipt and the result list them. The echo of a chat
+  ballot is unchanged. An answer the channel did not verify still asks its
+  author to confirm what was read.
+
+### Fixed
+
+- **A result without answers says so.** A facilitation that is closed with a
+  questionnaire nobody answered states that in its result, instead of only
+  saying that it is complete. A question nobody answered is listed with "no
+  answer" in the language of the group.
+
 ## 1.5.6
 
 Rollout defects D37 to D39 and observation O3 (found on 1.5.5).
