@@ -209,6 +209,10 @@ test('a meeting in the linked chat starts and ends its session; a session that c
   await h.settle();
   assert.equal((await sessionOf(f.id))?.status, 'closed');
   assert.match(posts(meeting).at(-1) ?? '', /^Result status: published\n\nSummary of the session "Planning call"/);
+  // Criterion 63: the home participants get the session protocol too; stakeholders and the
+  // facilitation's own protocol wait for its close.
+  assert.match(posts(home).at(-1) ?? '', /^Result status: published\n\nSummary of the session "Planning call"/);
+  assert.equal(h.kernel.dms.filter((d) => d.text.includes('here is the protocol')).length, 0);
 
   const second = await withScheduledSession('lkmiss');
   h.kernel.notReady.set(`mira|${second.meeting}`, [{ code: 'rsc_missing', message: 'no permission' }]);

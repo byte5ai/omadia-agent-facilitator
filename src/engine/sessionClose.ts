@@ -114,7 +114,28 @@ export async function closeSession(w: Work, session: Session, opts: { stopped?: 
   if (mark) await patchClosing(w.tx, closing.id, finalPatch(mark, w.now));
   const until = formatWhen(new Date(w.now.getTime() + confirmationWindowMs(undefined)), w.f.timezone, w.f.language);
   postDocument(w, session, closing, mark ? markDocument(w.f.language, mark, closing.document) : `${closing.document}\n\n${t.summaryConsent(until)}`, 'session_summary');
+  if (mark) protocolToHome(w, session, closing, mark);
   return closing;
+}
+
+/**
+ * The final session protocol also goes to the home participants (spec 5.11,
+ * criterion 63): in the home conversation, when the session ran in its own
+ * chat. Stakeholders never get a session protocol.
+ */
+function protocolToHome(w: Work, session: Session, closing: Closing, mark: ResultMark): void {
+  if (!session.conversationId) return;
+  w.post({
+    purpose: 'session_protocol',
+    key: `${closing.id}:home`,
+    to: 'group',
+    conversationId: w.f.conversationId,
+    deliveryClass: 'essential',
+    versionBound: false,
+    text: markDocument(w.f.language, mark, closing.document),
+    closingEvent: closing.eventId,
+    closing: { id: closing.id, version: closing.documentVersion },
+  });
 }
 
 function postDocument(w: Work, session: Session, closing: Closing, text: string, purpose: string, key = closing.id): void {
@@ -141,6 +162,7 @@ async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resen
   w.bump();
   await w.event('session_closing_final', 'engine', { closingId: closing.id, sessionId: closing.sessionId, status: mark.status, ...(mark.status === 'not_confirmed' ? { reason: mark.reason } : {}) });
   if (!session) return;
+  protocolToHome(w, session, closing, mark);
   const t = sessionTexts(w.f.language);
   const title = sessionTitleOf(session, w.f);
   if (opts.resend) {
