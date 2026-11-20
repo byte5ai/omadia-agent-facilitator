@@ -34,6 +34,7 @@ import { runFacilitatorTurn } from './turn.js';
 import { installSessionClose, sessionSummariesDelivered } from './sessionClose.js';
 import { handleLinkRequest, linkedMeetingEvent, replaySessionConversations, syncAllSessionConversations, syncSessionConversations } from './sessionLinks.js';
 import { installTranscript } from './transcript.js';
+import { installSessionElectorate } from './sessionElectorate.js';
 
 const REPLAY_PAGE = 200;
 
@@ -63,6 +64,7 @@ function installOnce(): void {
   installSessions();
   installSessionClose();
   installTranscript();
+  installSessionElectorate();
   installCapabilities();
 }
 

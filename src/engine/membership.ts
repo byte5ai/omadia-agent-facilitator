@@ -102,12 +102,14 @@ async function applySessionMembership(w: Work, sessionId: string, event: Convers
       if ((left.rowCount ?? 0) > 0) await w.event('session_participant_left', principal, { sessionId });
       continue;
     }
-    if (await store.getParticipant(w.tx, w.f.id, principal)) continue;
+    // A home participant who joins the meeting chat is a member of the
+    // session too (5.5), and stays a home participant.
+    const home = (await store.getParticipant(w.tx, w.f.id, principal))?.status === 'active';
     const added = await w.tx.query(
-      `INSERT INTO plg_omadia_agent_facilitator_session_participants (facilitation_id, session_id, principal_id, display_name, status, joined_at)
-       VALUES ($1, $2, $3, $4, 'active', $5)
+      `INSERT INTO plg_omadia_agent_facilitator_session_participants (facilitation_id, session_id, principal_id, display_name, status, joined_at, home)
+       VALUES ($1, $2, $3, $4, 'active', $5, $6)
        ON CONFLICT (session_id, principal_id) DO UPDATE SET status = 'active', left_at = NULL WHERE plg_omadia_agent_facilitator_session_participants.status = 'left'`,
-      [w.f.id, sessionId, principal, raw.displayName ?? raw.id, w.now],
+      [w.f.id, sessionId, principal, raw.displayName ?? raw.id, w.now, home],
     );
     if ((added.rowCount ?? 0) > 0) await w.event('session_participant_joined', principal, { sessionId, by: 'membership_event' });
   }

@@ -37,6 +37,7 @@ import type { InboundResult } from './inbound.js';
 import { normaliseCommand } from './inbound.js';
 import { scheduleJob } from './jobs.js';
 import { ensureScope, scopeKeyFor } from './scopes.js';
+import { fixSessionElectorate } from './sessionElectorate.js';
 
 const SESSIONS = 'plg_omadia_agent_facilitator_sessions';
 const GUESTS = 'plg_omadia_agent_facilitator_session_participants';
@@ -193,6 +194,8 @@ async function linkConversation(engine: EngineCore, f: Facilitation, request: Li
     return;
   }
   await syncSessionConversations(engine, f.id);
+  // The session's own member list (5.5): its source is fixed now.
+  await fixSessionElectorate(engine, f, session.id, request.conversationId);
   await checkSessionReadiness(engine, f.id, session.id);
 }
 
@@ -365,19 +368,19 @@ export async function advanceSessionCursor(w: Work, record: ConversationMessageR
   return true;
 }
 
-/** A person of the session conversation who is not a home participant is a
- *  session participant (5.3). */
+/** Whoever writes in the session conversation is one of its members: a
+ *  session-only participant, or a home participant who is there too (5.3,
+ *  5.5). Nobody is removed by others. */
 async function noteGuest(w: Work, session: Session, record: ConversationMessageRecord): Promise<void> {
   const principal = principalKey(record.author);
   const home = await store.getParticipant(w.tx, w.f.id, principal);
-  if (home) return;
   const added = await insertIfAbsent<SessionParticipant>(
     w.tx,
     GUESTS,
-    { facilitationId: w.f.id, sessionId: session.id, principalId: principal, displayName: record.author.displayName ?? record.author.id, status: 'active', joinedAt: w.now },
+    { facilitationId: w.f.id, sessionId: session.id, principalId: principal, displayName: home?.displayName ?? record.author.displayName ?? record.author.id, status: 'active', joinedAt: w.now, home: home?.status === 'active' },
     '(session_id, principal_id)',
   );
-  if (added) await w.event('session_participant_joined', principal, { sessionId: session.id });
+  if (added) await w.event('session_participant_joined', principal, { sessionId: session.id, home: home?.status === 'active' });
 }
 
 /**
@@ -414,7 +417,7 @@ export async function guestSessionsOf(q: Queryable, facilitationId: string, prin
   return rows<Session>(
     q,
     `SELECT s.* FROM ${SESSIONS} s JOIN ${GUESTS} g ON g.session_id = s.id
-      WHERE g.facilitation_id = $1 AND g.principal_id = $2 AND g.status = 'active' ORDER BY s.created_at`,
+      WHERE g.facilitation_id = $1 AND g.principal_id = $2 AND g.status = 'active' AND NOT g.home ORDER BY s.created_at`,
     [facilitationId, principal],
   );
 }

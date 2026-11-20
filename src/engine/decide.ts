@@ -29,6 +29,7 @@ import { registerJobHandler } from './scheduler.js';
 import { closingSummary } from './protocol.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
+import { stepElectorate } from './sessionElectorate.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
 const pointsOf = (step: Step): readonly number[] => {
@@ -80,7 +81,9 @@ export async function assignmentEvents(w: Pick<Work, 'tx' | 'f'>, step: Step): P
 
 export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step, deadlineReached: boolean): Promise<Evaluation> {
   if (!step.method) throw new Error('evaluateStep on a step without a method');
-  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  // The step's electorate: its session's participants, or the home ones (5.5).
+  const electorate = await stepElectorate(w.tx, w.f, step);
+  const active = electorate.people;
   return evaluate({
     method: step.method,
     options: roundOptions(step),
@@ -88,7 +91,7 @@ export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step
     ballots: await castBallots(w, step),
     assignmentEvents: step.method === 'assignment' ? await assignmentEvents(w, step) : [],
     // The named people nobody was matched to are waited for like anybody else.
-    activeParticipants: [...active.map((p) => p.principalId), ...expectedKeys(w.f)],
+    activeParticipants: [...active.map((p) => p.principalId), ...(electorate.session ? [] : expectedKeys(w.f))],
     closeRule: effectiveCloseRule(w.f),
     deadlineReached,
     ...(step.method === 'consent' && step.roundDeadline ? { windowEnded: w.now.getTime() >= step.roundDeadline.getTime() } : {}),
@@ -552,7 +555,7 @@ const ballots: InboundHandler = async ({ w, record, author, retired, command }) 
     await w.event('consent_withdrawn', author.principalId, { stepId: step.id, round: step.round, messageId: record.messageId });
     return { outcome: 'consent_withdrawn' };
   }
-  const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  const participants = (await stepElectorate(w.tx, w.f, step)).people;
   // A ballot is read without the mention it starts with ("Mona (Test) A"):
   // the mention says who is spoken to, the rest is the ballot.
   const cast = withoutMention(record.text ?? '', namesOf(w.f), record.addressedToBot === true);

@@ -37,6 +37,7 @@ import { Refusal } from './core.js';
 import { isBot } from './membership.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
 import { everybodyKnown, expectedNames, sameName } from './roll.js';
+import { stepElectorate, verifySessionElectorate } from './sessionElectorate.js';
 
 /** The final consent asks again at this interval ... */
 export const FINAL_ELECTORATE_RETRY_MS = HOUR_MS;
@@ -101,6 +102,15 @@ export async function retryHeldDecisions(w: Work): Promise<void> {
 }
 
 async function check_(w: Work, notice: boolean): Promise<ElectorateCheck> {
+  // A step run inside a session has its session's electorate (5.5).
+  const step = await store.openStepOf(w.tx, w.f.id);
+  const electorate = step?.electorateSessionId ? await stepElectorate(w.tx, w.f, step) : undefined;
+  if (electorate?.session) {
+    const checked = await verifySessionElectorate(w, electorate.session);
+    if (checked.verified) return checked;
+    await unverified(w, checked.reason, notice);
+    return { verified: false, reason: checked.reason };
+  }
   if (w.f.electorateSource === 'declared_list') {
     if (w.f.settings.openRoster === true) return { verified: false, reason: 'undeclared' };
     return everybodyKnown(w.f) ? { verified: true } : { verified: false, reason: 'names_pending' };

@@ -340,7 +340,7 @@ export async function peopleFor(engine: EngineCore, f: Facilitation, kind: Execu
   // criterion 46), and get nothing else.
   if (kind !== 'follow_up') {
     const guests = await db.query<{ principal_id: string }>(
-      `SELECT DISTINCT principal_id FROM plg_omadia_agent_facilitator_session_participants WHERE facilitation_id = $1 AND status = 'active'`,
+      `SELECT DISTINCT principal_id FROM plg_omadia_agent_facilitator_session_participants WHERE facilitation_id = $1 AND status = 'active' AND NOT home`,
       [f.id],
     );
     for (const g of guests.rows) {

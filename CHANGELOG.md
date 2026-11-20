@@ -4,6 +4,16 @@
 
 ### Added
 
+- **A session's own electorate** (spec 5.5): a linked session fixes the source of its member
+  list when it is linked; a step run inside a live session can be decided by that session's
+  participants (`facilitation_step_electorate`), guests included and people only at home not
+  eligible; session-only participants never count as missing for home steps; leaving the
+  meeting chat ends only the session membership. Migration `0011_session_electorate`.
+- **Guests answer the media consent of their session** (spec 6.3): asked in the meeting chat,
+  decided by the session's members; anyone there can object.
+
+### Added
+
 - **Repeat after a rule change (#2062 criterion 57; migration 0010).** A
   change of the method of a closed step repeats it as a new step linked to it
   (`repeats_step_id`), opened at once with fresh contributions; a step that was

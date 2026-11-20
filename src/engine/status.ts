@@ -11,6 +11,7 @@ import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { listClosings, markOf, resultStatusWords } from './resultStatus.js';
 import { importOf } from './imports.js';
+import { stepElectorate } from './sessionElectorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export interface Participation {
@@ -24,9 +25,11 @@ export interface Participation {
 
 /** Who has contributed to the open step, and who has not. */
 export async function participationOf(q: Queryable, f: Facilitation): Promise<Participation> {
-  const all = await store.listParticipants(q, f.id);
-  const active = all.filter((p) => p.status === 'active');
   const step = await store.openStepOf(q, f.id);
+  // A step run inside a session counts its session's participants (5.5).
+  const electorate = await stepElectorate(q, f, step);
+  const all = electorate.session ? electorate.people : await store.listParticipants(q, f.id);
+  const active = electorate.people;
   if (!step) return { step, active, contributed: [], missing: [], valid: [] };
   const valid = (await store.listContributions(q, f.id, step.id)).filter((c) => c.status === 'valid' && c.round === step.round);
   const done = new Set(valid.map((c) => c.participantPrincipal));

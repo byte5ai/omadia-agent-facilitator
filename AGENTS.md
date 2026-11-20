@@ -218,3 +218,18 @@ byte5ai/omadia `docs/adr/`.
   speaker name. Participant-bound: author = platform principal, confirm exactly that
   revision. Shared: adoption by reply ("mine"), `payload.adoptedFromTranscript`.
 - Texts of these modules live in `src/texts/sessions.ts`.
+
+## Session electorate (spec 5.5, 6.3; ADR-0026 in byte5ai/omadia)
+
+- `session_participants` lists every member of a linked session conversation: session-only
+  participants (`home` false) and home participants who are in it (`home` true). Guest-only
+  readers (private status, scope targets) filter `NOT home`.
+- A session fixes its electorate source when it is linked (`sessions.electorate_source`):
+  the meeting chat's roster if `complete`, otherwise a declared list (joins and writers).
+- `steps.electorate_session_id`: a step run inside a live linked session may declare that
+  session's participants (`facilitation_step_electorate`, only before any contribution).
+  `stepElectorate()` in `src/engine/sessionElectorate.ts` is the one place that says who is
+  expected for a step; counting, "missing", completeness, timebox and the electorate check
+  use it. Session-only participants never count for home steps.
+- The media consent of a linked session uses the proposal hooks `electorate`,
+  `verifyElectorate` and `answerer`: the session's members answer, guests included.

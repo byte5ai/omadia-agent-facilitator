@@ -12,7 +12,6 @@ import { ANNA, BERT, CARA, createHarness } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
-const EVA: FakeUser = { id: 'eva', displayName: 'Eva Guest' };
 
 let h: Harness;
 before(async () => {
@@ -35,12 +34,14 @@ const inMinutes = (minutes: number): string => new Date(h.clock.now().getTime() 
  *  `meeting` where Anna and Bert sit with a guest. */
 async function withScheduledSession(name: string, goal = `Quarterly planning ${name}`) {
   const home = h.kernel.conversation(`${name}-home`, [ANNA, BERT, CARA]);
-  const meeting = h.kernel.conversation(`${name}-meeting`, [ANNA, BERT, EVA]);
+  // Each test has a guest of its own: a person in one meeting chat only.
+  const guest: FakeUser = { id: `eva-${name}`, displayName: 'Eva Guest' };
+  const meeting = h.kernel.conversation(`${name}-meeting`, [ANNA, BERT, guest]);
   await tool(home, 'facilitation_start', { goal, definitionOfDone: 'Priorities are agreed', agenda: [{ kind: 'collect', title: 'Topics' }, { kind: 'discuss', title: 'Discuss', timeboxMinutes: 30 }, { kind: 'close', title: 'Close' }] });
   await tool(home, 'facilitation_open');
   await tool(home, 'facilitation_session', { action: 'schedule', title: 'Planning call', start: inMinutes(120), end: inMinutes(180), modality: 'online' });
   const f = await h.facilitation(home);
-  return { home, meeting, f, goal };
+  return { home, meeting, f, goal, eva: guest.id };
 }
 
 async function link(meeting: string, who = 'anna', text = '@mira link this chat for the session') {
@@ -52,12 +53,12 @@ async function link(meeting: string, who = 'anna', text = '@mira link this chat 
 const sessionOf = async (facilitationId: string) => (await store.listSessions(h.db.pool, facilitationId)).find((s) => s.kind === 'live');
 
 test('criterion 48: only a home participant links a meeting chat, from inside it; a request from the home conversation takes nothing', { skip: PG_SKIP }, async () => {
-  const { home, meeting, f, goal } = await withScheduledSession('lk48');
+  const { home, meeting, f, goal, eva } = await withScheduledSession('lk48');
   const ask = `@mira link this chat to ${goal}`;
   // From the home conversation: the facilitation reads it, so it is no link request.
   assert.equal((await link(home, 'anna', ask)).handled, false);
   // A guest of the meeting chat: one short answer, nothing taken.
-  const guest = await link(meeting, 'eva', ask);
+  const guest = await link(meeting, eva, ask);
   assert.equal(guest.answer, 'Only a participant of that facilitation can link this chat, from inside it.');
   assert.equal(h.kernel.reservations.some((r) => r.conversationId === meeting && r.releasedAt === undefined), false);
   assert.equal(h.kernel.modeOf(f.id, meeting), undefined, 'no read access');
@@ -146,31 +147,31 @@ test('criterion 60: a meeting chat without permission for all messages does not 
 });
 
 test('criterion 22 and 46: a person only in the meeting chat never sees the home history; asked privately, gets only the session status; nothing after leaving', { skip: PG_SKIP }, async () => {
-  const { home, meeting, f, goal } = await withScheduledSession('lk22');
+  const { home, meeting, f, goal, eva } = await withScheduledSession('lk22');
   await say(home, 'cara', 'Something only the home group knows');
   await link(meeting, 'anna', `@mira link this chat to ${goal}`);
   h.clock.advance(121 * MINUTE_MS);
   await h.tick();
   assert.equal((await sessionOf(f.id))?.status, 'live');
   // The guest writes: moderated, never counted, and listed as a session participant.
-  await say(meeting, 'eva', 'Could we also talk about tooling?');
-  assert.equal((await store.listContributions(h.db.pool, f.id)).some((c) => c.participantPrincipal === 'user:eva'), false);
-  assert.equal(await store.getParticipant(h.db.pool, f.id, 'user:eva'), undefined, 'not a home participant');
+  await say(meeting, eva, 'Could we also talk about tooling?');
+  assert.equal((await store.listContributions(h.db.pool, f.id)).some((c) => c.participantPrincipal === `user:${eva}`), false);
+  assert.equal(await store.getParticipant(h.db.pool, f.id, `user:${eva}`), undefined, 'not a home participant');
   // The facilitator's turn there is told where it answers.
   assert.match(h.kernel.turns.at(-1)?.engineContext ?? '', /linked session conversation.*never quote, summarise or refer to messages/s);
   assert.ok(!posts(meeting).some((t) => t.includes('Something only the home group knows')));
 
   await h.tick();
-  const guest = await h.kernel.privateMessage('mira', 'eva', 'status');
+  const guest = await h.kernel.privateMessage('mira', eva, 'status');
   assert.match(guest ?? '', /^Status of your session:\n- Planning call: running/);
   assert.doesNotMatch(guest ?? '', /Quarterly planning|Cara|Bert|Anna|tally|missing/i);
   const member = await h.kernel.privateMessage('mira', 'cara', 'status');
   assert.match(member ?? '', /Quarterly planning lk22/, 'a home participant gets the full status');
 
-  h.kernel.leave(meeting, 'eva');
+  h.kernel.leave(meeting, eva);
   await h.settle();
   await h.tick();
-  assert.equal(await h.kernel.privateMessage('mira', 'eva', 'status'), undefined, 'after leaving, nothing more');
+  assert.equal(await h.kernel.privateMessage('mira', eva, 'status'), undefined, 'after leaving, nothing more');
 
   // After the session: contributions from the meeting chat no longer count.
   await tool(home, 'facilitation_session', { action: 'end' });
@@ -182,7 +183,7 @@ test('criterion 22 and 46: a person only in the meeting chat never sees the home
 });
 
 test('in a session conversation "status" gives the session status only, and a turn there knows nothing of the home conversation', { skip: PG_SKIP }, async () => {
-  const { home, meeting, f, goal } = await withScheduledSession('lkst');
+  const { home, meeting, f, goal, eva } = await withScheduledSession('lkst');
   await say(home, 'cara', 'Home-only remark');
   await link(meeting, 'anna', `@mira link this chat to ${goal}`);
   h.clock.advance(121 * MINUTE_MS);
@@ -191,7 +192,7 @@ test('in a session conversation "status" gives the session status only, and a tu
   const answer = posts(meeting).at(-1) ?? '';
   assert.match(answer, /^Status of your session:\n- Planning call: running/);
   assert.doesNotMatch(answer, /Cara|Bert|Anna|Contributed|missing|tally/i);
-  await say(meeting, 'eva', 'What are we doing now?');
+  await say(meeting, eva, 'What are we doing now?');
   const context = h.kernel.turns.at(-1)?.engineContext ?? '';
   assert.match(context, /^# Session\nSession: Planning call \(live\)/);
   assert.doesNotMatch(context, /Cara|Home-only remark/);
