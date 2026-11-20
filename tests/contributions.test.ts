@@ -48,7 +48,7 @@ test('a contribution read from free text counts only after its author confirmed 
   const echo = h.kernel.groupPosts(conv).at(-1);
   assert.match(echo?.text ?? '', /^Bert, I read your message as: prefers the old town\. Reply "yes"/);
   assert.deepEqual(echo?.mentions, [{ user: 'user:bert', text: 'Bert' }]);
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: nobody yet/);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: 0 of \d+/);
 
   // Somebody else's "yes" confirms nothing.
   await h.kernel.say(conv, 'anna', 'yes');
@@ -59,7 +59,7 @@ test('a contribution read from free text counts only after its author confirmed 
   await h.settle();
   assert.equal((await contributionsOf(conv))[0]?.status, 'valid');
   assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /^Confirmed, Bert: prefers the old town/);
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: Bert/);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: 1 of \d+/);
 });
 
 test('a reaction on the echo confirms; "no" withdraws the reading', { skip: PG_SKIP }, async () => {
@@ -174,7 +174,7 @@ test('an unclear message gets exactly one clarifying question and does not count
   const posts = h.kernel.groupPosts(conv).slice(before);
   assert.deepEqual(posts.map((p) => p.text), ['Cara, which one do you mean?']);
   assert.equal((await contributionsOf(conv))[0]?.status, 'ambiguous');
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Anna, Bert, Cara, Dave/);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: 4 contributions/);
 });
 
 test('several things waiting for one person: a bare "yes" asks which, a reply settles it', { skip: PG_SKIP }, async () => {

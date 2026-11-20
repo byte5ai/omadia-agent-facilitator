@@ -215,6 +215,9 @@ export const de: Texts = {
   actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number, description, owner, due, status) => `#${String(number)} ${description} (${owner}, fällig ${due}): ${status}`,
   actionStatusWords: { proposed: 'wartet auf die verantwortliche Person', confirmed: 'offen', done: 'erledigt', declined: 'abgelehnt' },
+  notAccepted: (number, description, owner) => `#${String(number)} ${description}: vorgeschlagen für ${owner}, nicht angenommen`,
+  lateAcceptance: (owner, number, description) =>
+    `Danke, ${owner}. Das Ergebnis stand schon fest, als du zugesagt hast. #${String(number)} ${description} bleibt deshalb ein offener Punkt im Protokoll und wird nicht nachverfolgt. Dafür kannst du eine neue Moderation starten.`,
   followupEnded: () => 'Die Nachverfolgung der Aufgaben ist beendet. Ich lese diese Unterhaltung nicht mehr mit.',
 
   closeSummary: (s) =>
@@ -242,7 +245,7 @@ export const de: Texts = {
     summaries: 'Von der Gruppe bestätigte Zusammenfassungen',
     contributions: 'Beiträge',
     actions: 'Aufgaben',
-    parked: 'Offene Punkte (Themenspeicher)',
+    parked: 'Offene Punkte',
     changes: 'Regeländerungen',
     changeKinds: { proposal_accepted: 'Vorschlag angenommen', proposal_rejected: 'Vorschlag abgelehnt', proposal_amended: 'Vorschlag geändert' },
     runoff: (between) => `Stichwahl zwischen ${between}`,
@@ -316,8 +319,12 @@ export const de: Texts = {
       `Status: ${s.phase}. Ziel: ${s.goal}`,
       ...(s.step ? [`Aktueller Schritt: ${s.step}`] : []),
       `Definition of Done (Version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
-      `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'noch niemand'}`,
-      `Noch offen: ${s.missing.length > 0 ? s.missing.join(', ') : 'niemand'}`,
+      typeof s.contributed === 'number'
+        ? `Beigetragen: ${String(s.contributed)} von ${String(s.contributed + (typeof s.missing === 'number' ? s.missing : s.missing.length))}`
+        : `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'noch niemand'}`,
+      typeof s.missing === 'number'
+        ? `Noch offen: ${s.missing === 0 ? 'keine' : s.missing === 1 ? '1 Beitrag' : `${String(s.missing)} Beiträge`}`
+        : `Noch offen: ${s.missing.length > 0 ? s.missing.join(', ') : 'niemand'}`,
       ...(s.options ? [`Optionen: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Vorläufiger Stand' : 'Stand'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Offener Vorschlag: ${s.proposal}`] : []),

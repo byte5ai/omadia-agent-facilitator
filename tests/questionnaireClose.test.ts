@@ -73,7 +73,7 @@ test('D37: an answer is that person\'s contribution: the status lists it, the tu
   await answer(conv, 'anna', '15min');
   assert.equal((await h.facilitation(conv)).phase, 'active', 'two have not answered');
 
-  assert.match(await tool(conv, 'facilitation_status'), /Beigetragen: Anna\nNoch offen: Bert, Cara/);
+  assert.match(await tool(conv, 'facilitation_status'), /Beigetragen: 1 von 3\nNoch offen: 2 Beiträge/);
   h.kernel.onTurn = () => '[silent]';
   await say(conv, 'bert', 'Mira, wer hat schon geantwortet?');
   const context = h.kernel.turns.at(-1)?.engineContext ?? '';
@@ -114,7 +114,7 @@ test('D37: without that, and with another definition of done, answers do not end
   await tool(vote, 'facilitation_start', { goal: 'Samstag oder Sonntag?', method: 'single', options: ['Samstag', 'Sonntag'], participants: ['Anna', 'Bert'], open: true });
   await tool(vote, 'facilitation_questionnaire', PAUSE);
   await answer(vote, 'anna', '15');
-  assert.match(await tool(vote, 'facilitation_status'), /Beigetragen: noch niemand/);
+  assert.match(await tool(vote, 'facilitation_status'), /Beigetragen: 0 von \d+/);
   assert.match(await tool(vote, 'facilitation_questionnaire_answers'), /Anna: 15/);
 });
 

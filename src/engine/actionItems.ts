@@ -14,7 +14,7 @@ import { formatWhen, texts } from '../texts/index.js';
 import { mention } from './contributions.js';
 import type { Work } from './core.js';
 import { onClosed } from './decide.js';
-import { PRIORITY, ackResolvers, registerInboundHandler } from './inbound.js';
+import { PRIORITY, ackResolvers, isPositiveReaction, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { scheduleJob } from './jobs.js';
 import { registerJobHandler } from './scheduler.js';
@@ -183,8 +183,41 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   return { outcome: 'action_done' };
 };
 
+/**
+ * A "yes" to a nomination after the result was frozen at `concluding` (spec
+ * 5.4, criterion 37): it changes nothing, the item stays an open point, and
+ * the facilitator says so once. Only a reply to (or a reaction on) the
+ * nomination's own message counts as that "yes", or a free-standing one when
+ * nothing else is open that it could answer.
+ */
+const lateAcceptance: InboundHandler = async ({ w, record, author, command }) => {
+  if (!author || w.f.phase === 'active' || w.f.phase === 'configuring') return undefined;
+  const reaction = record.kind === 'reaction' && record.reaction !== undefined && !record.reaction.removed && isPositiveReaction(record.reaction.name);
+  if (!reaction && !(record.kind === 'created' && isYes(command))) return undefined;
+  const late = await w.tx.query<{ ack_id: string; item_id: string; prompt: string | null; answered: boolean }>(
+    `SELECT k.id AS ack_id, a.id AS item_id, k.prompt_message_id AS prompt, coalesce((k.detail->>'lateAnswered')::boolean, false) AS answered
+       FROM plg_omadia_agent_facilitator_acks k JOIN plg_omadia_agent_facilitator_action_items a ON a.id = k.ref_id
+      WHERE k.facilitation_id = $1 AND k.kind = 'action_item' AND k.status = 'cancelled' AND k.principal = $2 AND a.status = 'proposed'
+      ORDER BY a.number`,
+    [w.f.id, author.principalId],
+  );
+  const target = reaction ? record.messageId : record.replyToMessageId;
+  const bound = late.rows.filter((r) => r.prompt !== null && r.prompt === target);
+  const open = bound.length === 0 && late.rows.length === 1 && !(await store.openProposal(w.tx, w.f.id)) ? late.rows : bound;
+  const hit = open[0];
+  if (!hit) return undefined;
+  if (hit.answered) return { outcome: 'late_acceptance_repeated' };
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET detail = detail || '{"lateAnswered": true}'::jsonb WHERE id = $1`, [hit.ack_id]);
+  const item = await one<ActionItem>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_action_items WHERE id = $1', [hit.item_id]);
+  if (!item) return undefined;
+  await w.event('late_acceptance', author.principalId, { number: item.number, messageId: record.messageId });
+  w.post({ purpose: 'late_acceptance', key: hit.ack_id, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).lateAcceptance(author.displayName, item.number, item.description) });
+  return { outcome: 'late_acceptance' };
+};
+
 export function installActionItems(): void {
   registerInboundHandler(doneMessages, PRIORITY.followup);
+  registerInboundHandler(lateAcceptance, PRIORITY.acknowledgements + 1);
   onClosed(startFollowup);
 
   // The owner says yes or no in their own message.

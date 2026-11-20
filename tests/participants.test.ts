@@ -102,7 +102,7 @@ test('a named participant nobody can be matched to is kept as named, asked to wr
   await say(conv, 'bert', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'active', 'Cara is still waited for');
   assert.deepEqual(await names(conv), ['user:anna', 'user:bert']);
-  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: Cara/);
+  assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: 1 contribution/);
   await say(conv, 'cara', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   assert.deepEqual((await h.facilitation(conv)).settings.expected ?? [], []);

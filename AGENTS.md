@@ -37,3 +37,16 @@ byte5ai/omadia `docs/adr/`.
 - `facilitations.ended_at`: when `ended` or `aborted` was reached; retention counts from here.
 - `stakeholders.disclosure` (`full`, `existence`, `none`, default `existence`): what a
   stakeholder's protocol says about parts left out for them.
+
+## Status and personal acceptance (spec 5.4, 5.7; criteria 16, 37)
+
+- `statusText(q, f, audience)`: `group` (default; status command in the group and the
+  `facilitation_status` tool) gives counts only ("Contributed: 2 of 4", "Still open: 2
+  contributions") and never names anybody; `private` (a home participant asking in a private
+  chat) gets the names. The group status names nobody, also not who contributed.
+- A nomination its owner has not accepted when the result is frozen is an open point
+  ("#2 Order drinks: proposed for Cara, not accepted") in the result, the protocol and the
+  status after close, never an action item; it gets no reminder and starts no follow-up.
+- A "yes" to such a nomination after the freeze (a reply to or reaction on its own message, or
+  a free-standing one when nothing else is open) is answered once (`late_acceptance`) and
+  changes nothing.

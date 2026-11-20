@@ -251,6 +251,12 @@ export const en = {
   actionLine: (number: number, description: string, owner: string, due: string, status: string): string =>
     `#${String(number)} ${description} (${owner}, due ${due}): ${status}`,
   actionStatusWords: { proposed: 'waiting for the owner', confirmed: 'open', done: 'done', declined: 'declined' },
+  /** A nomination its owner did not accept before the result was frozen: an
+   *  open point, never an action item (spec 5.4, criterion 37). */
+  notAccepted: (number: number, description: string, owner: string): string => `#${String(number)} ${description}: proposed for ${owner}, not accepted`,
+  /** A "yes" to a nomination after the result was frozen: said once. */
+  lateAcceptance: (owner: string, number: number, description: string): string =>
+    `Thank you, ${owner}. The result was already final when you said yes, so #${String(number)} ${description} stays an open point in the protocol and is not followed up. You can start a new facilitation for it.`,
   followupEnded: (): string => 'The follow-up of the action items has ended. I am no longer reading this conversation.',
 
   closeSummary: (s: { decisions: readonly string[]; actions: readonly string[]; open: readonly string[] }): string =>
@@ -278,7 +284,7 @@ export const en = {
     summaries: 'Summaries confirmed by the group',
     contributions: 'Contributions',
     actions: 'Action items',
-    parked: 'Open points (parking lot)',
+    parked: 'Open points',
     changes: 'Changes to the rules',
     changeKinds: { proposal_accepted: 'proposal accepted', proposal_rejected: 'proposal rejected', proposal_amended: 'proposal amended' } as Record<string, string>,
     runoff: (between: string): string => `runoff between ${between}`,
@@ -380,8 +386,10 @@ export const en = {
     step?: string;
     dodVersion: number;
     definitionOfDone: string;
-    contributed: string[];
-    missing: string[];
+    /** Names in a private answer; a count in the group, which never names
+     *  who is missing (spec 5.7, criterion 16). */
+    contributed: string[] | number;
+    missing: string[] | number;
     /** What can be chosen in the open step, each option with its key. */
     options?: string;
     tally?: string;
@@ -393,8 +401,12 @@ export const en = {
       `Status: ${s.phase}. Goal: ${s.goal}`,
       ...(s.step ? [`Current step: ${s.step}`] : []),
       `Definition of done (version ${String(s.dodVersion)}): ${s.definitionOfDone}`,
-      `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody yet'}`,
-      `Still open: ${s.missing.length > 0 ? s.missing.join(', ') : 'nobody'}`,
+      typeof s.contributed === 'number'
+        ? `Contributed: ${String(s.contributed)} of ${String(s.contributed + (typeof s.missing === 'number' ? s.missing : s.missing.length))}`
+        : `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody yet'}`,
+      typeof s.missing === 'number'
+        ? `Still open: ${s.missing === 0 ? 'none' : s.missing === 1 ? '1 contribution' : `${String(s.missing)} contributions`}`
+        : `Still open: ${s.missing.length > 0 ? s.missing.join(', ') : 'nobody'}`,
       ...(s.options ? [`Options: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Provisional tally' : 'Tally'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Open proposal: ${s.proposal}`] : []),
