@@ -287,6 +287,23 @@ export const en = {
     none: 'none',
   },
 
+  // ── result status and delivery status (spec 5.11) ────────────────────────
+  resultStatus: {
+    label: 'Result status',
+    published: 'published',
+    confirmed: 'confirmed',
+    not_confirmed: 'not confirmed',
+    aborted: 'aborted',
+    reasons: {
+      objection: 'objection',
+      electorate_unverified: 'participants could not be verified',
+      not_delivered: 'not delivered',
+      stopped: 'facilitation stopped',
+    } as Record<string, string>,
+    delivery: 'Delivery',
+    deliveryStatus: { pending: 'pending', delivered: 'delivered', not_delivered: 'not delivered' } as Record<string, string>,
+  },
+
   // ── transparency ─────────────────────────────────────────────────────────
   formats: {
     decision: 'Decision',

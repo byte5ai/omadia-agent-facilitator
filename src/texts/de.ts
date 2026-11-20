@@ -251,6 +251,23 @@ export const de: Texts = {
     none: 'keine',
   },
 
+  // ── Ergebnis-Status und Zustellstatus (Spec 5.11) ─────────────────────────
+  resultStatus: {
+    label: 'Ergebnis-Status',
+    published: 'veröffentlicht',
+    confirmed: 'bestätigt',
+    not_confirmed: 'nicht bestätigt',
+    aborted: 'abgebrochen',
+    reasons: {
+      objection: 'Einwand',
+      electorate_unverified: 'Teilnehmende konnten nicht geprüft werden',
+      not_delivered: 'nicht zugestellt',
+      stopped: 'Facilitation gestoppt',
+    } as Record<string, string>,
+    delivery: 'Zustellung',
+    deliveryStatus: { pending: 'ausstehend', delivered: 'zugestellt', not_delivered: 'nicht zugestellt' } as Record<string, string>,
+  },
+
   // ── Transparenz ──────────────────────────────────────────────────────────
   formats: {
     decision: 'Entscheidung',
