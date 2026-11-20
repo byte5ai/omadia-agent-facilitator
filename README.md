@@ -144,6 +144,10 @@ All fields are optional; defaults in brackets.
 | `session_agenda_lead_minutes` [60] | agenda before a meeting |
 | `media_consent_explicit` [false] | speech of a call needs a yes from every participant |
 | `followup_grant_days` [14] | how long the scoped grant lasts without action items |
+| `final_confirm_window_hours` [24] | consent window of a final summary that needs confirmation, from its confirmed delivery; at most 72 |
+| `followup_grace_days` [7] | follow-up ends this long after the last due date |
+| `facilitator_limits` [empty] | own limits per facilitator: `mira: active=5, starts=10; rita: messages=200` (keys `active`, `starts` per hour, `messages` per facilitation); the instance limit applies to all together |
+| `followup_horizon_days` [90] | no follow-up runs longer than this after the close; later due dates are refused when agreed |
 | `protocol_mail_enabled` [false] | mail the protocol of EVERY facilitation through the follow-up integration. Without it a facilitation mails its protocol only when the request asked for it (`protocolByMail` at the start) |
 
 ### Privacy mode

@@ -19,20 +19,23 @@ import { principalKey } from '../kernel.js';
 import { insert, one, update } from '../db/sql.js';
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
-import type { Facilitation, FollowupMeetingPlan, Job, Participant, Stakeholder, StakeholderRole } from '../model.js';
+import type { Disclosure, Facilitation, FollowupMeetingPlan, Job, Participant, Stakeholder, StakeholderRole } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { onFollowupEnded } from './actionItems.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
+import { onAborted } from './lifecycle.js';
+import { listClosings } from './resultStatus.js';
 import { scheduleJob } from './jobs.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
+import { stakeholderProtocol } from './stakeholderProtocol.js';
 import { withTimeout } from './outbox.js';
 import { registerExternalJob, registerJobHandler } from './scheduler.js';
 import type { ExternalJob } from './scheduler.js';
 import { recordRefusal } from './refusals.js';
-import { CLOSING_RESULT, SCHEDULING_MEETING, ensureScope } from './scopes.js';
+import { CLOSING_ABORT, CLOSING_RESULT, SCHEDULING_MEETING, ensureScope } from './scopes.js';
 import { MAX_WINDOW_DAYS, alignToGrid, findSlot } from './slots.js';
 
 const lower = (s: string): string => s.trim().toLowerCase();
@@ -141,7 +144,7 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
   const kernelGrant = async (kind: ExecutionGrantKind): Promise<{ ok: true; grantId: string } | { ok: false; code: ScopedCode; detail?: string }> => {
     const grants = engine.deps.kernel.grants();
     if (!grants) return { ok: false, code: 'no_grant_service' };
-    const scope = kind === 'followup_scheduling' ? await ensureScope(engine, f, 'scheduling', SCHEDULING_MEETING) : await ensureScope(engine, f, 'closing', CLOSING_RESULT);
+    const scope = kind === 'followup_scheduling' ? await ensureScope(engine, f, 'scheduling', SCHEDULING_MEETING) : await ensureScope(engine, f, 'closing', f.phase === 'aborted' ? CLOSING_ABORT : CLOSING_RESULT);
     const issued = scope.ok ? await grants.issueGrant({ scopeId: scope.scope.scopeId, kind, subject: kind === 'followup_scheduling' ? SCHEDULING_MEETING : 'protocol', recipients: grant.allowed }) : { outcome: 'refused' as const, code: scope.code, message: scope.message };
     if (issued.outcome === 'issued') return { ok: true, grantId: issued.grant.id };
     await recordRefusal(engine, f.id, { code: issued.code, message: issued.message, what: `the grant for ${kind}` });
@@ -256,37 +259,67 @@ async function finishJob(w: Work, job: Job, result: Record<string, unknown>): Pr
 
 const say = (w: Work, purpose: string, text: string): void => w.post({ purpose, key: 'once', to: 'group', deliveryClass: 'essential', text });
 
-/** Mail the confirmed protocol to participants and confirmed stakeholders. */
+interface Mail {
+  recipients: string[];
+  subject: string;
+  body: string;
+  /** A stakeholder's own, filtered protocol (spec 5.8). */
+  stakeholder?: { id: string; disclosure: Disclosure; withheld: string[] };
+}
+
+/** The final protocol by mail: the participants' protocol to the
+ *  participants, and to each confirmed stakeholder their own, filtered by
+ *  disclosure (spec 5.8, criterion 30). Every protocol carries its result
+ *  status; the status never widens or narrows the recipients. */
 const protocolMail: ExternalJob = async (engine, job) => {
   await refreshAddresses(engine, job.facilitationId);
-  const claim = await claimJob(engine, job, 'mail_attempted', async (w) => {
+  const claim = await claimJob<Mail[]>(engine, job, 'mail_attempted', async (w) => {
     const { participants, stakeholders } = await peopleOf(w);
-    const recipients = uniqueMail([...participants.map((p) => p.email), ...stakeholders.filter((s) => s.role === 'receives_protocol').map((s) => s.address)]);
-    if (recipients.length === 0) {
+    const t = texts(w.f.language);
+    const subject = t.protocolMailSubject(w.f.goal);
+    const toParticipants = job.payload['participants'] === false ? [] : uniqueMail(participants.map((p) => p.email));
+    const mails: Mail[] = toParticipants.length > 0 ? [{ recipients: toParticipants, subject, body: await buildProtocol(w.tx, w.f) }] : [];
+    // Recipients are checked again at every send: a participant who left is
+    // no recipient, a stakeholder only while the group's confirmation stands.
+    for (const s of stakeholders.filter((x) => x.role === 'receives_protocol')) {
+      const address = uniqueMail([s.address])[0];
+      if (!address || toParticipants.includes(address)) continue;
+      const filtered = await stakeholderProtocol(w.tx, w.f, s.disclosure);
+      mails.push({ recipients: [address], subject, body: filtered.text, stakeholder: { id: s.id, disclosure: s.disclosure, withheld: filtered.withheld } });
+    }
+    if (mails.length === 0) {
       // Nobody to mail to is not silence: the group reads why, and has the
       // protocol where it is (once, if it is not there already).
-      const t = texts(w.f.language);
       const shown = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'protocol_in_group' LIMIT 1`, [w.f.id]);
       say(w, 'protocol_mail_unavailable', t.protocolMailNoAddresses(shown.rows.length > 0 ? undefined : await buildProtocol(w.tx, w.f)));
       await w.event('protocol_mail_skipped', 'engine', { reason: 'no_addresses' });
       return undefined;
     }
-    return { recipients, subject: texts(w.f.language).protocolMailSubject(w.f.goal), body: await buildProtocol(w.tx, w.f) };
+    return mails;
   });
   if (claim.state === 'skip') return;
-  const outcome: ScopedOutcome<{ outcome: string }> =
-    claim.state === 'unknown' ? { ok: false, code: 'unknown_outcome' } : await (await scoped(engine, job.facilitationId)).sendMail(claim.plan.recipients, claim.plan.subject, claim.plan.body);
+  const outcomes: Array<{ mail: Mail | undefined; outcome: ScopedOutcome<{ outcome: string }> }> = [];
+  if (claim.state === 'unknown') outcomes.push({ mail: undefined, outcome: { ok: false, code: 'unknown_outcome' } });
+  else {
+    const api = await scoped(engine, job.facilitationId);
+    for (const mail of claim.plan) outcomes.push({ mail, outcome: await api.sendMail(mail.recipients, mail.subject, mail.body) });
+  }
   await engine.work(job.facilitationId, async (w) => {
     const t = texts(w.f.language);
-    if (outcome.ok && claim.state === 'go') say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), claim.plan.recipients.length));
-    else if (!outcome.ok && outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
-    else if (!outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[outcome.code]));
+    const failed = outcomes.find((o) => !o.outcome.ok);
+    const sentTo = outcomes.filter((o) => o.outcome.ok).reduce((n, o) => n + (o.mail?.recipients.length ?? 0), 0);
+    if (!failed) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
+    else if (!failed.outcome.ok && failed.outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
+    else if (!failed.outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
     // What became of the mail, per recipient. "Sent" is said of nobody the
     // integration did not confirm.
-    const recipients = claim.state === 'go' ? claim.plan.recipients : uniqueMail((await peopleOf(w)).participants.map((p) => p.email));
-    const each = outcome.ok ? 'sent' : outcome.code === 'unknown_outcome' ? 'unknown' : 'not_sent';
-    await w.event('protocol_mail', 'engine', { outcome: outcome.ok ? 'sent' : outcome.code, recipients: recipients.map((address) => ({ address, outcome: each })) });
-    await finishJob(w, job, outcome.ok ? { outcome: 'sent' } : { outcome: outcome.code });
+    const each = (o: ScopedOutcome<unknown>): string => (o.ok ? 'sent' : o.code === 'unknown_outcome' ? 'unknown' : 'not_sent');
+    const recipients =
+      claim.state === 'go'
+        ? outcomes.flatMap((o) => (o.mail?.recipients ?? []).map((address) => ({ address, outcome: each(o.outcome), ...(o.mail?.stakeholder ? { stakeholder: true, disclosure: o.mail.stakeholder.disclosure, withheld: o.mail.stakeholder.withheld } : {}) })))
+        : uniqueMail((await peopleOf(w)).participants.map((p) => p.email)).map((address) => ({ address, outcome: 'unknown' }));
+    await w.event('protocol_mail', 'engine', { outcome: failed ? (failed.outcome.ok ? 'sent' : failed.outcome.code) : 'sent', recipients });
+    await finishJob(w, job, failed && !failed.outcome.ok ? { outcome: failed.outcome.code } : { outcome: 'sent' });
   });
 };
 
@@ -366,7 +399,7 @@ const followupMeeting: ExternalJob = async (engine, job) => {
 };
 
 /** Add a stakeholder: only after the group confirmed. */
-export async function proposeStakeholder(w: Work, input: { displayName: string; address?: string; role: StakeholderRole; addedBy: string }): Promise<Stakeholder> {
+export async function proposeStakeholder(w: Work, input: { displayName: string; address?: string; role: StakeholderRole; disclosure?: Disclosure; addedBy: string }): Promise<Stakeholder> {
   if (w.f.phase !== 'active' && w.f.phase !== 'configuring') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
   if (input.address !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.address)) throw new Refusal('bad_input', 'That is not a mail address.');
   const t = texts(w.f.language);
@@ -379,6 +412,7 @@ export async function proposeStakeholder(w: Work, input: { displayName: string; 
     address: input.address ? lower(input.address) : (known?.email ?? null),
     displayName: input.displayName,
     role: input.role,
+    disclosure: input.disclosure ?? 'existence',
     addedBy: input.addedBy,
     createdAt: w.now,
   });
@@ -407,6 +441,38 @@ export async function proposeFollowupMeeting(w: Work, plan: FollowupMeetingPlan)
     proposedBy: 'facilitator',
     windowMinutes: w.f.settings.confirmWindowMinutes,
   });
+}
+
+/**
+ * The facilitation protocol at the close or the abort (spec 5.11): the grant
+ * is issued, the participants get it privately (the initiator has it with the
+ * report), and a mail job sends it by mail where the facilitation or the
+ * operator asked for that, and always to confirmed stakeholders, each their
+ * own filtered protocol. Session protocols never go to stakeholders (F1).
+ */
+async function dispatchFinalProtocol(w: Work): Promise<void> {
+  await setGrant(w, 'active');
+  const { participants, stakeholders } = await peopleOf(w);
+  const t = texts(w.f.language);
+  const protocol = await buildProtocol(w.tx, w.f);
+  const grant = await grantOf(w);
+  // A grant that reaches nobody is not a use of anything.
+  if (grant.allowed.length > 0) {
+    await w.event('grant_issued', 'engine', { addresses: grant.allowed.length, summary: t.capabilityLog.grantIssued(grant.allowed.length) });
+  }
+  const closing = (await listClosings(w.tx, w.f.id)).find((c) => c.kind === (w.f.phase === 'aborted' ? 'abort' : 'result'));
+  const viaChannel = participants.filter((p) => p.principalId !== w.f.initiatorParticipant);
+  for (const person of viaChannel) {
+    sendWithProtocol(w, { principalId: person.principalId }, { purpose: 'protocol', key: person.principalId, text: t.protocolDirect(person.displayName, protocol) }, protocol, closing);
+  }
+  if (viaChannel.length > 0) {
+    await w.event('capability_used', 'engine', { capability: 'protocol dispatch', participants: viaChannel.length, summary: t.capabilityLog.protocolSent(viaChannel.length) });
+  }
+  // Scheduled even when no address is known yet: the job reads the member
+  // list again, and says so when there is still nobody to mail to.
+  const byMail = w.f.followupPolicy.protocolMail === true || w.config.protocolMailEnabled;
+  const toStakeholders = stakeholders.some((s) => s.role === 'receives_protocol');
+  if (byMail || toStakeholders) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length, participants: byMail, ...(closing ? { closingId: closing.id } : {}) });
 }
 
 async function revoke(w: Work, reason: 'followup_ended' | 'period_ended'): Promise<void> {
@@ -441,37 +507,21 @@ export function installCapabilities(): void {
   // outbox, mail and invitation become jobs that run after the commit,
   // outside the lock.
   onClosed(async (w) => {
-    await setGrant(w, 'active');
-    const { participants } = await peopleOf(w);
-    // The protocol the participants get is the one the initiator got with the
-    // report: built before anything is written about sending it.
-    const t = texts(w.f.language);
-    const protocol = await buildProtocol(w.tx, w.f);
-    const grant = await grantOf(w);
-    // A grant that reaches nobody is not a use of anything.
-    if (grant.allowed.length > 0) {
-      await w.event('grant_issued', 'engine', { addresses: grant.allowed.length, summary: t.capabilityLog.grantIssued(grant.allowed.length) });
-    }
-
-    // The initiator already received the protocol with the report.
-    const viaChannel = participants.filter((p) => p.principalId !== w.f.initiatorParticipant);
-    for (const person of viaChannel) {
-      sendWithProtocol(w, { principalId: person.principalId }, { purpose: 'protocol', key: person.principalId, text: t.protocolDirect(person.displayName, protocol) }, protocol);
-    }
-    // A dispatch to nobody is not a use of anything.
-    if (viaChannel.length > 0) {
-      await w.event('capability_used', 'engine', { capability: 'protocol dispatch', participants: viaChannel.length, summary: t.capabilityLog.protocolSent(viaChannel.length) });
-    }
-
-    // Scheduled even when no address is known yet: the job reads the member
-    // list again, and says so when there is still nobody to mail to.
-    // By mail when the facilitation was set up for it, or the operator
-    // switched it on for every facilitation.
-    if (w.f.followupPolicy.protocolMail === true || w.config.protocolMailEnabled) await scheduleJob(w, 'protocol_mail', 'once', w.now, { channel: viaChannel.length });
-    if (w.f.followupPolicy.meeting) await scheduleJob(w, 'followup_meeting', 'once', w.now, {});
+    await dispatchFinalProtocol(w);
+    // A stop revokes the scheduling: an agreed invitation survives a regular
+    // close, never a stop (spec 5.2, criterion 52).
+    if (w.f.followupPolicy.meeting && w.f.closeReason !== 'stopped') await scheduleJob(w, 'followup_meeting', 'once', w.now, {});
     // With action items the grant ends with their follow-up; otherwise after
     // a fixed time.
     if (w.f.followupState !== 'active') await scheduleJob(w, 'grant_revoke', 'end', new Date(w.now.getTime() + w.config.followupGrantDays * DAY_MS), {});
+  });
+  // An abort dispatches its protocol too, marked `aborted`, to the same
+  // recipients (spec 5.11, criterion 39). Nothing to dispatch for one that
+  // was never opened.
+  onAborted(async (w) => {
+    if (w.f.activatedAt === null) return;
+    await dispatchFinalProtocol(w);
+    await scheduleJob(w, 'grant_revoke', 'end', new Date(w.now.getTime() + w.config.followupGrantDays * DAY_MS), {});
   });
   registerExternalJob('protocol_mail', protocolMail);
   registerExternalJob('followup_meeting', followupMeeting);

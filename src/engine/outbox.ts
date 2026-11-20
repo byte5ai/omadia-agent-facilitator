@@ -17,8 +17,9 @@ import * as store from '../db/store.js';
 import type { Facilitation, OutboxPayload, OutboxRow } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { EngineCore, GroupFallback } from './core.js';
-import { messageQuotaReached } from './quota.js';
+import { limitsOf, messageQuotaReached } from './quota.js';
 import { executionCodeOf, recordRefusal } from './refusals.js';
+import { getClosing } from './resultStatus.js';
 import { isFinalRefusal, purposeFor, scopeForAction, syncPeople } from './scopes.js';
 
 type SendResult = { ok: true; messageId?: string; cardMessageId?: string } | { ok: false; code: string; message: string };
@@ -218,7 +219,27 @@ export async function dispatchOutbox(engine: EngineCore, client: Db, facilitatio
 const drop = (q: Queryable, row: OutboxRow, reason: string): Promise<unknown> =>
   update(q, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'dropped', dropReason: reason });
 
+/** Messages of a closing that go out before its dispatch part. */
+const CLOSING_DOCUMENTS: ReadonlySet<string> = new Set(['result', 'abort', 'closing_status']);
+
+/** A closing document is sent while its closing is valid (spec 5.2, 5.6):
+ *  never after the absolute limit, dispatch never after its own limit. */
+async function outsideClosing(engine: EngineCore, client: Db, row: OutboxRow): Promise<string | undefined> {
+  if (row.closingId === null) return undefined;
+  const closing = await getClosing(client, row.closingId);
+  if (!closing) return undefined;
+  const now = engine.now().getTime();
+  if (now >= closing.absoluteUntil.getTime()) return 'the absolute limit of its closing passed';
+  if (!CLOSING_DOCUMENTS.has(row.purpose) && closing.dispatchUntil !== null && now >= closing.dispatchUntil.getTime()) return 'the dispatch limit of its closing passed';
+  return undefined;
+}
+
 async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: OutboxRow): Promise<void> {
+  const outside = await outsideClosing(engine, client, row);
+  if (outside !== undefined) {
+    await drop(client, row, outside);
+    return;
+  }
   // Re-check under the lock: the state the message was computed from must
   // still hold.
   if (row.requiredPhases && !row.requiredPhases.includes(f.phase)) {
@@ -240,13 +261,14 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
 
   // Quota: beyond the limit only essential messages go out, and the group is
   // told once.
-  if (row.deliveryClass === 'droppable' && messageQuotaReached(f, engine.config.maxMessagesPerFacilitation)) {
+  const maxMessages = limitsOf(engine.config, f.facilitatorAgent).messages;
+  if (row.deliveryClass === 'droppable' && messageQuotaReached(f, maxMessages)) {
     await drop(client, row, 'message quota of the facilitation reached');
     if (!f.quotaNoticeSent) {
       await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET quota_notice_sent = true WHERE id = $1', [f.id]);
-      await store.appendEvent(client, { facilitationId: f.id, kind: 'quota_reached', actor: 'engine', occurredAt: engine.now(), payload: { quota: 'messages', max: engine.config.maxMessagesPerFacilitation } });
+      await store.appendEvent(client, { facilitationId: f.id, kind: 'quota_reached', actor: 'engine', occurredAt: engine.now(), payload: { quota: 'messages', max: maxMessages } });
       await engine.workOn(client, f.id, async (w) => {
-        w.post({ purpose: 'system_notice', key: 'message_quota', to: 'group', deliveryClass: 'essential', text: texts(f.language).system.messageQuota(engine.config.maxMessagesPerFacilitation) });
+        w.post({ purpose: 'system_notice', key: 'message_quota', to: 'group', deliveryClass: 'essential', text: texts(f.language).system.messageQuota(maxMessages) });
       });
     }
     return;

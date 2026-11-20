@@ -249,7 +249,7 @@ test('retrospective: ideas without mentions, clusters and decisions by consent, 
   assert.equal(h.kernel.subscriptions.has(`mira|teams|${conv}`), false);
 });
 
-test('follow-up ends by itself when the last due date has passed', { skip: PG_SKIP }, async () => {
+test('follow-up ends by itself 7 days (the grace) after the last due date; ended_at and retention count from there', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('pr-followup-end', [ANNA, BERT]);
   await tool(conv, 'facilitation_start', { goal: 'Next steps', definitionOfDone: 'Owners agreed', followUp: true, agenda: [{ kind: 'assign', title: 'Assign' }, { kind: 'close', title: 'Close' }] });
   await tool(conv, 'facilitation_open');
@@ -262,8 +262,16 @@ test('follow-up ends by itself when the last due date has passed', { skip: PG_SK
   h.clock.advance(2 * 24 * HOUR_MS + 2 * MINUTE_MS);
   await h.tick();
   await h.tick();
-  assert.equal((await h.facilitation(conv)).followupState, 'ended');
+  assert.equal((await h.facilitation(conv)).followupState, 'active', 'the due date passed, the grace runs');
+  assert.equal((await h.facilitation(conv)).endedAt, null);
+  h.clock.advance(7 * 24 * HOUR_MS);
+  await h.tick();
+  await h.tick();
+  const ended = await h.facilitation(conv);
+  assert.equal(ended.followupState, 'ended');
   assert.match(last(conv), /The follow-up of the action items has ended/);
+  assert.ok(ended.endedAt && ended.closedAt && ended.endedAt.getTime() > ended.closedAt.getTime());
+  assert.equal(ended.purgeAfter?.getTime(), (ended.endedAt?.getTime() ?? 0) + 90 * 24 * HOUR_MS, 'retention counts from ended, never from closed');
 });
 
 test('a deciding step without options waits for them; setting them announces how to vote, and the vote concludes', { skip: PG_SKIP }, async () => {

@@ -363,7 +363,11 @@ async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow, o
     if (!ended) return undefined;
     return (await settled(engine, f.id, ['followup_meeting'])) ? 'the invitation is settled' : undefined;
   }
-  // closing: until its documents are out (the report, the protocol, the mail).
+  // closing: as long as its closing event runs (spec 5.2): its parts and
+  // limits are kept in the closings table. A closing from before 1.6 has no
+  // row: until its documents are out.
+  const closing = await one<{ endedAt: Date | null }>(engine.db(), 'SELECT ended_at FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND event_id = $2', [f.id, row.eventId]);
+  if (closing) return closing.endedAt !== null && (await settled(engine, f.id, ['protocol_mail', 'followup_meeting'])) ? 'the closing has ended' : undefined;
   if (!ended) return undefined;
   return (await settled(engine, f.id, ['protocol_mail', 'followup_meeting'])) ? 'the closing is delivered' : undefined;
 }

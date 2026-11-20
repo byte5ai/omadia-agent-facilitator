@@ -5,6 +5,13 @@
 
 export type EngineLanguage = 'de' | 'en';
 
+/** Limits of one facilitator that differ from the instance's defaults. */
+export interface FacilitatorLimits {
+  active?: number;
+  startsPerHour?: number;
+  messages?: number;
+}
+
 export interface EngineConfig {
   readonly language: EngineLanguage;
   readonly timezone: string;
@@ -30,6 +37,16 @@ export interface EngineConfig {
   readonly mediaConsentExplicit: boolean;
   /** How long the scoped grant lasts after the close when no action items are followed up. */
   readonly followupGrantDays: number;
+  /** The consent window of a final summary that needs confirmation, from its
+   *  confirmed delivery (spec 5.2): default 24 h, never more than 72 h. */
+  readonly finalConfirmWindowHours: number;
+  /** Follow-up ends this long after the last due date (spec 5.2). */
+  readonly followupGraceDays: number;
+  /** No follow-up runs longer than this after `closed`; later due dates are
+   *  refused when agreed (spec 5.2, 5.8). */
+  readonly followupHorizonDays: number;
+  /** Per facilitator (agent slug): its own limits (spec 5.10). */
+  readonly facilitatorLimits: Readonly<Record<string, FacilitatorLimits>>;
 }
 
 export const CONFIG_DEFAULTS: EngineConfig = {
@@ -51,7 +68,37 @@ export const CONFIG_DEFAULTS: EngineConfig = {
   sessionAgendaLeadMinutes: 60,
   mediaConsentExplicit: false,
   followupGrantDays: 14,
+  finalConfirmWindowHours: 24,
+  followupGraceDays: 7,
+  followupHorizonDays: 90,
+  facilitatorLimits: {},
 };
+
+const LIMIT_KEYS: Readonly<Record<string, keyof FacilitatorLimits>> = { active: 'active', starts: 'startsPerHour', messages: 'messages' };
+
+/**
+ * 'mira: active=5, starts=10; rita: messages=200' -> per facilitator. Each
+ * entry is `<agent slug>: <key>=<positive integer>, ...` with the keys
+ * `active`, `starts` (per hour) and `messages` (per facilitation). Undefined
+ * when any part does not read.
+ */
+export function parseFacilitatorLimits(raw: string): Record<string, FacilitatorLimits> | undefined {
+  const out: Record<string, FacilitatorLimits> = {};
+  for (const entry of raw.split(';').map((e) => e.trim()).filter((e) => e !== '')) {
+    const match = /^([a-z0-9][a-z0-9_-]*)\s*:\s*(.+)$/i.exec(entry);
+    if (!match?.[1] || !match[2]) return undefined;
+    const limits: FacilitatorLimits = {};
+    for (const pair of match[2].split(',').map((p) => p.trim()).filter((p) => p !== '')) {
+      const kv = /^([a-z]+)\s*=\s*(\d+)$/i.exec(pair);
+      const key = kv?.[1] ? LIMIT_KEYS[kv[1].toLowerCase()] : undefined;
+      const value = kv?.[2] ? Number(kv[2]) : NaN;
+      if (!key || !Number.isInteger(value) || value <= 0) return undefined;
+      limits[key] = value;
+    }
+    out[match[1]] = limits;
+  }
+  return out;
+}
 
 export type ConfigReader = <T>(key: string) => T | undefined;
 
@@ -96,6 +143,10 @@ export const CONFIG_KEYS = [
   'media_consent_explicit',
   'followup_grant_days',
   'protocol_mail_enabled',
+  'final_confirm_window_hours',
+  'followup_grace_days',
+  'followup_horizon_days',
+  'facilitator_limits',
 ] as const;
 
 /** Settings of 0.7.x (the Conductor-based facilitator). Nothing in the engine
@@ -169,6 +220,20 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     protocolMailEnabled,
     sessionAgendaLeadMinutes: positive('session_agenda_lead_minutes', CONFIG_DEFAULTS.sessionAgendaLeadMinutes),
     followupGrantDays: positive('followup_grant_days', CONFIG_DEFAULTS.followupGrantDays),
+    // At most 72 hours (spec 5.2): a larger value is capped, not refused.
+    finalConfirmWindowHours: Math.min(positive('final_confirm_window_hours', CONFIG_DEFAULTS.finalConfirmWindowHours), 72),
+    followupGraceDays: positive('followup_grace_days', CONFIG_DEFAULTS.followupGraceDays),
+    followupHorizonDays: positive('followup_horizon_days', CONFIG_DEFAULTS.followupHorizonDays, { integer: true }),
+    facilitatorLimits: (() => {
+      const raw = read<unknown>('facilitator_limits');
+      if (raw === undefined || raw === null || String(raw).trim() === '') return CONFIG_DEFAULTS.facilitatorLimits;
+      const parsed = parseFacilitatorLimits(String(raw));
+      if (!parsed) {
+        invalid('facilitator_limits', raw, CONFIG_DEFAULTS.facilitatorLimits);
+        return CONFIG_DEFAULTS.facilitatorLimits;
+      }
+      return parsed;
+    })(),
     mediaConsentExplicit: read<unknown>('media_consent_explicit') === true || read<unknown>('media_consent_explicit') === 'true',
   };
 }

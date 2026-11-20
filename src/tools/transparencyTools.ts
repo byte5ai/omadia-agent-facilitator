@@ -105,7 +105,7 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
       {
         name: 'facilitation_close',
         description:
-          'Close the facilitation when the group or a participant asks for it and the definition of done is free text. ONE call is all a close needs: the open step need not be closed first, and the answers of a questionnaire and the decisions are put into the result by the engine. It puts "the definition of done is met" to the group, with the summary of decisions, answers, next steps and open points; the person who asked counts as agreeing, and it concludes when nobody objects. Where that person is the only participant it concludes at once. A machine-checkable definition of done concludes by itself.',
+          'Close the facilitation when the group or a participant asks for it and the definition of done is free text. ONE call is all a close needs: the open step need not be closed first, and the answers of a questionnaire and the decisions are put into the result by the engine. It concludes the facilitation and posts the final summary of decisions, answers, next steps and open points for confirmation by the group: it counts as confirmed when no objection stands at the end of its window (moderation does not re-open). Where the person who asked is the only participant the result is published at once. A machine-checkable definition of done concludes by itself.',
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
@@ -113,7 +113,7 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
           const how = await closeOnRequest(w, ctx.callerPrincipalId === undefined ? undefined : principalKey({ id: ctx.callerPrincipalId }));
           return how === 'concluded'
             ? 'Concluded: the result was posted in the group. Do not repeat it; answer [silent] or with one short line.'
-            : 'The closing summary was put to the group. The facilitation concludes when nobody objects. Do not repeat the summary.';
+            : 'Concluded: the closing summary was posted in the group for confirmation; it counts as confirmed when no objection stands at the end of its window. Do not repeat the summary.';
         });
       },
     ),

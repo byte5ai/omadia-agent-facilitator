@@ -6,6 +6,7 @@ import { after, before, test } from 'node:test';
 import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { rows } from '../src/db/sql.js';
 import * as store from '../src/db/store.js';
+import { resultClosingOf } from '../src/engine/closing.js';
 import { withFacilitationLock } from '../src/db/tx.js';
 import { MAX_ESSENTIAL_ATTEMPTS } from '../src/engine/outbox.js';
 import { MAX_JOB_ATTEMPTS } from '../src/engine/scheduler.js';
@@ -311,8 +312,11 @@ test('review 2: a result that cannot be posted does not leave the facilitation c
   assert.equal(result?.status, 'failed');
   assert.equal(result?.attempts, MAX_ESSENTIAL_ATTEMPTS);
   const ended = await h.facilitation(conv);
-  assert.equal(ended.phase, 'aborted', 'an end state, not concluding');
-  assert.match(ended.closeReason ?? '', /result could not be posted/);
+  // Spec 5.2, criterion 44: the result is closed with delivery status "not
+  // delivered" and result status "published" (no confirmation was needed).
+  assert.equal(ended.phase, 'closed', 'an end state, not concluding');
+  const closing = await resultClosingOf(h.db.pool, f.id);
+  assert.deepEqual([closing?.deliveryStatus, closing?.resultStatus, closing?.resultReason], ['not_delivered', 'published', null]);
   assert.ok(ended.purgeAfter, 'retention is scheduled');
   assert.ok(ended.result, 'the result itself is kept');
   assert.equal((await store.listEvents(h.db.pool, f.id, ['result_undelivered'])).length, 1);

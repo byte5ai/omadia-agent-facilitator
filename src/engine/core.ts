@@ -101,6 +101,9 @@ export interface Outgoing {
   fallback?: GroupFallback;
   /** Row to stamp with the channel's message id once the send returned. */
   link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
+  /** A closing document (spec 5.6): its closing event and document version.
+   *  Retried while that closing is valid, whatever the state is by then. */
+  closing?: { id: string; version: number };
 }
 
 export interface Work {
@@ -219,9 +222,13 @@ export class EngineCore {
 
   private async delivered(client: Db, facilitationId: string): Promise<void> {
     await dispatchOutbox(this, client, facilitationId);
-    for (const hook of this.afterDispatch) await hook(this, client, facilitationId);
-    // A hook may have queued more (the report that follows the result).
-    await dispatchOutbox(this, client, facilitationId);
+    // A hook may queue more (the report and the protocol that follow the
+    // result), and what that delivers lets a closing move on again (its
+    // dispatch ends once its sends are out): two rounds.
+    for (let round = 0; round < 2; round += 1) {
+      for (const hook of this.afterDispatch) await hook(this, client, facilitationId);
+      await dispatchOutbox(this, client, facilitationId);
+    }
   }
 
   constructor(readonly deps: EngineDeps) {
@@ -350,7 +357,8 @@ export class EngineCore {
         payload,
         deliveryClass: m.deliveryClass,
         requiredPhases: m.requiredPhases ?? null,
-        requiredStateVersion: versionBound ? version : null,
+        requiredStateVersion: versionBound && !m.closing ? version : null,
+        ...(m.closing ? { closingId: m.closing.id, documentVersion: m.closing.version } : {}),
         owner: this.instanceId,
         createdAt: now,
       },

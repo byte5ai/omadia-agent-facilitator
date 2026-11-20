@@ -36,6 +36,9 @@ export interface ProposalKind {
   boundOnly?: boolean;
   /** Silence is not enough: every active participant has to agree. */
   unanimous?(w: Work, proposal: Proposal): boolean;
+  /** Decided only at the end of its window, never earlier, and not by this
+   *  module (the final confirmation of a closing, closing.ts). */
+  windowOnly?: boolean;
   /** "extend N" is an answer to this kind of proposal. */
   extend?(w: Work, proposal: Proposal, minutes: number | undefined): Promise<void>;
 }
@@ -169,6 +172,8 @@ const activeOf = async (w: Work): Promise<Participant[]> => (await store.listPar
 /** Accept when the window is over without a standing objection (on a
  *  verified list of participants), or when every active participant agreed. */
 async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atDeadline = false): Promise<boolean> {
+  // Decided by its own closing (closing.ts), never here.
+  if (kindOf(proposal).windowOnly === true) return false;
   if (windowOver) {
     // A standing objection rejects whoever else belongs to the list.
     if (standingOf(proposal, await activeOf(w)).length === 0 && !(await electorateAllows(w, proposal, atDeadline))) {
@@ -217,9 +222,11 @@ export async function agree(w: Work, proposal: Proposal, author: Participant): P
 
 /** Answers to the open proposal: agreed, objection, extend. */
 const proposalAnswers: InboundHandler = async ({ w, record, author, command }) => {
-  if (!author || (w.f.phase !== 'active' && w.f.phase !== 'configuring')) return undefined;
+  if (!author || (w.f.phase !== 'active' && w.f.phase !== 'configuring' && w.f.phase !== 'concluding')) return undefined;
   const proposal = await store.openProposal(w.tx, w.f.id);
   if (!proposal) return undefined;
+  // After `concluding` only the consent answers to the final summary count.
+  if (w.f.phase === 'concluding' && kindOf(proposal).windowOnly !== true) return undefined;
   const t = texts(w.f.language);
 
   if (record.kind === 'reaction') {

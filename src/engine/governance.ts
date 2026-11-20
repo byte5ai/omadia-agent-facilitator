@@ -16,6 +16,7 @@ import { texts } from '../texts/index.js';
 import type { EngineCore } from './core.js';
 import { Refusal } from './core.js';
 import { abortFacilitation, abortInWork, registerStartCheck } from './lifecycle.js';
+import { limitsOf } from './quota.js';
 import { buildProtocol } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
 
@@ -49,7 +50,12 @@ export interface FacilitationMetadata {
   closedAt: string | null;
   closeReason: string | null;
   followupState: string;
+  /** When the retention period ends: counted from `ended` or `aborted`. */
   purgeAfter: string | null;
+  endedAt: string | null;
+  /** When the records are actually deleted: the later of the retention end
+   *  and the end of every scope and closing still running (spec 5.8). */
+  effectiveDeletionAt: string | null;
 }
 
 interface MetadataRow {
@@ -60,7 +66,16 @@ interface MetadataRow {
   decisions: string;
   actionItems: string;
   steps: string;
+  effectiveDeletionAt: Date | null;
 }
+
+/** The effective deletion time of a facilitation (spec 5.8, criterion 61):
+ *  the later of its retention end and the end of every closing and scope
+ *  still running. Plugin tables, outbox and the kernel's events go with it. */
+export const EFFECTIVE_DELETION_SQL = `CASE WHEN f.purge_after IS NULL THEN NULL ELSE greatest(
+    f.purge_after,
+    (SELECT max(c.absolute_until) FROM plg_omadia_agent_facilitator_closings c WHERE c.facilitation_id = f.id AND c.ended_at IS NULL),
+    (SELECT max(s.deadline) FROM plg_omadia_agent_facilitator_scopes s WHERE s.facilitation_id = f.id AND s.state = 'open')) END`;
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 
@@ -82,7 +97,8 @@ export async function listMetadata(q: Queryable, filter: { phase?: string; facil
             (SELECT count(*) FROM plg_omadia_agent_facilitator_contributions c WHERE c.facilitation_id = f.id AND c.status = 'valid') AS contributions,
             (SELECT count(*) FROM plg_omadia_agent_facilitator_decisions d WHERE d.facilitation_id = f.id) AS decisions,
             (SELECT count(*) FROM plg_omadia_agent_facilitator_action_items a WHERE a.facilitation_id = f.id AND a.status <> 'declined') AS action_items,
-            (SELECT count(*) FROM plg_omadia_agent_facilitator_steps s WHERE s.facilitation_id = f.id) AS steps
+            (SELECT count(*) FROM plg_omadia_agent_facilitator_steps s WHERE s.facilitation_id = f.id) AS steps,
+            ${EFFECTIVE_DELETION_SQL} AS effective_deletion_at
        FROM plg_omadia_agent_facilitator_facilitations f WHERE f.id = ANY($1::uuid[])`,
     [`{${facilitations.map((f) => f.id).join(',')}}`],
   );
@@ -115,6 +131,8 @@ export async function listMetadata(q: Queryable, filter: { phase?: string; facil
       closeReason: f.phase === 'closed' ? f.closeReason : f.closeReason ? 'ended without a result' : null,
       followupState: f.followupState,
       purgeAfter: iso(f.purgeAfter),
+      endedAt: iso(f.endedAt),
+      effectiveDeletionAt: iso(c?.effectiveDeletionAt ?? null),
     };
   });
 }
@@ -164,10 +182,11 @@ export async function checkStartQuota(engine: EngineCore, facilitatorAgent: stri
   const q = engine.db();
   const { config } = engine;
   const t = texts(language).system;
-  if ((await store.countByPhase(q, LIVE_PHASES, facilitatorAgent)) >= config.maxActivePerFacilitator) throw new Refusal('quota_active', t.activeQuota(config.maxActivePerFacilitator));
+  const own = limitsOf(config, facilitatorAgent);
+  if ((await store.countByPhase(q, LIVE_PHASES, facilitatorAgent)) >= own.active) throw new Refusal('quota_active', t.activeQuota(own.active));
   if ((await store.countByPhase(q, LIVE_PHASES)) >= config.maxActiveInstance) throw new Refusal('quota_instance', t.instanceQuota(config.maxActiveInstance));
-  if ((await store.countStartsSince(q, facilitatorAgent, new Date(engine.now().getTime() - HOUR_MS))) >= config.startsPerHourPerFacilitator) {
-    throw new Refusal('quota_starts', t.startQuota(config.startsPerHourPerFacilitator));
+  if ((await store.countStartsSince(q, facilitatorAgent, new Date(engine.now().getTime() - HOUR_MS))) >= own.startsPerHour) {
+    throw new Refusal('quota_starts', t.startQuota(own.startsPerHour));
   }
 }
 
@@ -190,6 +209,10 @@ export async function purgeExpired(engine: EngineCore, opts: { maxBatches?: numb
         WHERE id IN (
           SELECT id FROM plg_omadia_agent_facilitator_facilitations
            WHERE purge_after IS NOT NULL AND purge_after <= $1 AND phase IN ('closed', 'aborted') AND followup_state <> 'active'
+             -- Never while a closing or a scope still runs: its documents
+             -- may still go out (spec 5.8, criterion 61).
+             AND NOT EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_closings c WHERE c.facilitation_id = plg_omadia_agent_facilitator_facilitations.id AND c.ended_at IS NULL)
+             AND NOT EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_scopes s WHERE s.facilitation_id = plg_omadia_agent_facilitator_facilitations.id AND s.state = 'open')
            ORDER BY purge_after
            LIMIT ${String(PURGE_BATCH)}
            FOR UPDATE SKIP LOCKED

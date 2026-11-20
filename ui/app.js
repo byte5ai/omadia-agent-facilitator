@@ -29,7 +29,7 @@
         actions: 'Actions',
       },
       counts: { contributions: 'Contributions', decisions: 'Decisions', actionItems: 'Action items', messages: 'Messages' },
-      dates: { deadline: 'Deadline', created: 'Started', closed: 'Ended', retention: 'Deleted after' },
+      dates: { deadline: 'Deadline', created: 'Started', closed: 'Closed', ended: 'Ended', retention: 'Retention ends', deletion: 'Deleted from' },
       formats: { decision: 'Decision', prioritisation: 'Prioritisation', assignment: 'Assignment', ideas: 'Idea collection', retrospective: 'Retrospective', alignment: 'Alignment', custom: 'Custom' },
       activeOf: 'active of',
       phases: { configuring: 'Being set up', active: 'Running', concluding: 'Concluding', closed: 'Closed', aborted: 'Ended without a result', following_up: 'Following up action items', ended: 'Ended' },
@@ -70,7 +70,7 @@
         actions: 'Aktionen',
       },
       counts: { contributions: 'Beiträge', decisions: 'Entscheidungen', actionItems: 'Aufgaben', messages: 'Nachrichten' },
-      dates: { deadline: 'Deadline', created: 'Gestartet', closed: 'Beendet', retention: 'Löschung nach' },
+      dates: { deadline: 'Deadline', created: 'Gestartet', closed: 'Abgeschlossen', ended: 'Beendet', retention: 'Aufbewahrung bis', deletion: 'Gelöscht ab' },
       formats: { decision: 'Entscheidung', prioritisation: 'Priorisierung', assignment: 'Zuweisung', ideas: 'Ideensammlung', retrospective: 'Retrospektive', alignment: 'Abstimmung', custom: 'Eigenes Format' },
       activeOf: 'aktiv von',
       phases: { configuring: 'Wird eingerichtet', active: 'Läuft', concluding: 'Wird abgeschlossen', closed: 'Abgeschlossen', aborted: 'Ohne Ergebnis beendet', following_up: 'Aufgaben werden nachverfolgt', ended: 'Beendet' },
@@ -206,7 +206,11 @@
           [t.dates.created, when(f.createdAt)],
           [t.dates.deadline, f.deadline ? when(f.deadline) : null],
           [t.dates.closed, f.closedAt ? when(f.closedAt) : null],
+          [t.dates.ended, f.endedAt ? when(f.endedAt) : null],
           [t.dates.retention, f.purgeAfter ? when(f.purgeAfter) : null],
+          // The effective deletion time: later than the retention end while a
+          // closing or a scope still runs (spec 5.8).
+          [t.dates.deletion, f.effectiveDeletionAt ? when(f.effectiveDeletionAt) : null],
         ]),
       );
       var cell = document.createElement('td');

@@ -660,8 +660,11 @@ test('18. online meeting with chat and cards only', { skip: PG_SKIP }, async () 
 
   // The protocol goes to the participants and the two stakeholders; a follow-up meeting is created from free/busy.
   assert.deepEqual(h.kernel.dms.slice(dms).filter((d) => d.text.includes('here is the protocol')).map((d) => d.principal).sort(), ['user:bert', 'user:cara', 'user:dave']);
-  const mail = followup.mails.at(-1);
-  assert.deepEqual([...(mail?.recipients ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'dave@example.com', 'pia@example.com', 'sam@example.com']);
+  // Participants in one mail, the stakeholder in their own, filtered one.
+  const subject = followup.mails.at(-1)?.subject;
+  const mailed = followup.mails.filter((m) => m.subject === subject).flatMap((m) => [...m.recipients]);
+  assert.deepEqual(mailed.sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'dave@example.com', 'pia@example.com', 'sam@example.com']);
+  assert.deepEqual(followup.mails.filter((m) => m.subject === subject && m.recipients.length === 1).map((m) => m.recipients[0]).sort(), ['pia@example.com', 'sam@example.com'], 'each stakeholder their own protocol');
   const invitation = followup.invitations.at(-1);
   assert.equal(invitation?.subject, 'Tooling follow-up');
   assert.deepEqual([...(invitation?.attendees ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'dave@example.com']);

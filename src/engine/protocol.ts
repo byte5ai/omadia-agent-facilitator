@@ -4,12 +4,13 @@
 
 import type { Queryable } from '../db/pool.js';
 import * as store from '../db/store.js';
-import type { Facilitation, ProtocolEvent } from '../model.js';
+import type { Closing, Facilitation, ProtocolEvent } from '../model.js';
 import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import type { Work } from './core.js';
 import { facilitatorName } from './lifecycle.js';
 import { initiatorName } from './names.js';
+import { deliveryStatusWords, listClosings, markOf, resultStatusWords } from './resultStatus.js';
 
 const CHANGE_EVENTS = ['proposal_accepted', 'proposal_rejected', 'runoff', 'proposal_amended'];
 const CAPABILITY_EVENTS = ['capability_used', 'capability_refused', 'grant_issued', 'grant_revoked'];
@@ -70,8 +71,19 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
     return detail === '' ? what : `${what}: ${detail}`;
   };
 
+  // Every final protocol carries its result status, and separately the
+  // delivery status of its closing document (spec 5.11).
+  const closing = (await listClosings(q, f.id)).find((c) => c.kind === (f.phase === 'aborted' ? 'abort' : 'result'));
+  const mark = closing ? markOf(closing) : undefined;
+  const statusLines = closing
+    ? [
+        `${t.resultStatus.label}: ${mark ? resultStatusWords(f.language, mark) : t.resultStatus.awaiting}`,
+        ...(closing.kind === 'result' ? [`${t.resultStatus.delivery}: ${deliveryStatusWords(f.language, closing.deliveryStatus)}`] : []),
+      ]
+    : [];
   return [
     p.title(f.goal),
+    ...statusLines,
     `${p.facilitator}: ${facilitatorName(f)}`,
     `${p.initiator}: ${initiatorName(f, participants) ?? t.unnamedPerson}`,
     `${p.participants}: ${participants.map((x) => (x.status === 'left' ? `${x.displayName} (${p.left})` : x.displayName)).join(', ')}`,
@@ -107,12 +119,14 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
  * the protocol stands in the group, once, with one short line: nobody is
  * pointed at a private message that will not come, and nobody is named.
  */
-export function sendWithProtocol(w: Work, to: { principalId: string }, message: { purpose: string; key: string; text: string }, protocol: string): void {
+export function sendWithProtocol(w: Work, to: { principalId: string }, message: { purpose: string; key: string; text: string }, protocol: string, closing?: Pick<Closing, 'id' | 'documentVersion'>): void {
+  // Part of a closing: sent inside its dispatch limit, whatever the state is by then.
+  const ofClosing = closing ? { closing: { id: closing.id, version: closing.documentVersion } } : {};
   const inGroup = { purpose: 'protocol_in_group', key: 'once', deliveryClass: 'essential' as const, text: texts(w.f.language).protocolInGroup(protocol) };
   // Who could not be reached before is not tried again.
   if ((w.f.settings.unreachable ?? []).includes(to.principalId)) {
-    w.post({ purpose: inGroup.purpose, key: inGroup.key, to: 'group', deliveryClass: 'essential', text: inGroup.text });
+    w.post({ purpose: inGroup.purpose, key: inGroup.key, to: 'group', deliveryClass: 'essential', text: inGroup.text, ...ofClosing });
     return;
   }
-  w.post({ ...message, to, deliveryClass: 'essential', fallback: inGroup });
+  w.post({ ...message, to, deliveryClass: 'essential', fallback: inGroup, ...ofClosing });
 }

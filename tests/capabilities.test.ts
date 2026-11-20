@@ -110,11 +110,17 @@ test('at the close the protocol goes to participants and confirmed stakeholders,
   // Protocol dispatch: privately to the participants (the initiator has it with the report), by mail to everybody the grant covers.
   const direct = h.kernel.dms.slice(dms).filter((d) => d.text.includes('here is the protocol of the facilitation'));
   assert.deepEqual(direct.map((d) => d.principal).sort(), ['user:bert', 'user:cara']);
-  const mail = followup.mails.at(-1);
-  assert.deepEqual([...(mail?.recipients ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'sam@example.com']);
+  // The participants get their protocol in one mail; the stakeholder gets
+  // their own, filtered one (spec 5.8): no contributions, a note about it.
+  const [mail, sams] = followup.mails.slice(-2);
+  assert.deepEqual([...(mail?.recipients ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com']);
   assert.equal(mail?.subject, 'Protocol: Offsite plan');
-  assert.match(mail?.body ?? '', /^Protocol: Offsite plan\nFacilitator: Mira/);
-  assert.ok(!mail?.recipients.includes('vera@example.com'), 'a stakeholder for follow-ups does not get the protocol');
+  assert.match(mail?.body ?? '', /^Protocol: Offsite plan\nResult status: published\nDelivery: delivered\nFacilitator: Mira/);
+  assert.deepEqual(sams?.recipients, ['sam@example.com']);
+  assert.match(sams?.body ?? '', /^Protocol: Offsite plan\nResult status: published\nDelivery: delivered\n/);
+  assert.doesNotMatch(sams?.body ?? '', /Contributions|A boat trip|Participants:/);
+  assert.match(sams?.body ?? '', /Some parts of this protocol are not shared with you/);
+  assert.ok(!followup.mails.slice(-2).some((m) => m.recipients.includes('vera@example.com')), 'a stakeholder for follow-ups does not get the protocol');
   assert.ok(posts(conv).includes('The protocol has been sent: privately to 2 participants and by mail to 4 addresses.'));
 
   // Follow-up scheduling: free/busy only, then the invitation for the first common free time.
@@ -131,7 +137,8 @@ test('at the close the protocol goes to participants and confirmed stakeholders,
   // Every use is in the protocol.
   const protocol = await buildProtocol(h.db.pool, f);
   assert.match(protocol, /Use of scoped capabilities:\n- .*grant issued for 5 addresses/);
-  assert.match(protocol, /protocol mailed to 4 addresses/);
+  assert.match(protocol, /protocol mailed to 3 addresses/);
+  assert.match(protocol, /protocol mailed to 1 address\b/);
   assert.match(protocol, /free\/busy read for 4 people/);
   assert.match(protocol, /invitation "Offsite follow-up" for Thu, 19\/11\/2026, 11:30 \(Europe\/Berlin\) sent to 4 people/);
 });
@@ -322,7 +329,8 @@ test('mail and calendar run under grants the kernel issued: per scope, for the p
   followup.calendars.set('cara@example.com', []);
   const f = await closedWithFollowup(conv, { stakeholders: true, meeting: true });
   const grants = h.kernel.grants.filter((g) => g.processId === f.id);
-  assert.deepEqual(grants.map((g) => g.kind).sort(), ['followup_scheduling', 'protocol_dispatch']);
+  // One dispatch grant per mail: the participants' and the stakeholder's.
+  assert.deepEqual(grants.map((g) => g.kind).sort(), ['followup_scheduling', 'protocol_dispatch', 'protocol_dispatch']);
 
   // Protocol dispatch: under the closing scope of the result.
   const dispatch = grants.find((g) => g.kind === 'protocol_dispatch');
@@ -341,6 +349,7 @@ test('mail and calendar run under grants the kernel issued: per scope, for the p
   const calls = followup.calls.filter((c) => c.grant.facilitationId === f.id);
   assert.deepEqual(calls.map((c) => [c.method, (c.grant as { grantId?: string }).grantId]), [
     ['sendMail', dispatch?.id],
+    ['sendMail', grants.filter((g) => g.kind === 'protocol_dispatch')[1]?.id],
     ['freeBusy', scheduling?.id],
     ['createInvitation', scheduling?.id],
   ]);

@@ -85,7 +85,7 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
     w.post({ purpose: 'status', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: await statusText(w.tx, w.f) });
     return { outcome: 'status' };
   }
-  if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring')) {
+  if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring' || w.f.phase === 'concluding')) {
     await abortInWork(w, {
       reason: `stopped by ${author.displayName}`,
       actor: author.principalId,
