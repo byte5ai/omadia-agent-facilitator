@@ -113,6 +113,7 @@ export const de: Texts = {
       ...(r.atDeadline ? [`Die Deadline ist erreicht; ${String(r.atDeadline.contributed)} von ${String(r.atDeadline.of)} haben beigetragen, und dies ist das Ergebnis der abgegebenen Beiträge.`] : []),
       'Diese Moderation ist abgeschlossen. Danke euch.',
     ].join('\n'),
+  abortElectorateUnverified: () => 'die Teilnehmenden konnten nicht geprüft werden: der Kanal konnte nicht bestätigen, wer zu dieser Unterhaltung gehört, deshalb ließ sich keine Zustimmung feststellen',
   abortTie: (tied) => `die Deadline ist erreicht und die Abstimmung steht gleichauf zwischen ${tied}`,
   abortObjection: (objections) => `die Deadline ist erreicht und es steht ein Einwand (${objections})`,
   abortOpenItems: (items) => `die Deadline ist erreicht und Folgendes ist noch offen: ${items}`,

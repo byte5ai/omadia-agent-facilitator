@@ -71,7 +71,14 @@ byte5ai/omadia `docs/adr/`.
   in the group, a retry with the next contribution or reminder (a held
   proposal also an hour later, bounded by the deadline; at the deadline it
   fails). A `complete` answer brings the participants up to date (missed
-  joins and leaves).
+  joins and leaves). The query runs inside the unit of work (answer and
+  decision belong together) and is bounded to 5 s; no answer is `unknown`.
+- What holds which decision: "everybody contributed" and "everybody agreed"
+  need a verified list with every waited-for name matched. A consent window
+  ("nobody objected") is held only by a roster that is not `complete`; a
+  pending name or an undeclared open list does not hold it. A consent step
+  evaluated at the facilitation's deadline cannot wait: on an unverifiable
+  list it ends with an abort report ("participants could not be verified").
 - Where the initiator named the participants on a complete roster, the list
   is theirs: the fresh roster takes over departures, never additions.
 - Declared list: participant sources `declared` (named by the initiator),
@@ -84,4 +91,5 @@ byte5ai/omadia `docs/adr/`.
 - Final consent of a closing: `finalConsentElectorate(w, windowEnd)` in
   `src/engine/electorate.ts` answers `verified`, `retry` (hourly) or
   `unverifiable` (24 h after the window: result `not confirmed`, reason
-  "participants could not be verified"). The closing procedure calls it.
+  "participants could not be verified"). The closing procedure (#2064) calls
+  it; it never tells the group itself.

@@ -143,6 +143,7 @@ export const en = {
       ...(r.atDeadline ? [`The deadline has passed; ${String(r.atDeadline.contributed)} of ${String(r.atDeadline.of)} contributed, and this is the result of what was contributed.`] : []),
       'This facilitation is complete. Thank you.',
     ].join('\n'),
+  abortElectorateUnverified: (): string => 'participants could not be verified: the channel could not confirm who belongs to this conversation, so consent could not be established',
   abortTie: (tied: string): string => `the deadline passed with the vote level between ${tied}`,
   abortObjection: (objections: string): string => `the deadline passed with an objection standing (${objections})`,
   abortOpenItems: (items: string): string => `the deadline passed with these still open: ${items}`,

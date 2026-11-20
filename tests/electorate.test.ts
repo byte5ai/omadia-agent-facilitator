@@ -161,3 +161,42 @@ test('criterion 44: the final consent asks the roster fresh, then hourly for at 
   assert.deepEqual(await ask(), { state: 'unverifiable' });
   assert.equal(notices(conv), 0, 'the final consent says nothing to the group itself');
 });
+
+test('"everybody agreed" to a proposal is decided after the fresh list: a person whose join was missed is waited for', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('el-unanimous', [ANNA, BERT]);
+  await h.tool('facilitation_start', { ...VOTE, deadline: inHours(48) }, { conversation: conv });
+  await h.tool('facilitation_propose_change', { change: 'deadline', deadline: inHours(72) }, { conversation: conv, caller: 'anna' });
+  const f = await h.facilitation(conv);
+  h.kernel.join(conv, CARA, { missed: true });
+  await say(conv, 'anna', 'agreed');
+  await say(conv, 'bert', 'agreed');
+  assert.ok(await store.openProposal(h.db.pool, f.id), 'Cara has not agreed');
+  assert.equal((await sources(conv))['user:cara'], 'roster');
+});
+
+test('a consent step at the deadline on an unverifiable list ends with an abort that says why', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('el-consent-deadline', [ANNA, BERT]);
+  await h.tool('facilitation_start', { goal: 'We go with plan B', method: 'consent', statement: 'Plan B', open: true, deadline: inHours(2) }, { conversation: conv });
+  await say(conv, 'anna', 'consent');
+  h.kernel.rosterStatus.set(conv, 'partial');
+  h.clock.advance(2 * HOUR_MS + MINUTE_MS);
+  await h.tick();
+  const f = await h.facilitation(conv);
+  assert.equal(f.phase, 'aborted');
+  assert.match(f.closeReason ?? '', /participants could not be verified/);
+});
+
+test('a held proposal keeps one retry waiting, however many messages look at it', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('el-one-retry', [ANNA, BERT]);
+  await h.tool('facilitation_start', { ...VOTE, deadline: inHours(48) }, { conversation: conv });
+  await h.tool('facilitation_propose_change', { change: 'deadline', deadline: inHours(72) }, { conversation: conv, caller: 'anna' });
+  const f = await h.facilitation(conv);
+  const proposal = await store.openProposal(h.db.pool, f.id);
+  assert.ok(proposal);
+  h.kernel.rosterStatus.set(conv, 'partial');
+  h.clock.set(new Date(proposal.windowEndsAt.getTime() + MINUTE_MS));
+  await h.tick();
+  for (const text of ['hello', 'anyone?', 'still here', 'ok']) await say(conv, 'bert', text);
+  const pending = await h.db.pool.query(`SELECT count(*)::int AS n FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind = 'proposal_window' AND status = 'pending'`, [f.id]);
+  assert.equal(pending.rows[0]?.n, 1);
+});

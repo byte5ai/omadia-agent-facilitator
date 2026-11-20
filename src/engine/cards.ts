@@ -37,7 +37,7 @@ import { Refusal } from './core.js';
 import { conclude, recordBallot, roundOptions, setResultAnswers, withoutTakenItems } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
 import { DONE_WHEN_ALL, rulesOf } from './lifecycle.js';
-import { verifyElectorate } from './electorate.js';
+import { onHeldDecisionRetry, verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
 
@@ -706,6 +706,12 @@ export function installCardReaders(): void {
   registerCardReader('vote', readVote);
   registerCardReader('ideas', readIdea);
   registerCardReader(QUESTIONNAIRE, readQuestionnaire);
+  // A questionnaire everybody answered while the list could not be verified
+  // is looked at again at the next reminder (nobody has anything to answer).
+  onHeldDecisionRetry(async (w) => {
+    const state = await questionnaireState(w.tx, w.f);
+    if (state && state.card.state === 'open') await concludeWhenAllAnswered(w, state.card);
+  });
   // The answers are part of the result, and of what a turn knows.
   setResultAnswers(async (w) => {
     const state = await questionnaireState(w.tx, w.f, texts(w.f.language).questionnaireNoAnswer);

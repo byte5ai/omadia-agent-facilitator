@@ -23,10 +23,12 @@ ALTER TABLE plg_omadia_agent_facilitator_facilitations
     CHECK (electorate_source IN ('platform_roster', 'declared_list'));
 
 -- A facilitation that started before this version without a member list ran
--- on what the request named or on whoever wrote: a declared list.
+-- on whoever wrote; one whose initiator named the participants ran on that
+-- list (whether or not the channel could list everybody, which was not
+-- stored): both are declared lists.
 UPDATE plg_omadia_agent_facilitator_facilitations
    SET electorate_source = 'declared_list'
- WHERE settings ->> 'openRoster' = 'true'
+ WHERE (settings ->> 'openRoster' = 'true' OR settings ->> 'participantsNamed' = 'true')
    AND electorate_source <> 'declared_list';
 
 ALTER TABLE plg_omadia_agent_facilitator_participants DROP CONSTRAINT IF EXISTS plg_omadia_agent_facilitator_participants_source_check;

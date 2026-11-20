@@ -21,7 +21,7 @@ import { PRIORITY, isPositiveReaction, isYes, registerAfterInbound, registerInbo
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { onBeforeDeadline, registerJobHandler } from './scheduler.js';
-import { verifyElectorate } from './electorate.js';
+import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { everybodyKnown } from './roll.js';
 
 export interface ProposalKind {
@@ -145,9 +145,17 @@ const ELECTORATE_RETRY_MS = HOUR_MS;
  */
 async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean): Promise<boolean> {
   const check = await verifyElectorate(w);
-  if (check.verified) return true;
-  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: check.reason });
+  if (windowMayPass(check)) return true;
+  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: check.verified ? 'verified' : check.reason });
   if (atDeadline) return false;
+  // One retry waits at a time: every message also looks again, and must not
+  // start another hourly chain.
+  const waiting = await w.tx.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_jobs
+      WHERE facilitation_id = $1 AND kind = 'proposal_window' AND status = 'pending' AND payload ->> 'proposalId' = $2 AND due_at > $3 LIMIT 1`,
+    [w.f.id, proposal.id, w.now],
+  );
+  if (waiting.rows.length > 0) return false;
   const retry = new Date(w.now.getTime() + ELECTORATE_RETRY_MS);
   const at = w.f.deadline && w.f.deadline < retry ? w.f.deadline : retry;
   await scheduleJob(w, 'proposal_window', `${proposal.id}:${at.toISOString()}`, at, { proposalId: proposal.id });
@@ -176,15 +184,15 @@ async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atD
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
   }
-  const active = await activeOf(w);
-  const standing = standingOf(proposal, active);
-  // "Everybody agreed" is said only about a list that is known to be complete.
-  const everybody = everybodyKnown(w.f) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
-  if (everybody && standing.length === 0 && (await verifyElectorate(w)).verified) {
-    await decideProposal(w, proposal, true);
-    return true;
-  }
-  return false;
+  // "Everybody agreed" is said only about a list that is known to be
+  // complete, and read after the fresh check: it may have brought somebody.
+  const everybodyAgreed = async (): Promise<boolean> => {
+    const active = await activeOf(w);
+    return everybodyKnown(w.f) && active.length > 0 && standingOf(proposal, active).length === 0 && active.every((p) => proposal.consents.includes(p.principalId));
+  };
+  if (!(await everybodyAgreed()) || !(await verifyElectorate(w)).verified || !(await everybodyAgreed())) return false;
+  await decideProposal(w, proposal, true);
+  return true;
 }
 
 const deadlinePassed = (w: Work): boolean => w.f.deadline !== null && w.now.getTime() >= w.f.deadline.getTime();
@@ -277,10 +285,14 @@ export function installProposals(): void {
     if (proposal) await settleIfDue(w, proposal, true, true);
   });
   // A proposal held at the end of its window for want of a verified list is
-  // looked at again with the next message.
-  registerAfterInbound(async (w) => {
+  // looked at again with the next message and the next reminder.
+  const retryHeld = async (w: Work): Promise<void> => {
     if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
     const proposal = await store.openProposal(w.tx, w.f.id);
-    if (proposal && proposal.windowEndsAt.getTime() <= w.now.getTime()) await settleIfDue(w, proposal, true, deadlinePassed(w));
-  });
+    if (!proposal || proposal.windowEndsAt.getTime() > w.now.getTime()) return;
+    await settleIfDue(w, proposal, true, deadlinePassed(w));
+    await advance(w, 'contribution');
+  };
+  registerAfterInbound(retryHeld);
+  onHeldDecisionRetry(retryHeld);
 }

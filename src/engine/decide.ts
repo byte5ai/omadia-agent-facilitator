@@ -25,7 +25,7 @@ import { cancelJobs, scheduleJob } from './jobs.js';
 import { abortInWork, announceVote, displayNameOf, releaseConversation, releaseOnEnd, runAbortHooks } from './lifecycle.js';
 import { onMembershipChange } from './membership.js';
 import { closingSummary } from './protocol.js';
-import { verifyElectorate } from './electorate.js';
+import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
@@ -102,8 +102,16 @@ const DECIDED_BY_COMPLETENESS = new Set<Evaluation['state']>(['clear', 'tie', 'c
  * roster the channel is asked fresh, and a person found there is waited for.
  * Anything but a verified list keeps the step waiting.
  */
-export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing: boolean): Promise<Evaluation> {
+export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing: boolean): Promise<Evaluation | { state: 'electorate_unverified' }> {
   const outcome = await evaluateStep(w, step, closing);
+  if (closing && outcome.state === 'consent_passed') {
+    // Consent at the deadline: "nobody objected" is said about a verified
+    // list. Nothing waits past the deadline, so an unverifiable one fails.
+    const check = await verifyElectorate(w);
+    if (windowMayPass(check)) return evaluateStep(w, step, closing);
+    await w.event('decision_held', 'engine', { stepId: step.id, reason: check.verified ? 'verified' : check.reason, atDeadline: true });
+    return { state: 'electorate_unverified' } as const;
+  }
   if (closing || !DECIDED_BY_COMPLETENESS.has(outcome.state)) return outcome;
   const check = await verifyElectorate(w);
   if (!check.verified) {
@@ -361,7 +369,7 @@ function scoreLine(options: readonly StepOption[], scores: Record<string, number
 }
 
 /** Evaluate the open step and act on the outcome. */
-export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | undefined> {
+export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | { state: 'electorate_unverified' } | undefined> {
   if (w.f.phase !== 'active') return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) {
@@ -384,6 +392,10 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   switch (outcome.state) {
     case 'waiting':
     case 'blocked_by_proposal':
+      return outcome;
+
+    case 'electorate_unverified':
+      await abort(w, t.abortElectorateUnverified());
       return outcome;
 
     case 'clear': {
@@ -539,6 +551,9 @@ export function installDecisionMethods(): void {
     await advance(w, 'contribution');
   });
   onMembershipChange(async (w) => {
+    await advance(w, 'contribution');
+  });
+  onHeldDecisionRetry(async (w) => {
     await advance(w, 'contribution');
   });
 
