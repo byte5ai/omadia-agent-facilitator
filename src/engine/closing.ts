@@ -76,11 +76,11 @@ function postDocument(w: Work, c: Closing): void {
 }
 
 /** Session closings that need confirmation and have not ended (spec 5.2,
- *  part 1; F1 opens them). */
+ *  part 1; F1 opens and ends them). */
 export async function sessionClosingsPending(q: Queryable, facilitationId: string): Promise<boolean> {
   const open = await q.query(
     `SELECT 1 FROM plg_omadia_agent_facilitator_closings
-      WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND result_status IS NULL AND ended_at IS NULL LIMIT 1`,
+      WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND ended_at IS NULL LIMIT 1`,
     [facilitationId],
   );
   return open.rows.length > 0;
@@ -228,7 +228,9 @@ export function onClosingEnded(hook: (w: Work, c: Closing) => Promise<void>): vo
  */
 export async function advanceClosings(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
   await adoptLegacyResult(engine, client, facilitationId);
-  const open = (await listClosings(client, facilitationId)).filter((c) => c.endedAt === null);
+  // Session closings run their own procedure (F1, sessionClose.ts); this
+  // runner drives the result of `concluding` and the abort report.
+  const open = (await listClosings(client, facilitationId)).filter((c) => c.endedAt === null && c.kind !== 'session');
   for (const c of open) {
     // A part that ends can let the next one end at once (a published result
     // with nothing to dispatch): a few steps per pass.

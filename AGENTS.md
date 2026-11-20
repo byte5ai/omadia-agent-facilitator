@@ -114,9 +114,10 @@ byte5ai/omadia `docs/adr/`.
   follow-up invitation. Only `actor: 'kernel'` aborts a concluding facilitation.
 - A failed delivery closes `closed` with delivery status `not_delivered` (no longer `aborted`).
 - Abort reports are closing documents (closing kind `abort`) and list invitations already sent.
-- Session protocols (F1): open a closing with `openClosing(kind: 'session')`, post the document
-  with purpose `session_summary` or `session_protocol` and `closing: { id, version }`; the same
-  procedure moves it on. Stakeholders never receive session protocols.
+- Session protocols (F1): `src/engine/sessionClose.ts` opens and drives closings of kind
+  `session` itself; `advanceClosings` only drives `result` and `abort`. The result waits while
+  a session closing that requires confirmation has no `ended_at`. Closing documents in the outbox carry
+  `closing: { id, version }` (`Outgoing.closing`). Stakeholders never receive session protocols.
 
 ## Protocols, stakeholders, retention, quotas
 
