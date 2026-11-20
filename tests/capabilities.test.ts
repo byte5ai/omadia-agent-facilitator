@@ -8,7 +8,7 @@ import * as store from '../src/db/store.js';
 import { scoped } from '../src/engine/capabilities.js';
 import { alignToGrid, findSlot } from '../src/engine/slots.js';
 import { buildProtocol } from '../src/engine/protocol.js';
-import { ANNA, BERT, CARA, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { FakeFollowup } from './fakeKernel.js';
 import { PG_SKIP } from './pg.js';
@@ -38,8 +38,11 @@ async function reply(conv: string, who: string, text: string): Promise<void> {
   await h.kernel.say(conv, who, text, { replyTo: h.kernel.groupPosts(conv).at(-1)?.messageId ?? '' });
   await h.settle();
 }
+/** Everybody answers; an agreement holds once the window has ended (spec
+ *  5.7: agreeing early does not end it). */
 const all = async (conv: string, text: string, who = ['anna', 'bert', 'cara']): Promise<void> => {
   for (const person of who) await say(conv, person, text);
+  if (text === 'agreed') await passWindow(h, conv);
 };
 const iso = (s: string): Date => new Date(s);
 
@@ -282,8 +285,10 @@ test('review 4: a close that has to be repeated does not repeat the mail or the 
     throw new Error('database error while closing');
   };
   try {
+    // The group's consent is decided when its window ends, by the scheduler:
+    // the first close fails there, and the scheduler repeats it.
     await closedWithFollowup(conv, { meeting: true, tick: false });
-    assert.equal((await h.facilitation(conv)).phase, 'concluding');
+    assert.equal(failed, true, 'the first close failed');
     await h.tick();
     await h.tick();
   } finally {

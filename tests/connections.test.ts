@@ -73,7 +73,9 @@ test('review 5: a channel call that never answers times out; the lock and its co
     await startActive(h, conv, VOTE);
     sendLimits.timeoutMs = 200;
     h.kernel.sendFaults.push('hang');
-    await h.kernel.say(conv, 'anna', 'A'); // its echo hangs in the channel
+    await h.kernel.say(conv, 'anna', 'status'); // its answer hangs in the channel
+    await h.settle();
+    await h.kernel.say(conv, 'anna', 'A');
     await h.settle();
     await h.kernel.say(conv, 'bert', 'A');
     await h.settle();

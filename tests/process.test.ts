@@ -8,7 +8,7 @@ import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { FORMATS } from '../src/engine/formats.js';
 import { agendaFor } from '../src/engine/lifecycle.js';
-import { ANNA, BERT, CARA, FOUR, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, FOUR, createHarness, passWindow, validSummaries } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -34,8 +34,11 @@ async function reply(conv: string, who: string, text: string): Promise<void> {
   await h.kernel.say(conv, who, text, { replyTo: h.kernel.groupPosts(conv).at(-1)?.messageId ?? '' });
   await h.settle();
 }
+/** Everybody answers; an agreement holds once the window has ended (spec
+ *  5.7: agreeing early does not end it). */
 const everybody = async (conv: string, text: string, who = ['anna', 'bert', 'cara', 'dave']): Promise<void> => {
   for (const person of who) await say(conv, person, text);
+  if (text === 'agreed') await passWindow(h, conv);
 };
 const openStep = async (conv: string) => store.openStepOf(h.db.pool, (await h.facilitation(conv)).id);
 const inDays = (days: number): string => new Date(h.clock.now().getTime() + days * 24 * HOUR_MS).toISOString();
@@ -133,7 +136,7 @@ test('timebox: when it ends the engine says where the step stands and the group 
   assert.match(tail[2] ?? '', /^Step 2 of 2: Discuss\./);
 });
 
-test('a proposal: an objection keeps it from holding, agreeing lifts it, everybody agreeing accepts at once; one at a time', { skip: PG_SKIP }, async () => {
+test('a proposal: an objection keeps it from holding, agreeing lifts it, it holds when its window ends (not when everybody agreed); one at a time', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('pr-proposal', [ANNA, BERT, CARA]);
   await tool(conv, 'facilitation_start', { goal: 'Offsite', definitionOfDone: 'Plan agreed', agenda: [{ kind: 'discuss', title: 'Discuss' }, { kind: 'close', title: 'Close' }] });
   await tool(conv, 'facilitation_open');
@@ -146,6 +149,8 @@ test('a proposal: an objection keeps it from holding, agreeing lifts it, everybo
   const f = await h.facilitation(conv);
   assert.equal((await store.openProposal(h.db.pool, f.id))?.status, 'open', 'not accepted while the objection stands');
   await say(conv, 'bert', 'agreed');
+  assert.equal((await store.openProposal(h.db.pool, f.id))?.status, 'open', 'everybody agreeing does not end the window (spec 5.7)');
+  await passWindow(h, conv);
   assert.equal(last(conv), 'Accepted, nobody objected: take this summary into the record:\nWe want an offsite in spring, within budget.');
   assert.equal((await store.listEvents(h.db.pool, f.id, ['summary_confirmed'])).length, 1);
 
@@ -170,7 +175,8 @@ test('retrospective: ideas without mentions, clusters and decisions by consent, 
   await say(conv, 'cara', 'Standups ran long');
   await say(conv, 'dave', 'Pairing helped');
   assert.equal(h.kernel.turns.length, turns);
-  assert.equal(last(conv), 'Recorded for you, Dave: Pairing helped');
+  assert.match(last(conv), /^Step 2 of 7:/, 'ideas are collected quietly, without an echo');
+  assert.deepEqual(await validSummaries(h, conv, 'dave'), ['Pairing helped']);
   assert.match(await tool(conv, 'facilitation_step', { action: 'close' }), /^Closed/);
   assert.match(last(conv), /^Step 3 of 7: Cluster\./);
 
@@ -303,9 +309,9 @@ test('review 7: while a consent vote is open, a free-standing answer is a ballot
   assert.match(proposalPost?.text ?? '', /Reply to this message/, 'the announcement says how to answer it');
 
   await say(conv, 'anna', 'Einwand: zu teuer');
-  assert.equal(last(conv), 'Recorded for you, Anna: objection: zu teuer', 'the objection is a ballot on the decision');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['objection: zu teuer'], 'the objection is a ballot on the decision');
   await say(conv, 'bert', 'einverstanden');
-  assert.equal(last(conv), 'Recorded for you, Bert: consent');
+  assert.deepEqual(await validSummaries(h, conv, 'bert'), ['consent']);
   let proposal = await store.openProposal(h.db.pool, f.id);
   assert.deepEqual([proposal?.objections, proposal?.consents], [[], []], 'nothing of it went to the proposal');
 

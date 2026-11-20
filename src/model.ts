@@ -42,15 +42,19 @@ export type ContributionKind =
   | 'objection'
   | 'abstention'
   | 'commitment';
-export type ContributionStatus = 'valid' | 'unconfirmed' | 'ambiguous' | 'superseded' | 'withdrawn';
+/** `pending_import`: recorded on somebody's behalf, waits for that person. */
+export type ContributionStatus = 'valid' | 'unconfirmed' | 'ambiguous' | 'pending_import' | 'superseded' | 'withdrawn';
 export type ContributionSource = 'message' | 'card' | 'speech';
 export type DeliveryClass = 'essential' | 'droppable';
 export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'dropped' | 'failed';
 export type JobStatus = 'pending' | 'done' | 'cancelled' | 'failed';
 export type ProposalStatus = 'open' | 'accepted' | 'rejected' | 'withdrawn';
-export type AckKind = 'contribution' | 'nomination' | 'action_item';
+export type AckKind = 'contribution' | 'nomination' | 'action_item' | 'import';
 export type AckStatus = 'pending' | 'confirmed' | 'declined' | 'cancelled';
-export type ActionItemStatus = 'proposed' | 'confirmed' | 'done' | 'declined';
+export type ActionItemStatus = 'proposed' | 'confirmed' | 'done' | 'declined' | 'void';
+/** `pending_repeat`: its step is being repeated (spec 5.7); `replaced` by the
+ *  repeat's outcome; `void`: it followed from a result that no longer holds. */
+export type DecisionStatus = 'valid' | 'pending_repeat' | 'replaced' | 'void';
 export type SessionKind = 'async' | 'live';
 export type Modality = 'chat' | 'online' | 'hybrid';
 export type MediaConsent = 'not_needed' | 'pending' | 'granted' | 'refused' | 'withdrawn';
@@ -286,6 +290,8 @@ export interface Step {
   openedAt: Date | null;
   timeboxEndsAt: Date | null;
   closedAt: Date | null;
+  /** A repeat of this closed step after a rule change (spec 5.7). */
+  repeatsStepId: string | null;
 }
 
 /** Where the list of participants comes from (spec 5.5), fixed at start. */
@@ -340,6 +346,8 @@ export interface Contribution {
   sourceRevision: number | null;
   sourceEventId: string | null;
   sourceOccurredAt: Date | null;
+  /** Several contributions of one message are its parts 0, 1, 2, ... */
+  partIndex: number;
   status: ContributionStatus;
   interpreted: boolean;
   recordedAt: Date;
@@ -365,6 +373,8 @@ export interface Decision {
   result: Record<string, unknown>;
   rationale: string | null;
   decidedAt: Date;
+  status: DecisionStatus;
+  replacedBy: string | null;
 }
 
 export interface ActionItem {
@@ -381,6 +391,8 @@ export interface ActionItem {
   createdAt: Date;
   confirmedAt: Date | null;
   doneAt: Date | null;
+  /** Its decision's step is being repeated. */
+  pendingRepeat: boolean;
 }
 
 export interface ProtocolEvent {

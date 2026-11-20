@@ -8,7 +8,7 @@ import { after, before, test } from 'node:test';
 
 import { HOUR_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
-import { ANNA, BERT, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, createHarness, startActive, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -48,6 +48,7 @@ async function followUp(agent: string, conv: string, count: number) {
   await h.tool('facilitation_step', { action: 'close' }, at);
   await h.tool('facilitation_step', { action: 'close' }, at);
   for (const who of ['anna', 'bert']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   const f = await h.facilitation(conv);
   assert.deepEqual([f.phase, f.followupState], ['closed', 'active']);
   return f;

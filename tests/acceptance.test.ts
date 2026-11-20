@@ -27,7 +27,7 @@ import { evaluate } from '../src/methods/evaluate.js';
 import { toOptions } from '../src/methods/ballot.js';
 import type { OutboxRow } from '../src/model.js';
 import { buildTools } from '../src/tools/index.js';
-import { ANNA, BERT, CARA, DAVE, FOUR, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, DAVE, FOUR, createHarness, passWindow, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { FakeFollowup } from './fakeKernel.js';
 import { PG_SKIP } from './pg.js';
@@ -58,8 +58,11 @@ async function say(conv: string, who: string, text: string, opts = {}) {
   await h.settle();
   return record;
 }
+/** Everybody answers; an agreement holds once the window has ended (spec
+ *  5.7: agreeing early does not end it). */
 const everybody = async (conv: string, text: string, who = ['anna', 'bert', 'cara', 'dave']): Promise<void> => {
   for (const person of who) await say(conv, person, text);
+  if (text === 'agreed') await passWindow(h, conv);
 };
 const inHours = (hours: number): string => new Date(h.clock.now().getTime() + hours * HOUR_MS).toISOString();
 const reminderDms = (): number => h.kernel.dms.filter((d) => d.text.includes('is still open')).length;
@@ -71,19 +74,24 @@ test('1. field scenario: four people, ranked vote 3/2/1, deadline in three days,
   assert.match(posts(conv)[0] ?? '', /^Hello, I am Mira/);
   const turns = h.kernel.turns.length;
 
+  // Recording is quiet (spec 5.3, 5.14): a ballot in the announced format
+  // gets no echo in the group.
+  let quiet = posts(conv).length;
   await say(conv, 'anna', '@Mira A > C > B');
-  assert.equal(last(conv), 'Recorded for you, Anna: A (Harbour) > C (Castle Hill) > B (Old Town)');
+  assert.equal(posts(conv).length, quiet, 'no echo of the ballot');
   assert.match(await status(conv), /Contributed: 1 of 4\nStill open: 3 contributions/);
 
+  quiet = posts(conv).length;
   await say(conv, 'bert', 'B > A'); // no mention
-  assert.equal(last(conv), 'Recorded for you, Bert: B (Old Town) > A (Harbour)');
+  assert.equal(posts(conv).length, quiet, 'no echo of the ballot');
   assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
 
   await h.restart(); // a middleware restart between the second and the third vote
   assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
 
+  quiet = posts(conv).length;
   await say(conv, 'cara', 'A > B > C'); // no mention
-  assert.equal(last(conv), 'Recorded for you, Cara: A (Harbour) > B (Old Town) > C (Castle Hill)');
+  assert.equal(posts(conv).length, quiet, 'no echo of the ballot');
   assert.match(await status(conv), /Contributed: 3 of 4\nStill open: 1 contribution/);
   assert.equal((await h.facilitation(conv)).phase, 'active');
 
@@ -179,7 +187,7 @@ test('3. races and delivery: vote and reminder in the same second, crash between
   h.clock.advance(10 * MINUTE_MS);
   await h.tick();
   assert.equal(count(c, 'Reminder:'), 1, 'the reminder reached the channel once and is not repeated');
-  h.kernel.sendFaults.push({ code: 'throttled', message: 'echo' }, 'lost');
+  h.kernel.sendFaults.push('lost');
   await say(c, 'dave', 'A');
   h.clock.advance(2 * MINUTE_MS);
   await h.tick();
@@ -274,8 +282,9 @@ test('5b. methods through the engine: duplicate option refused, empty ballot is 
   assert.match(last(conv), /^Anna, an option appears twice/);
   await say(conv, 'anna', '   ');
   await say(conv, 'anna', 'A > B');
+  const quiet = posts(conv).length;
   await say(conv, 'anna', 'B > A');
-  assert.equal(last(conv), 'Changed for you, Anna: B (Old Town) > A (Harbour)');
+  assert.equal(posts(conv).length, quiet, 'a changed ballot is recorded quietly');
   assert.deepEqual((await store.listContributions(h.db.pool, f.id)).map((c) => c.status).sort(), ['ambiguous', 'superseded', 'valid']);
   await say(conv, 'bert', 'abstain');
   assert.equal((await h.facilitation(conv)).phase, 'closed');
@@ -613,14 +622,16 @@ test('18. online meeting with chat and cards only', { skip: PG_SKIP }, async () 
   // Topics are collected in the chat before the meeting; the agenda is sent before it.
   await say(conv, 'anna', 'Licences run out in March');
   await say(conv, 'bert', 'Migration effort');
-  h.clock.set(new Date(start.getTime() - 60 * MINUTE_MS + 1000));
-  await h.tick();
-  assert.match(last(conv), /^Agenda for "Budget call" on .*\n1\. Topics\n2\. Which tool \(20 min\)\n3\. Next steps\n4\. Close/);
-  assert.ok(h.clock.now() < start, 'the agenda went out before the meeting');
+  // Stakeholders are agreed before the meeting; each consent holds once its
+  // window has ended.
   await tool(conv, 'facilitation_stakeholder', { name: 'Sam Sponsor', address: 'sam@example.com', role: 'receives_protocol' });
   await everybody(conv, 'agreed');
   await tool(conv, 'facilitation_stakeholder', { name: 'Pia Procurement', address: 'pia@example.com', role: 'receives_protocol' });
   await everybody(conv, 'agreed');
+  h.clock.set(new Date(start.getTime() - 60 * MINUTE_MS + 1000));
+  await h.tick();
+  assert.match(last(conv), /^Agenda for "Budget call" on .*\n1\. Topics\n2\. Which tool \(20 min\)\n3\. Next steps\n4\. Close/);
+  assert.ok(h.clock.now() < start, 'the agenda went out before the meeting');
 
   // The meeting starts: the facilitator says that it does not hear the call.
   h.clock.set(start);
@@ -684,6 +695,7 @@ test('19. adaptation: transcribed audio appears mid-session; announced, consent 
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Bert', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Refused \(no_consent\)/);
   const request = h.kernel.groupPosts(conv).at(-1)?.messageId ?? '';
   for (const who of ['anna', 'bert', 'cara']) await say(conv, who, 'agreed', { replyTo: request });
+  await passWindow(h, conv);
   assert.match(await tool(conv, 'facilitation_record_spoken', { speaker: 'Bert', kind: 'vote', summary: 'Pizza', ballot: 'B' }), /^Recorded for Bert as unconfirmed/);
   assert.match(await status(conv), /Contributed: 1 of 3\nStill open: 2 contributions/, 'not counted before Bert confirmed');
   await say(conv, 'bert', 'yes');

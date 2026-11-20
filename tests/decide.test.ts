@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
 import * as store from '../src/db/store.js';
-import { ANNA, BERT, CARA, FOUR, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, FOUR, createHarness, startActive, validSummaries, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -35,13 +35,15 @@ test('the handshake announces the method, the options and how to vote', { skip: 
   assert.match(handshake, /A tie goes to a runoff/);
 });
 
-test('ranked vote: every ballot is recorded and echoed without a model, the last one concludes, the result goes to the group', { skip: PG_SKIP }, async () => {
+test('ranked vote: every ballot is recorded quietly without a model, the last one concludes, the result goes to the group', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('de-ranked', FOUR);
   await startActive(h, conv, VENUES);
   const turns = h.kernel.turns.length;
 
+  const quiet = h.kernel.groupPosts(conv).length;
   await say(conv, 'anna', 'A > C > B');
-  assert.equal(last(conv), 'Recorded for you, Anna: A (Harbour) > C (Castle Hill) > B (Old Town)');
+  assert.equal(h.kernel.groupPosts(conv).length, quiet, 'no echo in the group (spec 5.14)');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['A (Harbour) > C (Castle Hill) > B (Old Town)']);
   assert.match(await status(conv), /Contributed: 1 of 4\nStill open: 3 contributions/);
   await say(conv, 'bert', 'a, b');
   assert.match(await status(conv), /Contributed: 2 of 4\nStill open: 2 contributions/);
@@ -69,10 +71,10 @@ test('a ballot can be changed until the conclusion: by a new message and by edit
   await startActive(h, conv, VENUES);
   const first = await say(conv, 'anna', 'A > B');
   await say(conv, 'anna', 'C > B');
-  assert.equal(last(conv), 'Changed for you, Anna: C (Castle Hill) > B (Old Town)');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['C (Castle Hill) > B (Old Town)']);
   await h.kernel.edit(conv, 'anna', first.messageId, 'B');
   await h.settle();
-  assert.equal(last(conv), 'Changed for you, Anna: B (Old Town)');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['B (Old Town)']);
   const all = await contributions(conv);
   assert.deepEqual(all.map((c) => c.status).sort(), ['superseded', 'superseded', 'valid']);
   assert.equal(all.find((c) => c.status === 'valid')?.sourceRevision, 1, 'the edited ballot counts in its latest revision');
@@ -145,8 +147,10 @@ test('consent: an objection keeps it open and is announced once; an amended prop
   assert.match(h.kernel.groupPosts(conv)[0]?.text ?? '', /Proposal: We meet every Monday at 9\. Write "consent"/);
   await say(conv, 'anna', 'consent');
   await say(conv, 'bert', 'Objection: I am never in on Mondays');
-  assert.equal(last(conv), 'Recorded for you, Bert: objection: I am never in on Mondays');
+  assert.deepEqual(await validSummaries(h, conv, 'bert'), ['objection: I am never in on Mondays']);
   await say(conv, 'cara', 'einverstanden');
+  // Consent is decided when its window ends (spec 5.7), not when everybody answered.
+  await passWindow(h, conv);
   const f = await h.facilitation(conv);
   assert.equal(f.phase, 'active');
   const announced = () => h.kernel.groupPosts(conv).filter((p) => p.text.startsWith('An objection stands')).length;
@@ -160,6 +164,8 @@ test('consent: an objection keeps it open and is announced once; an amended prop
   await say(conv, 'anna', 'consent');
   await say(conv, 'bert', 'consent');
   await say(conv, 'cara', 'consent');
+  assert.equal((await h.facilitation(conv)).phase, 'active', 'agreeing early does not end the window');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).phase, 'closed');
   assert.match(last(conv), /- Agreed by consent: We meet every Tuesday at 9/);
 });
@@ -168,7 +174,7 @@ test('assignment: one confirmed name per role; a declined nomination reopens the
   const conv = h.kernel.conversation('de-assign', [ANNA, BERT, CARA]);
   await startActive(h, conv, { goal: 'Roles for the workshop', method: 'assignment', options: ['Chair', 'Notes'] });
   await say(conv, 'anna', 'I take A');
-  assert.equal(last(conv), 'Recorded for you, Anna: A (Chair): Anna');
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['A (Chair): Anna']);
   const nominated = await say(conv, 'anna', 'B: Bert');
   assert.equal(last(conv), 'Bert, Anna proposes you for Notes. Reply "yes" to take it or "no" to decline, here in the group.');
   assert.equal((await h.facilitation(conv)).phase, 'active', 'a name somebody else gave does not bind');

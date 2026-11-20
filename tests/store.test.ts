@@ -152,7 +152,7 @@ test('steps, participants, definition of done and contributions hang off the fac
     recordedAt: T0,
   };
   const first = await store.addContribution(db.pool, vote);
-  await assert.rejects(store.addContribution(db.pool, vote), /plg_omadia_agent_facilitator_contributions_source_unique/);
+  await assert.rejects(store.addContribution(db.pool, vote), /plg_omadia_agent_facilitator_contributions_source_part_unique/);
   await store.patchContribution(db.pool, first.id, { status: 'superseded' });
   await store.addContribution(db.pool, { ...vote, sourceRevision: 1, payload: { ranking: ['B', 'A'] } });
   assert.equal((await store.findLiveBySourceMessage(db.pool, f.id, 'm1'))?.sourceRevision, 1);

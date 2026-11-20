@@ -55,10 +55,11 @@ test('a contribution read from free text counts only after its author confirmed 
   await h.settle();
   assert.equal((await contributionsOf(conv))[0]?.status, 'unconfirmed');
 
+  const quiet = h.kernel.groupPosts(conv).length;
   await h.kernel.say(conv, 'bert', 'Yes!');
   await h.settle();
   assert.equal((await contributionsOf(conv))[0]?.status, 'valid');
-  assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /^Confirmed, Bert: prefers the old town/);
+  assert.equal(h.kernel.groupPosts(conv).length, quiet, 'the confirmation needs no answer (quiet recording)');
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Contributed: 1 of \d+/);
 });
 
@@ -155,11 +156,14 @@ test('an edit retires the older revision; a deleted message withdraws what it ca
     [1, 'unconfirmed'],
   ]);
 
+  const quiet = h.kernel.groupPosts(conv).length;
   await h.kernel.remove(conv, 'anna', said.messageId);
   await h.settle();
   all = await contributionsOf(conv);
   assert.equal(all[1]?.status, 'withdrawn');
-  assert.match(h.kernel.groupPosts(conv).at(-1)?.text ?? '', /you deleted your message/);
+  assert.equal(h.kernel.groupPosts(conv).length, quiet, 'a deletion is followed quietly');
+  const f = await h.facilitation(conv);
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['contribution_withdrawn'])).length, 1);
 });
 
 test('an unclear message gets exactly one clarifying question and does not count', { skip: PG_SKIP }, async () => {

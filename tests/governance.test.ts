@@ -63,7 +63,7 @@ test('operator: metadata without contents; contents only with a reason, and ever
   const meta = (list.body.data as Array<Record<string, unknown>>).find((m) => m['id'] === f.id) as Record<string, unknown>;
   assert.deepEqual(
     { facilitator: meta['facilitator'], phase: meta['phase'], conversationId: meta['conversationId'], counts: meta['counts'] },
-    { facilitator: 'mira', phase: 'active', conversationId: conv, counts: { participants: 4, activeParticipants: 4, contributions: 1, decisions: 0, actionItems: 0, steps: 1, messagesSent: 2 } },
+    { facilitator: 'mira', phase: 'active', conversationId: conv, counts: { participants: 4, activeParticipants: 4, contributions: 1, decisions: 0, actionItems: 0, steps: 1, messagesSent: 1 } },
   );
   assert.ok(!JSON.stringify(list.body).includes('Confidential'), 'no goal, no contents, no names in the metadata');
   assert.ok(!JSON.stringify(list.body).includes('Anna'));
@@ -151,12 +151,16 @@ test('quota per facilitator: the limit of active facilitations produces a system
 test('quota of messages per facilitation: one system notice, then only essential messages', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('go-messages', [ANNA, BERT, CARA]);
   await startActive(h, conv, VOTE);
-  for (let i = 0; i < 6; i += 1) await say(conv, 'anna', i % 2 === 0 ? 'A' : 'B');
+  // Ballots are recorded quietly; status answers are droppable messages that
+  // fill the quota.
+  for (let i = 0; i < 6; i += 1) await say(conv, 'anna', 'status');
   const notices = posts(conv).filter((t) => t.startsWith('System notice: this facilitation has reached its limit of 6 messages'));
   assert.equal(notices.length, 1);
   const before = posts(conv).length;
+  await say(conv, 'bert', 'status');
+  assert.equal(posts(conv).length, before, 'a droppable answer is no longer posted');
+  await say(conv, 'anna', 'A');
   await say(conv, 'bert', 'A');
-  assert.equal(posts(conv).length, before, 'the echo is no longer posted');
   await say(conv, 'cara', 'A');
   assert.match(posts(conv).at(-1) ?? '', /^Result for "Pick a venue"/, 'the result is always sent');
   assert.equal((await store.listEvents(h.db.pool, (await h.facilitation(conv)).id, ['quota_reached'])).length, 1);

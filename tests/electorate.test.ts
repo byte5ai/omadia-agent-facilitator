@@ -10,7 +10,7 @@ import { after, before, test } from 'node:test';
 import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { FINAL_ELECTORATE_MAX_MS, finalConsentElectorate } from '../src/engine/electorate.js';
-import { ANNA, BERT, CARA, DAVE, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, DAVE, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -162,7 +162,7 @@ test('criterion 44: the final consent asks the roster fresh, then hourly for at 
   assert.equal(notices(conv), 0, 'the final consent says nothing to the group itself');
 });
 
-test('"everybody agreed" to a proposal is decided after the fresh list: a person whose join was missed is waited for', { skip: PG_SKIP }, async () => {
+test('a proposal is decided at the end of its window on the fresh list: a person whose join was missed is found first', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('el-unanimous', [ANNA, BERT]);
   await h.tool('facilitation_start', { ...VOTE, deadline: inHours(48) }, { conversation: conv });
   await h.tool('facilitation_propose_change', { change: 'deadline', deadline: inHours(72) }, { conversation: conv, caller: 'anna' });
@@ -170,8 +170,10 @@ test('"everybody agreed" to a proposal is decided after the fresh list: a person
   h.kernel.join(conv, CARA, { missed: true });
   await say(conv, 'anna', 'agreed');
   await say(conv, 'bert', 'agreed');
-  assert.ok(await store.openProposal(h.db.pool, f.id), 'Cara has not agreed');
-  assert.equal((await sources(conv))['user:cara'], 'roster');
+  assert.ok(await store.openProposal(h.db.pool, f.id), 'agreeing early decides nothing (spec 5.7)');
+  await passWindow(h, conv);
+  assert.equal((await sources(conv))['user:cara'], 'roster', 'the fresh list before the decision found Cara');
+  assert.equal(await store.openProposal(h.db.pool, f.id), undefined, 'nobody objected within the window: it passes');
 });
 
 test('a consent step at the deadline on an unverifiable list ends with an abort that says why', { skip: PG_SKIP }, async () => {

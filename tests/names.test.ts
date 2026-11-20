@@ -88,7 +88,13 @@ test('a member the channel lists without a name is not shown as an id, and gets 
   await say(conv, TESS, 'B');
   const f = await h.facilitation(conv);
   assert.equal((await store.getParticipant(h.db.pool, f.id, `user:${TESS.id}`))?.displayName, 'Teresita Biel');
-  assert.ok(posts(conv).some((p) => p.includes('Teresita Biel')));
+  // Recording is quiet; a reading from free text is what is said to her,
+  // and it calls her by the name of her first message.
+  const said = await h.kernel.say(conv, TESS.id, 'eher das zweite');
+  await h.settle();
+  await h.tool('facilitation_record_contribution', { messageId: said.messageId, kind: 'position', summary: 'Bravo' }, { conversation: conv, caller: MARCEL.id });
+  assert.ok(posts(conv).some((p) => p.startsWith('Teresita Biel, ')), posts(conv).join('\n'));
+  assert.ok(posts(conv).every((p) => !PRINCIPAL.test(p)));
 });
 
 test('a text that carries the id of a participant goes out with the name instead', { skip: PG_SKIP }, async () => {

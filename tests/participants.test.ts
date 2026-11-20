@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 
 import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
-import { ANNA, BERT, CARA, DAVE, FOUR, createHarness } from './harness.js';
+import { ANNA, BERT, CARA, DAVE, FOUR, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -134,6 +134,8 @@ test('a proposal is not accepted early by "everybody agreed" while the list is u
   await start(known, { deadline: inHours(48) });
   await h.tool('facilitation_propose_change', { change: 'deadline', deadline: inHours(72) }, { conversation: known });
   for (const who of ['anna', 'bert']) await say(known, who, 'agreed');
+  assert.ok(await store.openProposal(h.db.pool, (await h.facilitation(known)).id), 'everybody agreeing does not end the window either (spec 5.7)');
+  await passWindow(h, known);
   assert.equal(await store.openProposal(h.db.pool, (await h.facilitation(known)).id), undefined);
 });
 

@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 
 import { MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
-import { FOUR, createHarness } from './harness.js';
+import { FOUR, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -99,6 +99,7 @@ test('S4: a discussing step says how it ends, and "next" proposes to close it wi
   assert.equal(h.kernel.turns.length, turns, 'no model turn');
   assert.match(posts('mo-discuss').at(-1) ?? '', /^Proposal: close "Talk it through" and move on/);
   for (const who of ['anna', 'bert', 'cara', 'dave']) await say('mo-discuss', who, 'agreed');
+  await passWindow(h, 'mo-discuss');
   assert.equal((await store.openStepOf(h.db.pool, id))?.kind, 'decide');
 });
 

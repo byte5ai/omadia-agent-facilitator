@@ -185,8 +185,8 @@ test('lost send confirmation: the result is retried, a reminder is not', { skip:
   await h.tick();
   assert.equal(count(conv, 'Reminder:'), 1, 'and is not sent a second time');
 
-  // The echo of Dave's ballot goes out first and takes the first fault; the result is "lost".
-  h.kernel.sendFaults.push({ code: 'throttled', message: 'echo not delivered' }, 'lost');
+  // Dave's ballot is recorded quietly; the result is the first send and is "lost".
+  h.kernel.sendFaults.push('lost');
   await say(conv, 'dave', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'concluding', 'not closed before the result is confirmed delivered');
   assert.equal(count(conv, 'Result for'), 1);

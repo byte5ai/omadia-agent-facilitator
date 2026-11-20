@@ -235,8 +235,8 @@ export const patchDodVersion = (q: Queryable, id: string, patch: Partial<DodVers
 
 export const addContribution = (
   q: Queryable,
-  values: Omit<Contribution, 'id' | 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted'> &
-    Partial<Pick<Contribution, 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted'>>,
+  values: Omit<Contribution, 'id' | 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted' | 'partIndex'> &
+    Partial<Pick<Contribution, 'sourceMessageId' | 'sourceRevision' | 'sourceEventId' | 'sourceOccurredAt' | 'interpreted' | 'partIndex'>>,
 ): Promise<Contribution> => insert<Contribution>(q, 'plg_omadia_agent_facilitator_contributions', { ...values });
 
 export const listContributions = (q: Queryable, facilitationId: string, stepId?: string): Promise<Contribution[]> =>
@@ -244,23 +244,27 @@ export const listContributions = (q: Queryable, facilitationId: string, stepId?:
     q,
     `SELECT * FROM plg_omadia_agent_facilitator_contributions
       WHERE facilitation_id = $1 AND ($2::uuid IS NULL OR step_id = $2)
-      ORDER BY recorded_at, id`,
+      ORDER BY recorded_at, source_message_id, part_index, id`,
     [facilitationId, stepId ?? null],
   );
 
 export const getContribution = (q: Queryable, id: string): Promise<Contribution | undefined> =>
   one<Contribution>(q, 'SELECT * FROM plg_omadia_agent_facilitator_contributions WHERE id = $1', [id]);
 
-/** The live contribution a message is the source of, if any. */
-export const findLiveBySourceMessage = (
+/** The first live part a message carries (most messages carry one). */
+export const findLiveBySourceMessage = async (
   q: Queryable,
   facilitationId: string,
   messageId: string,
-): Promise<Contribution | undefined> =>
-  one<Contribution>(
+): Promise<Contribution | undefined> => (await listLiveBySourceMessage(q, facilitationId, messageId))[0];
+
+/** Every live part a message carries, in part order. */
+export const listLiveBySourceMessage = (q: Queryable, facilitationId: string, messageId: string): Promise<Contribution[]> =>
+  rows<Contribution>(
     q,
     `SELECT * FROM plg_omadia_agent_facilitator_contributions
-      WHERE facilitation_id = $1 AND source_message_id = $2 AND status IN ('valid', 'unconfirmed', 'ambiguous')`,
+      WHERE facilitation_id = $1 AND source_message_id = $2 AND status IN ('valid', 'unconfirmed', 'ambiguous', 'pending_import')
+      ORDER BY part_index`,
     [facilitationId, messageId],
   );
 

@@ -9,7 +9,7 @@ import { HOUR_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { statusText } from '../src/engine/status.js';
 import { lifecycleOf } from '../src/model.js';
-import { ANNA, BERT, CARA, DAVE, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, DAVE, createHarness, startActive, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -47,6 +47,7 @@ async function followUp(conv: string, count: number, members = [ANNA, BERT]) {
   await tool(conv, 'facilitation_step', { action: 'close' });
   await tool(conv, 'facilitation_step', { action: 'close' });
   for (const who of members) await say(conv, who.id, 'agreed');
+  await passWindow(h, conv);
   const f = await h.facilitation(conv);
   assert.deepEqual([f.phase, f.followupState], ['closed', 'active']);
   return f;
@@ -197,6 +198,7 @@ async function followUpAs(agent: string, conv: string, count: number): Promise<v
   await h.tool('facilitation_step', { action: 'close' }, at);
   await h.tool('facilitation_step', { action: 'close' }, at);
   for (const who of ['anna', 'bert']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).followupState, 'active');
 }
 

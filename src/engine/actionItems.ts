@@ -4,6 +4,7 @@
 // posted at the agreed time; follow-up runs after the close and ends when
 // every item is done or past its due date.
 
+import { correlate } from './correlation.js';
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { DAY_MS, HOUR_MS, MINUTE_MS } from '../clock.js';
@@ -184,6 +185,11 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || record.kind !== 'created') return undefined;
   if (w.f.phase !== 'active' && w.f.followupState !== 'active') return undefined;
   const match = DONE.exec(command);
+  if (!match && !DONE_BARE.test(command)) return undefined;
+  // Several processes here that could take it: exactly one question.
+  const route = await correlate(w, record, author, { kind: 'done', ...(match ? { number: Number(match[1] ?? match[2]) } : {}) });
+  if (route === 'asked') return { outcome: 'which_process' };
+  if (route === 'others') return { outcome: 'left_to_other_process' };
   const t = texts(w.f.language);
   let number: number;
   if (match) {

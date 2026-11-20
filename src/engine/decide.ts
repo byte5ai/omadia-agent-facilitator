@@ -21,9 +21,11 @@ import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { abortInWork, announceVote, displayNameOf, markEnded, releaseConversation, releaseOnEnd, setStopAfterConcluding } from './lifecycle.js';
+import { abortInWork, announceVote, displayNameOf, markEnded, onOpened, releaseConversation, releaseOnEnd, setStopAfterConcluding } from './lifecycle.js';
 import { openResultClosing, setResultFinal, stopResultClosing } from './closing.js';
+import { resolveImport } from './imports.js';
 import { onMembershipChange } from './membership.js';
+import { registerJobHandler } from './scheduler.js';
 import { closingSummary } from './protocol.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
@@ -89,8 +91,26 @@ export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step
     activeParticipants: [...active.map((p) => p.principalId), ...expectedKeys(w.f)],
     closeRule: effectiveCloseRule(w.f),
     deadlineReached,
+    ...(step.method === 'consent' && step.roundDeadline ? { windowEnded: w.now.getTime() >= step.roundDeadline.getTime() } : {}),
     hasOpenProposal: (await store.openProposal(w.tx, w.f.id)) !== undefined,
   });
+}
+
+/**
+ * A consent step's window (spec 5.5, 5.7): opened with the step and with
+ * every amended proposal, as long as set at start, never past the deadline.
+ * The step closes at its end without a standing objection; agreeing early
+ * does not shorten it.
+ */
+export async function startConsentWindow(w: Work, step: Step): Promise<Step> {
+  if (step.method !== 'consent') return step;
+  const wanted = new Date(w.now.getTime() + w.f.settings.changeWindowHours * HOUR_MS);
+  const until = w.f.deadline && w.f.deadline < wanted ? w.f.deadline : wanted;
+  const patched = (await store.patchStep(w.tx, step.id, { roundDeadline: until })) ?? step;
+  // The end is part of the key: a window that starts again (after a pause or
+  // a change of the rules) gets a job of its own, never the old one's.
+  await scheduleJob(w, 'consent_window', `${step.id}:${String(step.round)}:${until.toISOString()}`, until, { stepId: step.id, round: step.round });
+  return patched;
 }
 
 /** Outcomes that "everybody has contributed" decides, not a deadline. */
@@ -104,13 +124,20 @@ const DECIDED_BY_COMPLETENESS = new Set<Evaluation['state']>(['clear', 'tie', 'c
  */
 export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing: boolean): Promise<Evaluation | { state: 'electorate_unverified' }> {
   const outcome = await evaluateStep(w, step, closing);
-  if (closing && outcome.state === 'consent_passed') {
-    // Consent at the deadline: "nobody objected" is said about a verified
-    // list. Nothing waits past the deadline, so an unverifiable one fails.
+  if (outcome.state === 'consent_passed' && (closing || step.roundDeadline !== null)) {
+    // "Nobody objected" is said about a verified list. At the end of the
+    // window the decision waits for one (retried with the next contribution
+    // or reminder); nothing waits past the deadline, so there it fails.
     const check = await verifyElectorate(w);
     if (windowMayPass(check)) return evaluateStep(w, step, closing);
-    await w.event('decision_held', 'engine', { stepId: step.id, reason: check.verified ? 'verified' : check.reason, atDeadline: true });
-    return { state: 'electorate_unverified' } as const;
+    await w.event('decision_held', 'engine', { stepId: step.id, reason: check.verified ? 'verified' : check.reason, atDeadline: closing });
+    if (closing) return { state: 'electorate_unverified' } as const;
+    // Besides the next contribution or reminder, an hour later (never past
+    // the deadline, where it is decided once more).
+    const retry = new Date(w.now.getTime() + HOUR_MS);
+    const at = w.f.deadline && w.f.deadline < retry ? w.f.deadline : retry;
+    await scheduleJob(w, 'consent_window', `${step.id}:${String(step.round)}:retry:${at.toISOString()}`, at, { stepId: step.id, round: step.round });
+    return { state: 'waiting', missing: [] };
   }
   if (closing || !DECIDED_BY_COMPLETENESS.has(outcome.state)) return outcome;
   const check = await verifyElectorate(w);
@@ -243,7 +270,16 @@ async function decide(w: Work, step: Step, statement: string, result: Record<str
     decidedAt: w.now,
   });
   await store.patchStep(w.tx, step.id, { status: 'closed', closedAt: w.now });
-  await cancelJobs(w, ['runoff_deadline', 'timebox_end']);
+  await cancelJobs(w, ['runoff_deadline', 'timebox_end', 'consent_window']);
+  // An import nobody confirmed before the step closed no longer can be.
+  await w.tx.query(
+    `WITH stale AS (
+       UPDATE plg_omadia_agent_facilitator_contributions SET status = 'superseded'
+        WHERE facilitation_id = $1 AND step_id = $2 AND status = 'pending_import' RETURNING id)
+     UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $3
+      WHERE facilitation_id = $1 AND kind = 'import' AND status = 'pending' AND ref_id IN (SELECT id FROM stale)`,
+    [w.f.id, step.id, w.now],
+  );
   await w.event('decided', 'engine', { stepId: step.id, statement, result });
   w.bump();
   return decision;
@@ -280,7 +316,8 @@ export interface ConcludeContext {
 export async function conclude(w: Work, ctx: ConcludeContext): Promise<void> {
   if (w.f.phase !== 'active') return;
   const t = texts(w.f.language);
-  const decisions = await store.listDecisions(w.tx, w.f.id);
+  // A decision replaced by a repeat, or one that no longer holds, is not the result.
+  const decisions = (await store.listDecisions(w.tx, w.f.id)).filter((d) => d.status === 'valid');
   const participants = await store.listParticipants(w.tx, w.f.id);
   const active = participants.filter((p) => p.status === 'active');
   // "N of M contributed" at a deadline is about what was decided: who voted
@@ -419,7 +456,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | {
       const until = step.roundDeadline ?? (w.f.deadline && w.f.deadline < windowEnd ? w.f.deadline : windowEnd);
       const next = step.round + 1;
       await store.patchStep(w.tx, step.id, { round: next, roundOptions: options.filter((o) => outcome.tied.includes(o.key)), roundDeadline: until });
-      await scheduleJob(w, 'runoff_deadline', step.id, until, { stepId: step.id });
+      await scheduleJob(w, 'runoff_deadline', `${step.id}:${until.toISOString()}`, until, { stepId: step.id });
       // A new round: readings of the old one that still wait for a "yes" are void.
       await cancelOpenRequests(w, step.id);
       w.bump();
@@ -472,7 +509,8 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | {
 export async function putAgain(w: Work, statement: string): Promise<void> {
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step || step.method !== 'consent') throw new Error('no consent step is open');
-  await store.patchStep(w.tx, step.id, { round: step.round + 1, methodConfig: { ...step.methodConfig, statement } });
+  const next = await store.patchStep(w.tx, step.id, { round: step.round + 1, methodConfig: { ...step.methodConfig, statement } });
+  if (next) await startConsentWindow(w, next);
   w.bump();
   await w.event('proposal_amended', 'facilitator', { stepId: step.id, round: step.round + 1, statement });
   w.post({ purpose: 'put_again', key: `${step.id}:${String(step.round + 1)}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: texts(w.f.language).putAgain(statement) });
@@ -480,8 +518,10 @@ export async function putAgain(w: Work, statement: string): Promise<void> {
 
 // ── inbound ─────────────────────────────────────────────────────────────────
 
+const WITHDRAW_CONSENT = /^(?:i withdraw(?: my consent)?|withdraw(?: my consent)?|ich ziehe (?:meine zustimmung )?zurück|zustimmung zurückziehen)$/u;
+
 /** A message that is a ballot in the announced format, from first to last character. */
-const ballots: InboundHandler = async ({ w, record, author, retired }) => {
+const ballots: InboundHandler = async ({ w, record, author, retired, command }) => {
   if (w.f.phase !== 'active' || !author) return undefined;
   if (record.kind !== 'created' && record.kind !== 'edited') return undefined;
   // A quoted or forwarded ballot is not the sender's ballot.
@@ -489,6 +529,19 @@ const ballots: InboundHandler = async ({ w, record, author, retired }) => {
   if (!(await writtenAfterStart(w, record))) return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) return undefined;
+  // A consent may be withdrawn until the window ends (spec 5.5, 5.7).
+  if (step.method === 'consent' && record.kind === 'created' && WITHDRAW_CONSENT.test(command)) {
+    const all = (await store.listContributions(w.tx, w.f.id, step.id)).filter((c) => c.participantPrincipal === author.principalId && c.round === step.round && c.status === 'valid' && ballotOf(c) !== undefined);
+    // Only a standing consent can be withdrawn; with it go the person's
+    // earlier answers of the round, so no lifted objection comes back.
+    const latest = all.at(-1);
+    const own = latest?.kind === 'confirmation' ? all : [];
+    for (const c of own) await store.patchContribution(w.tx, c.id, { status: 'withdrawn' });
+    if (own.length === 0) return undefined;
+    w.bump();
+    await w.event('consent_withdrawn', author.principalId, { stepId: step.id, round: step.round, messageId: record.messageId });
+    return { outcome: 'consent_withdrawn' };
+  }
   const participants = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
   // A ballot is read without the mention it starts with ("Mona (Test) A"):
   // the mention says who is spoken to, the rest is the ballot.
@@ -556,6 +609,17 @@ export function installDecisionMethods(): void {
   onHeldDecisionRetry(async (w) => {
     await advance(w, 'contribution');
   });
+  // A facilitation of one consent step opens that step with the handshake,
+  // not through the agenda: its window starts there too.
+  onOpened(async (w) => {
+    const step = await store.openStepOf(w.tx, w.f.id);
+    if (step?.method === 'consent' && step.roundDeadline === null) await startConsentWindow(w, step);
+  });
+  registerJobHandler('consent_window', async (w, job) => {
+    const step = await store.openStepOf(w.tx, w.f.id);
+    if (!step || step.id !== job.payload['stepId'] || step.round !== job.payload['round']) return;
+    await advance(w, 'contribution');
+  });
 
   // A ballot read from free text counts once its author confirmed it.
   ackResolvers['contribution'] = async (w, ack, author, record, confirmed) => {
@@ -577,6 +641,18 @@ export function installDecisionMethods(): void {
     const ballot = contribution ? ballotOf(contribution) : undefined;
     if (!contribution || !ballot || !waitingStep) return;
     await countBallot(w, { record, author, step: waitingStep, ballot, interpreted: false }, contribution, await store.listParticipants(w.tx, w.f.id), ack.createdAt);
+  };
+
+  // A contribution somebody imported for this person: it counts once they
+  // confirmed it in their own message (spec 5.3).
+  ackResolvers['import'] = async (w, ack, author, record, confirmed) => {
+    await resolveImport(w, ack, author, record.messageId, confirmed, async (contribution, step) => {
+      const ballot = ballotOf(contribution);
+      if (!ballot) return;
+      // One ballot per person and round: a ballot the person cast themselves
+      // after the import was recorded stands.
+      await countBallot(w, { record, author, step, ballot, interpreted: false }, contribution, await store.listParticipants(w.tx, w.f.id), ack.createdAt);
+    });
   };
 
   // The named person says yes or no in their own message.

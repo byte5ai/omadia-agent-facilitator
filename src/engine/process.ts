@@ -12,10 +12,10 @@ import * as store from '../db/store.js';
 import type { Cluster, Contribution, Facilitation, Participant, Proposal, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { voteCardFits } from './cards.js';
-import { recordContribution, writtenAfterStart } from './contributions.js';
+import { recordContribution, recordParts, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
-import { advance, castBallots, conclude, setAfterStepDecided } from './decide.js';
+import { advance, castBallots, conclude, setAfterStepDecided, startConsentWindow } from './decide.js';
 import { PRIORITY, isNo, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
@@ -52,7 +52,13 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
   const t = texts(w.f.language);
   const steps = await store.listSteps(w.tx, w.f.id);
   const until = step.timeboxMinutes ? new Date(w.now.getTime() + step.timeboxMinutes * MINUTE_MS) : null;
-  const opened = (await store.patchStep(w.tx, step.id, { status: 'open', openedAt: w.now, timeboxEndsAt: until })) ?? step;
+  // A step that ran before and waited (for a repeat, spec 5.7) resumes.
+  const resumed = step.openedAt !== null;
+  const opened = await startConsentWindow(w, (await store.patchStep(w.tx, step.id, { status: 'open', openedAt: w.now, timeboxEndsAt: until })) ?? step);
+  // A runoff that waited keeps its end, and gets its job back.
+  if (resumed && opened.method !== null && opened.method !== 'consent' && opened.round > 1 && opened.roundDeadline) {
+    await scheduleJob(w, 'runoff_deadline', `${step.id}:${opened.roundDeadline.toISOString()}:resumed:${w.now.toISOString()}`, opened.roundDeadline, { stepId: step.id });
+  }
   if (until) await scheduleJob(w, 'timebox_end', `${step.id}:${until.toISOString()}`, until, { stepId: step.id });
   w.bump();
   await w.event('step_opened', 'engine', { stepId: step.id, position: step.position, title: step.title, kind: step.kind });
@@ -71,7 +77,7 @@ export async function openStep(w: Work, step: Step): Promise<Step> {
   if (needsOptions(opened) || !(await voteCardFits(w, opened))) {
     w.post({
       purpose: 'step_opened',
-      key: step.id,
+      key: resumed ? `${step.id}:resumed:${w.now.toISOString()}` : step.id,
       to: 'group',
       deliveryClass: 'essential',
       requiredPhases: ['active'],
@@ -351,9 +357,27 @@ const collecting: InboundHandler = async ({ w, record, author, command, retired 
   // A bare yes or no answers something; it is not a point to collect.
   if (isYes(command) || isNo(command)) return undefined;
   if (addressesProcess(record, facilitatorName(w.f))) return undefined;
+  const points = pointsOf(text);
+  if (points.length > 1) {
+    // Several points as a list in one message (spec 5.3, criterion 50): one
+    // contribution per point, each a part of the message.
+    await recordParts(w, { record, author, step, interpreted: false, parts: points.map((point) => ({ kind: 'idea', payload: { text: point }, summary: point })) });
+    return { outcome: 'collected' };
+  }
   await recordContribution(w, { record, author, step, kind: 'idea', payload: { text }, summary: text, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'collected' };
 };
+
+const LIST_ITEM = /^\s*(?:[-*•–]|\d{1,2}[.)])\s+(.+)$/u;
+
+/** The points of a message written as a list ("- a", "1. b", one per line).
+ *  A message that is not a list is one point. */
+export function pointsOf(text: string): string[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  const items = lines.map((l) => LIST_ITEM.exec(l)?.[1]?.trim());
+  if (lines.length < 2 || items.some((item) => item === undefined || item === '')) return [text];
+  return items as string[];
+}
 
 /** Methods whose ballot is a choice between announced options. Consent and
  *  assignment are answered in free words, which the facilitator reads. */

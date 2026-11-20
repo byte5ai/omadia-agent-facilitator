@@ -12,7 +12,8 @@ import { formatWhen, texts } from '../texts/index.js';
 import { cancelOpenRequests } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
-import { conclude, onClosed } from './decide.js';
+import { conclude, onClosed, startConsentWindow } from './decide.js';
+import { latestRepeatOf, repeatStep } from './repeats.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake, announceVote } from './lifecycle.js';
 import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
@@ -151,8 +152,13 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
     case 'reminders':
       return openProposal(w, { ...base, kind: 'change', summary: t.change.reminders(t.reminderTimes(change.offsetsHours)), payload: { type: change.type, offsetsHours: change.offsetsHours } });
     case 'method': {
-      const step = await store.getStep(w.tx, change.stepId);
-      if (!step || step.status === 'closed') throw new Refusal('bad_input', 'That step is not open or still to come.');
+      const named = await store.getStep(w.tx, change.stepId);
+      if (!named) throw new Refusal('bad_input', 'There is no such step.');
+      // A step that was repeated is changed through its latest repeat: an
+      // open repeat changes in place, a closed one is repeated in turn.
+      const step = latestRepeatOf(await store.listSteps(w.tx, w.f.id), named);
+      // A closed step is never re-opened (spec 5.7): the change repeats it.
+      const repeat = step.status === 'closed';
       const methodConfig = {
         ...step.methodConfig,
         ...(change.method === 'ranked' ? { points: change.points ?? step.methodConfig['points'] ?? [...w.config.rankedPoints] } : {}),
@@ -162,8 +168,8 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
       return openProposal(w, {
         ...base,
         kind: 'change',
-        summary: t.change.method(step.title, rules),
-        payload: { type: change.type, stepId: step.id, method: change.method, options: change.options, methodConfig, rules },
+        summary: repeat ? t.change.method_repeat(step.title, rules) : t.change.method(step.title, rules),
+        payload: { type: change.type, stepId: step.id, method: change.method, options: change.options, methodConfig, rules, ...(repeat ? { repeat: true } : {}) },
       });
     }
   }
@@ -202,8 +208,12 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
     }
     case 'method': {
       const step = await store.getStep(w.tx, String(payload['stepId']));
-      if (!step || step.status === 'closed') return;
+      if (!step) return;
       const next = { method: payload['method'] as MethodId, options: payload['options'] as StepOption[] };
+      if (step.status === 'closed') {
+        await repeatStep(w, step, { ...next, methodConfig: payload['methodConfig'] as Record<string, unknown> });
+        return;
+      }
       // Contributions stay valid unless the change affects them.
       const affected = ballotsFit(step, next)
         ? []
@@ -215,6 +225,8 @@ async function applyChange(w: Work, proposal: Proposal): Promise<void> {
       // A changed question is put to the group again: a card of the old one
       // is replaced by a new version.
       const changed = await store.getStep(w.tx, step.id);
+      // A consent decision gets its window anew (spec 5.7).
+      if (changed?.status === 'open' && changed.method === 'consent') await startConsentWindow(w, changed);
       if (changed?.status === 'open') await announceVote(w, changed);
       if (affected.length > 0) {
         const participants = await store.listParticipants(w.tx, w.f.id);

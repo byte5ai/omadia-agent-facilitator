@@ -18,7 +18,11 @@ export const de: Texts = {
   echoChanged: (name, summary) => `Für dich geändert, ${name}: ${summary}`,
   echoConfirmed: (name, summary) => `Bestätigt, ${name}: ${summary}`,
   echoDeclined: (name) => `Verstanden, ${name}: Ich habe das nicht erfasst.`,
+  importPending: (name, by, summary, origin) =>
+    `${name}, ${by} hat das für dich aus ${origin} erfasst: ${summary}. Es zählt erst, wenn du es selbst bestätigst: antworte auf diese Nachricht mit "ja" oder "nein".`,
   echoWithdrawn: (name) => `${name}, du hast deine Nachricht gelöscht, deshalb habe ich den Beitrag daraus zurückgezogen.`,
+  whichProcess: (name, processes) =>
+    `${name}, hier laufen mehrere Moderationen, und ich kann nicht erkennen, welche du meinst. Bitte antworte direkt auf eine Nachricht dieser einen:\n${processes.map((p) => `- ${p}`).join('\n')}`,
   whichConfirmation: (name, open) =>
     `${name}, mehrere Dinge warten auf deine Bestätigung. Antworte bitte direkt auf das, was du meinst:\n${open.map((o) => `- ${o}`).join('\n')}`,
 
@@ -178,7 +182,7 @@ export const de: Texts = {
     media_consent: (what) => what,
   },
   proposalAnnounce: (what, until, extendable, mustReply) =>
-    `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht, oder sofort, wenn alle zugestimmt haben. ${mustReply ? 'Antwortet auf diese Nachricht mit' : 'Schreibt'} "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.${mustReply ? ' Nur eine Antwort auf diese Nachricht (oder ein 👍 darauf) zählt dafür.' : ''}`,
+    `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht. ${mustReply ? 'Antwortet auf diese Nachricht mit' : 'Schreibt'} "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.${mustReply ? ' Nur eine Antwort auf diese Nachricht (oder ein 👍 darauf) zählt dafür.' : ''}`,
   proposalAccepted: (what) => `Angenommen, niemand hat widersprochen: ${what}`,
   proposalRejected: (what, objections) =>
     `Nicht angenommen: ${what}\n${objections.length === 1 ? 'Stehender Einwand' : 'Stehende Einwände'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,
@@ -222,7 +226,7 @@ export const de: Texts = {
     ].join('\n'),
   actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
   actionLine: (number, description, owner, due, status) => `#${String(number)} ${description} (${owner}, fällig ${due}): ${status}`,
-  actionStatusWords: { proposed: 'wartet auf die verantwortliche Person', confirmed: 'offen', done: 'erledigt', declined: 'abgelehnt' },
+  actionStatusWords: { proposed: 'wartet auf die verantwortliche Person', confirmed: 'offen', done: 'erledigt', declined: 'abgelehnt', void: 'gilt nicht mehr' },
   notAccepted: (number, description, owner) => `#${String(number)} ${description}: vorgeschlagen für ${owner}, nicht angenommen`,
   lateAcceptance: (owner, number, description) =>
     `Danke, ${owner}. Das Ergebnis stand schon fest, als du zugesagt hast. #${String(number)} ${description} bleibt deshalb ein offener Punkt im Protokoll und wird nicht nachverfolgt. Dafür kannst du eine neue Moderation starten.`,
@@ -248,7 +252,9 @@ export const de: Texts = {
     version: 'Version',
     agenda: 'Agenda',
     decisions: 'Entscheidungen',
+    decisionStatus: { valid: '', pending_repeat: 'offen bis zum Abschluss der Wiederholung', replaced: 'durch die Wiederholung ersetzt', void: 'gilt nicht mehr' } as Record<string, string>,
     rationale: 'Begründung',
+    imported: (origin, by) => `von ${by} aus ${origin} übernommen, bestätigt`,
     clusters: 'Von der Gruppe bestätigte Cluster',
     summaries: 'Von der Gruppe bestätigte Zusammenfassungen',
     contributions: 'Beiträge',
@@ -347,6 +353,7 @@ export const de: Texts = {
       ...(s.options ? [`Optionen: ${s.options}`] : []),
       ...(s.tally ? [`${s.provisional ? 'Vorläufiger Stand' : 'Stand'}: ${s.tally}`] : []),
       ...(s.proposal ? [`Offener Vorschlag: ${s.proposal}`] : []),
+      ...(s.imports === undefined ? [] : [`Übernommen, wartet auf die eigene Bestätigung: ${typeof s.imports === 'number' ? String(s.imports) : s.imports.join('; ')}`]),
       s.deadline ? `Deadline: ${s.deadline}` : 'Deadline: keine',
     ].join('\n'),
 
@@ -360,6 +367,8 @@ export const de: Texts = {
     close_rule: (rule) =>
       rule === 'at_deadline' ? 'zur Deadline auswerten statt sobald alle beigetragen haben' : 'auswerten, sobald alle beigetragen haben, statt zur Deadline',
     method: (title, rules) => `ändern, wie "${title}" entschieden wird. ${rules}`,
+    method_repeat: (title, rules) =>
+      `den abgeschlossenen Schritt "${title}" als neuen Schritt wiederholen, entschieden so: ${rules} Die früheren Beiträge zählen darin nicht; sein Ergebnis bleibt im Protokoll, bis die Wiederholung es ersetzt.`,
     reminders: (times) => (times === '' ? 'vor der Deadline nicht mehr erinnern' : `${times} vor der Deadline erinnern`),
     dod_met: (summary) => `die Definition of Done ist erfüllt, und wir schließen damit ab:\n${summary}`,
   },
@@ -372,6 +381,13 @@ export const de: Texts = {
     reminders: (times) => (times === '' ? 'Vor der Deadline wird nicht mehr erinnert.' : `Erinnert wird jetzt ${times} vor der Deadline.`),
   },
   actAgain: (names) => `Beiträge nach den alten Regeln passen nicht mehr. Bitte tragt noch einmal bei: ${names}.`,
+  repeatTitle: (title) => `${title} (Wiederholung)`,
+  repeatOpened: (title) =>
+    `"${title}" wird mit den neuen Regeln als neuer Schritt wiederholt. Beiträge zum früheren Schritt zählen darin nicht. Was aus seinem Ergebnis folgte, ist offen, bis die Wiederholung abgeschlossen ist.`,
+  pendingRepeat: (names, title) => `${names}: Was ihr übernommen habt, hängt an "${title}" und ist offen, bis die Wiederholung abgeschlossen ist.`,
+  repeatClosed: (title, holds) =>
+    holds ? `Die Wiederholung von "${title}" ist mit demselben Ergebnis abgeschlossen. Was daraus folgte, gilt weiter.` : `Die Wiederholung von "${title}" ist mit einem anderen Ergebnis abgeschlossen, das das frühere ersetzt. Was aus dem früheren Ergebnis folgte, gilt nicht mehr.`,
+  actionVoid: (owner, number, description) => `${owner}, Aufgabe #${String(number)} (${description}) gilt nach der Wiederholung nicht mehr.`,
 
   // ── Operator, Kontingente, Aufbewahrung ──────────────────────────────────
   system: {

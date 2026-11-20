@@ -7,7 +7,7 @@ import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import * as store from '../src/db/store.js';
 import { de } from '../src/texts/de.js';
 import { en } from '../src/texts/en.js';
-import { ANNA, BERT, FOUR, createHarness } from './harness.js';
+import { ANNA, BERT, FOUR, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -81,6 +81,7 @@ async function followUp(conv: string, items: number): Promise<void> {
   await tool(conv, 'facilitation_step', { action: 'close' });
   await tool(conv, 'facilitation_step', { action: 'close' });
   for (const who of ['anna', 'bert']) await say(conv, who, 'agreed');
+  await passWindow(h, conv);
   assert.equal((await h.facilitation(conv)).followupState, 'active');
 }
 
