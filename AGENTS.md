@@ -93,3 +93,30 @@ byte5ai/omadia `docs/adr/`.
   `unverifiable` (24 h after the window: result `not confirmed`, reason
   "participants could not be verified"). The closing procedure (#2064) calls
   it; it never tells the group itself.
+
+## Working modes (spec 2043 §2.3; byte5ai/omadia#2060)
+
+- 2026-11-20: the manifest no longer omits `persona_skill`. A working mode adds a moderation
+  method; the kernel refuses a mode that would replace the facilitator's identity and composes
+  every mode beneath the identity and the neutrality contract. ADR in byte5ai/omadia
+  `docs/adr/` ("working modes for facilitators").
+
+## Per-facilitator defaults (spec 2043 §5.6, §7; byte5ai/omadia#2066)
+
+- 2026-11-20: default methods, points per rank and reminder offsets are archetype agent
+  settings: declared in `archetype.agent_settings`, stored per agent by the kernel, edited on
+  the facilitator's page, handed to the engine as `AgentProfile.archetypeSettings`
+  (`facilitatorConfig` in `src/config.ts`). They sit over the instance setup fields, which
+  stay the default; an invalid value is ignored and logged.
+- The engine keeps no copy of the settings. A facilitation stores what it started with
+  (`reminderPolicy.baseHours`, `settings.rankedPoints`, `settings.defaultDecisionMethod`), so a
+  later change of the facilitator's defaults does not change a running facilitation, and a
+  deadline change derives the reminders from the facilitator's offsets again.
+
+## Readiness per channel identity (byte5ai/omadia#2066, review change 2026-11-18)
+
+- A facilitator is ready in a conversation when it has its own identity on that
+  conversation's channel; Teams installation and RSC are checked only for Teams.
+- The simulated transport (`tests/fakeKernel.ts`) takes a channel type and per-agent
+  identities; `tests/fieldScenarioChannels.test.ts` runs the field scenario on Slack, Discord
+  and Telegram without Teams.
