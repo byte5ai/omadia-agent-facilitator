@@ -34,9 +34,11 @@ import { formatWhen, texts } from '../texts/index.js';
 import { recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
-import { recordBallot, roundOptions, withoutTakenItems } from './decide.js';
+import { conclude, recordBallot, roundOptions, setResultAnswers, withoutTakenItems } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
-import { rulesOf } from './lifecycle.js';
+import { DONE_WHEN_ALL, rulesOf } from './lifecycle.js';
+import { everybodyKnown } from './roll.js';
+import { registerContextSection } from './turn.js';
 
 /** The one question of a card that puts a step to the vote. */
 export const VOTE_QUESTION = 'vote';
@@ -531,7 +533,7 @@ export interface QuestionnaireQuestion {
  * note): one submission per person, the newest one counts. Refused where the
  * channel has no cards or not the kind; the question belongs in the chat then.
  */
-export async function postQuestionnaire(w: Work, input: { title: string; intro?: string; questions: QuestionnaireQuestion[] }): Promise<QuestionCard> {
+export async function postQuestionnaire(w: Work, input: { title: string; intro?: string; questions: QuestionnaireQuestion[]; closesWhenAllAnswered?: boolean }): Promise<QuestionCard> {
   if (w.f.phase !== 'configuring' && w.f.phase !== 'active') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
   const support = cardSupport(w.engine, w.f.channelType);
   if (!support) throw new Refusal('no_cards', 'This channel has no question cards. Ask the question in the chat instead. Nothing was posted.');
@@ -566,8 +568,12 @@ export async function postQuestionnaire(w: Work, input: { title: string; intro?:
   // One questionnaire at a time: asking again replaces the one that is open.
   await closeCards(w, earlier, 'superseded', [t.card.supersededQuestionnaire]);
   const version = earlier.reduce((max, c) => Math.max(max, c.proposalVersion), 0) + 1;
+  const cardId = `q-${w.f.id}-v${String(version)}`;
+  // Whether the facilitation ends with this card is said for each card anew.
+  const { questionnaireCloses: _before, ...settings } = w.f.settings;
+  if (input.closesWhenAllAnswered === true || _before !== undefined) await w.patch({ settings: input.closesWhenAllAnswered === true ? { ...settings, questionnaireCloses: cardId } : settings });
   return sendCard(w, {
-    cardId: `q-${w.f.id}-v${String(version)}`,
+    cardId,
     stepId: null,
     round: 1,
     purpose: QUESTIONNAIRE,
@@ -582,38 +588,113 @@ export async function postQuestionnaire(w: Work, input: { title: string; intro?:
   });
 }
 
-const readQuestionnaire: CardAnswerReader = async (w, { card, answers, record, verified }) => {
-  // On record either way; only a verified submission is read back.
-  await w.event('questionnaire_answer', principalKey(record.author), { cardId: card.cardId, verified, answers: [...answers.values()] });
-  return { outcome: verified ? 'card_answer' : 'card_answer_unverified' };
-};
+/** One answer in words: the label of what was chosen, the text, the value. */
+function answerInWords(question: CardQuestion, answer: CardAnswerValue): string {
+  const label = (id: string): string => ('options' in question ? question.options.find((o) => o.id === id)?.label : undefined) ?? id;
+  if (answer.kind === 'single_choice') return label(answer.optionId);
+  if (answer.kind === 'multiple_choice') return answer.optionIds.map(label).join(', ');
+  if (answer.kind === 'text') return answer.text.trim();
+  return answer.kind === 'number' || answer.kind === 'date' ? String(answer.value) : '';
+}
 
-/** What the group answered on the latest questionnaire, for the facilitator. */
-export async function questionnaireAnswers(q: Queryable, f: Facilitation): Promise<string> {
+interface QuestionnaireState {
+  card: CardRow;
+  active: Participant[];
+  /** The newest verified submission per person. */
+  latest: Map<string, CardAnswerValue[]>;
+  /** One line per question: the count per option, or what each person gave. */
+  lines: string[];
+}
+
+/** The latest questionnaire of a facilitation and what was answered on it. */
+async function questionnaireState(q: Queryable, f: Facilitation): Promise<QuestionnaireState | undefined> {
   const card = (await store.listCards(q, f.id)).filter((c) => c.purpose === QUESTIONNAIRE).at(-1);
-  if (!card) throw new Refusal('no_questionnaire', 'No questionnaire was posted in this facilitation.');
-  const participants = (await store.listParticipants(q, f.id)).filter((p) => p.status === 'active');
+  if (!card) return undefined;
+  const active = (await store.listParticipants(q, f.id)).filter((p) => p.status === 'active');
   const latest = new Map<string, CardAnswerValue[]>();
   for (const event of await store.listEvents(q, f.id, ['questionnaire_answer'])) {
     if (event.payload['cardId'] !== card.cardId || event.payload['verified'] !== true) continue;
     // The newest submission of a person replaces the earlier one.
     latest.set(event.actor, event.payload['answers'] as CardAnswerValue[]);
   }
-  const name = (principal: string): string => participants.find((p) => p.principalId === principal)?.displayName ?? texts(f.language).unnamedPerson;
+  const name = (principal: string): string => active.find((p) => p.principalId === principal)?.displayName ?? texts(f.language).unnamedPerson;
   const lines = card.card.questions.map((question) => {
     const given = [...latest].flatMap(([principal, answers]) => answers.filter((a) => a.questionId === question.id).map((a) => ({ principal, a })));
     if ('options' in question && (question.kind === 'single_choice' || question.kind === 'multiple_choice')) {
       const chosen = given.flatMap(({ a }) => (a.kind === 'single_choice' ? [a.optionId] : a.kind === 'multiple_choice' ? [...a.optionIds] : []));
       return `${question.label}: ${question.options.map((o) => `${o.label} ${String(chosen.filter((id) => id === o.id).length)}`).join(', ')}`;
     }
-    const said = given.map(({ principal, a }) => `${name(principal)}: ${a.kind === 'text' ? a.text.trim() : a.kind === 'number' || a.kind === 'date' ? String(a.value) : ''}`);
+    const said = given.map(({ principal, a }) => `${name(principal)}: ${answerInWords(question, a)}`);
     return `${question.label}: ${said.length > 0 ? said.join('; ') : 'no answer yet'}`;
   });
-  return [`"${card.card.title}": ${String(latest.size)} of ${String(participants.length)} participants answered${card.state === 'open' ? '' : ' (the card is closed)'}.`, ...lines].join('\n');
+  return { card, active, latest, lines };
+}
+
+/**
+ * Whether the facilitation is over once everybody answered this card: the
+ * facilitator said so when it posted the card, or the facilitation is one
+ * open step without a vote whose definition of done says "everybody answered".
+ */
+async function endsWithQuestionnaire(w: Work, card: CardRow): Promise<boolean> {
+  if (w.f.settings.questionnaireCloses === card.cardId) return true;
+  const dod = await store.currentDod(w.tx, w.f.id);
+  if (!dod || dod.criteria !== null || !DONE_WHEN_ALL.test(dod.text)) return false;
+  const steps = await store.listSteps(w.tx, w.f.id);
+  return steps.length === 1 && steps[0]?.method === null;
+}
+
+/** Everybody answered the card the facilitation is for: it closes with the
+ *  answers as its result, without a turn of the facilitator. */
+async function concludeWhenAllAnswered(w: Work, card: CardRow): Promise<void> {
+  if (w.f.phase !== 'active' || !everybodyKnown(w.f) || !(await endsWithQuestionnaire(w, card))) return;
+  const state = await questionnaireState(w.tx, w.f);
+  if (!state || state.card.cardId !== card.cardId || state.active.length === 0 || !state.active.every((p) => state.latest.has(p.principalId))) return;
+  await w.event('questionnaire_complete', 'engine', { cardId: card.cardId, answered: state.latest.size });
+  await closeCards(w, [card], 'closed', state.lines);
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
+  w.bump();
+  await conclude(w, { atDeadline: false });
+}
+
+const readQuestionnaire: CardAnswerReader = async (w, { card, answers, record, author, verified }) => {
+  // On record either way; only a verified submission is read back.
+  await w.event('questionnaire_answer', principalKey(record.author), { cardId: card.cardId, verified, answers: [...answers.values()] });
+  // In a step without a vote the answer is that person's contribution: the
+  // status counts it, nobody is invited who already answered, and the person
+  // reads what was taken over ("15min" is 15). Next to a vote it is not: who
+  // answered a questionnaire has not voted.
+  const step = w.f.phase === 'active' ? await store.openStepOf(w.tx, w.f.id) : undefined;
+  if (step && step.method === null) {
+    const summary = card.card.questions.flatMap((q) => { const a = answers.get(q.id); return a ? [`${q.label}: ${answerInWords(q, a)}`] : []; }).join('; ');
+    await recordContribution(w, { record: ownRecord(record, false), author, step, kind: 'position', payload: { questionnaire: card.cardId }, summary, interpreted: !verified, source: 'card' });
+    if (verified) await concludeWhenAllAnswered(w, card);
+  }
+  return { outcome: verified ? 'card_answer' : 'card_answer_unverified' };
+};
+
+/** What the group answered on the latest questionnaire, for the facilitator. */
+export async function questionnaireAnswers(q: Queryable, f: Facilitation): Promise<string> {
+  const state = await questionnaireState(q, f);
+  if (!state) throw new Refusal('no_questionnaire', 'No questionnaire was posted in this facilitation.');
+  return [`"${state.card.card.title}": ${String(state.latest.size)} of ${String(state.active.length)} participants answered${state.card.state === 'open' ? '' : ' (the card is closed)'}.`, ...state.lines].join('\n');
 }
 
 export function installCardReaders(): void {
   registerCardReader('vote', readVote);
   registerCardReader('ideas', readIdea);
   registerCardReader(QUESTIONNAIRE, readQuestionnaire);
+  // The answers are part of the result, and of what a turn knows.
+  setResultAnswers(async (w) => {
+    const state = await questionnaireState(w.tx, w.f);
+    return state && state.card.state !== 'superseded' && state.latest.size > 0 ? state.lines : [];
+  });
+  registerContextSection(async (q, f) => {
+    const state = await questionnaireState(q, f);
+    if (!state || state.card.state === 'superseded') return undefined;
+    return [
+      '# Questionnaire (the latest card and its answers, as the engine holds them; you need no tool call to read them)',
+      await questionnaireAnswers(q, f),
+      ...(f.settings.questionnaireCloses === state.card.cardId ? ['The engine closes the facilitation by itself, with these answers as the result, as soon as every participant has answered.'] : []),
+    ].join('\n');
+  });
 }

@@ -19,6 +19,7 @@ export function cardTools(engine: FacilitationEngine): ToolDefinition[] {
           'Put up to five structured questions to the group on ONE card, where the channel has cards: each person answers once, the newest answer counts. For what you need to know from everybody before or during a facilitation (which day suits, how many people, a short note). NOT for a vote or a decision: those are steps of the facilitation, and the engine posts their card itself. Posting a new questionnaire replaces the one that is open. Refused where the channel has no cards or not the kind of question; ask in the chat then. Read the answers with facilitation_questionnaire_answers.',
         properties: {
           title: { type: 'string' },
+          closesWhenAllAnswered: { type: 'boolean', description: 'true when this questionnaire is what the facilitation is for (a survey, "ask everybody X"): as soon as every participant has answered, the engine closes the card and the facilitation by itself, with the answers as the result; you do not evaluate or close anything then. Leave it out when the answers only feed a later step or a vote.' },
           intro: { type: 'string', description: 'One line under the title.' },
           questions: {
             type: 'array',
@@ -55,8 +56,8 @@ export function cardTools(engine: FacilitationEngine): ToolDefinition[] {
         });
         const intro = optionalString(args, 'intro');
         return engine.core.work(f.id, async (w) => {
-          const card = await postQuestionnaire(w, { title: requiredString(args, 'title'), ...(intro ? { intro } : {}), questions });
-          return `Posted as a card with ${String(card.questions.length)} question${card.questions.length === 1 ? '' : 's'}. Do not repeat the questions in the chat. Read what people answered with facilitation_questionnaire_answers.`;
+          const card = await postQuestionnaire(w, { title: requiredString(args, 'title'), ...(intro ? { intro } : {}), questions, ...(args['closesWhenAllAnswered'] === true ? { closesWhenAllAnswered: true } : {}) });
+          return `Posted as a card with ${String(card.questions.length)} question${card.questions.length === 1 ? '' : 's'}. Do not repeat the questions in the chat. ${args['closesWhenAllAnswered'] === true ? 'The facilitation closes by itself, with the answers as the result, once everybody answered.' : 'The answers are in the state of your next turn; facilitation_questionnaire_answers reads them as well.'}`;
         });
       },
     ),

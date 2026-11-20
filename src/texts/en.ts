@@ -11,6 +11,8 @@ export interface ResultInput {
   actions?: string[];
   /** Open points from the parking lot. */
   open?: string[];
+  /** What the group answered on its questionnaire, one line per question. */
+  answers?: string[];
   /** Set when the deadline closed it before everybody contributed. */
   atDeadline?: { contributed: number; of: number };
 }
@@ -122,6 +124,7 @@ export const en = {
     [
       `Result for "${r.goal}":`,
       ...r.decisions.map((d) => `- ${d}`),
+      ...(r.answers && r.answers.length > 0 ? ['Answers:', ...r.answers.map((a) => `- ${a}`)] : []),
       ...(r.actions && r.actions.length > 0 ? ['Next steps:', ...r.actions.map((a) => `- ${a}`)] : []),
       ...(r.open && r.open.length > 0 ? ['Open points:', ...r.open.map((o) => `- ${o}`)] : []),
       ...(r.atDeadline ? [`The deadline has passed; ${String(r.atDeadline.contributed)} of ${String(r.atDeadline.of)} contributed, and this is the result of what was contributed.`] : []),

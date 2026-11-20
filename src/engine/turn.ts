@@ -86,6 +86,7 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
     '- To record what a person said, call facilitation_record_contribution with the message id from the input. It records it for the AUTHOR of that message only and asks them to confirm; it does not count before they did. You cannot record anything for somebody else.',
     '- If a message is unclear, call facilitation_clarify once for that message.',
     '- Never name in the group who has not contributed.',
+    '- When somebody asks to evaluate, finish or close the facilitation: what was answered and contributed is in the state above, so do not read it with tools first. On a free-text definition of done call facilitation_close, once; it needs no step closed before. Then answer with at most one short line: the engine posts the result.',
     '- When somebody asks what is being decided, which options there are or how to answer, say it from the state above: the question and every option with its key, as listed there. Never answer that you do not know them while they are listed.',
     `- If nothing needs to be said, answer exactly ${SILENT}. Your answer is posted to the group as it is, unless a tool you called in this turn already posted there: then your answer is not posted.`,
   );

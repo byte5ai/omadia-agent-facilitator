@@ -78,7 +78,7 @@ export const SCOPE_BUDGETS: Readonly<Record<ExecutionScopeKind, ExecutionBudget>
 
 /** Model calls reserved for one facilitator turn (main model, helpers and
  *  guards). The reservation is a hard cap of the kernel. */
-export const TURN_MODEL_CALLS = 6;
+export const TURN_MODEL_CALLS = 8;
 
 /** How long after the agreed time a scope stays open, so that the engine's
  *  own evaluation at that time (the result, a runoff) is still inside it. */

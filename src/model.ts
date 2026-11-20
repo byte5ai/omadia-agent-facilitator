@@ -94,6 +94,9 @@ export interface FollowupMeetingPlan {
 }
 
 export interface FacilitationSettings {
+  /** The questionnaire card the facilitation is for: once everybody answered
+   *  it, the engine closes the facilitation with the answers as its result. */
+  questionnaireCloses?: string;
   changeWindowHours: number;
   runoffWindowHours: number;
   confirmWindowMinutes: number;
