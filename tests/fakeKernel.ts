@@ -257,7 +257,9 @@ const scopeKey = (s: { agentSlug: string; channelType: string; conversationId: s
   `${s.agentSlug}|${s.channelType}|${s.conversationId}`;
 
 export class FakeKernel {
-  readonly channelType = 'teams';
+  /** The channel this simulated transport is. Teams unless a test names
+   *  another (Slack, Discord, Telegram: spec 2043 §6.4). */
+  readonly channelType: string;
   readonly posts: Post[] = [];
   readonly dms: DirectMessage[] = [];
   readonly turns: ScopedAgentTurnRequest[] = [];
@@ -265,6 +267,11 @@ export class FakeKernel {
   readonly subscriptions = new Set<string>();
   /** Agents without an identity of their own on the channel. */
   readonly noIdentity = new Set<string>();
+  /** Per agent: the channel types it has an identity of its own on. Absent:
+   *  the simulated channel, unless the agent is in {@link noIdentity}. */
+  readonly ownIdentities = new Map<string, string[]>();
+  /** Per agent: the archetype settings the operator set (`AgentProfile.archetypeSettings`). */
+  readonly agentSettings = new Map<string, Record<string, unknown>>();
   /** Per `agent|conversation`: what the readiness check reports missing. */
   readonly notReady = new Map<string, { code: string; message: string }[]>();
   /** `agent|conversation` keys whose missing consent a repair fixes; and the repairs asked for. */
@@ -329,7 +336,28 @@ export class FakeKernel {
   constructor(
     private readonly database: Db | undefined,
     readonly clock: FakeClock,
-  ) {}
+    channelType = 'teams',
+  ) {
+    this.channelType = channelType;
+  }
+
+  /** The channel types the agent has an identity of its own on. */
+  identityChannels(agentSlug: string): string[] {
+    return this.ownIdentities.get(agentSlug) ?? (this.noIdentity.has(agentSlug) ? [] : [this.channelType]);
+  }
+
+  /** Has the agent an identity of its own on the simulated channel? */
+  hasIdentity(agentSlug: string): boolean {
+    return this.identityChannels(agentSlug).includes(this.channelType);
+  }
+
+  /** How the channel names a person and a bot. */
+  private get userKind(): string {
+    return this.channelType === 'teams' ? 'teams-aad' : `${this.channelType}-user`;
+  }
+  private get botKind(): string {
+    return this.channelType === 'teams' ? 'teams-bot' : `${this.channelType}-bot`;
+  }
 
   // ── the simulated channel ────────────────────────────────────────────────
 
@@ -382,7 +410,7 @@ export class FakeKernel {
       channelType: this.channelType,
       conversationId,
       // As the kernel does: channel-native id in original case, principal lower-cased.
-      author: { kind: 'teams-aad', id: user.id, displayName: user.displayName, principalId: `user:${user.id.toLowerCase()}` },
+      author: { kind: this.userKind, id: user.id, displayName: user.displayName, principalId: `user:${user.id.toLowerCase()}` },
       tenantId: 'tenant-1',
       occurredAt: when,
       receivedAt: when,
@@ -490,22 +518,22 @@ export class FakeKernel {
   join(conversationId: string, user: FakeUser, opts: { missed?: boolean } = {}): void {
     this.members.set(conversationId, [...(this.members.get(conversationId) ?? []), user]);
     // `missed`: the channel's membership event never reached the kernel.
-    if (opts.missed !== true) this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-aad', ...user }] });
+    if (opts.missed !== true) this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: this.userKind, ...user }] });
   }
 
   /** Another bot is added to the conversation (a second facilitator, an assistant). */
   joinBot(conversationId: string, id: string, displayName: string): void {
-    this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-bot', id, displayName, isBot: true }] });
+    this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: this.botKind, id, displayName, isBot: true }] });
   }
 
   leave(conversationId: string, userId: string): void {
     const user = this.user(conversationId, userId);
     this.members.set(conversationId, (this.members.get(conversationId) ?? []).filter((m) => m.id !== userId));
-    this.emitMembership({ kind: 'members_removed', conversationId, members: [{ kind: 'teams-aad', ...user }] });
+    this.emitMembership({ kind: 'members_removed', conversationId, members: [{ kind: this.userKind, ...user }] });
   }
 
   private emitMembership(partial: Pick<ConversationMembershipEvent, 'kind' | 'conversationId' | 'members'>): void {
-    const event: ConversationMembershipEvent = { channelId: 'teams-1', channelType: this.channelType, occurredAt: this.clock.now().toISOString(), ...partial };
+    const event: ConversationMembershipEvent = { channelId: `${this.channelType}-1`, channelType: this.channelType, occurredAt: this.clock.now().toISOString(), ...partial };
     for (const listener of [...this.membershipListeners]) listener(event);
   }
 
@@ -542,7 +570,7 @@ export class FakeKernel {
       channelType: this.channelType,
       conversationId,
       callerPrincipalId: `user:${callerId.toLowerCase()}`,
-      callerUserRef: { kind: 'teams-aad', id: callerId, ...(name ? { displayName: name } : {}) },
+      callerUserRef: { kind: this.userKind, id: callerId, ...(name ? { displayName: name } : {}) },
       ...(inboundEventId ? { inboundEventId } : {}),
     };
   }
@@ -893,7 +921,7 @@ export class FakeKernel {
 
   private readonly messagesService: ProcessConversationMessagesService = {
     subscribe: async (scope, options) => {
-      if (this.noIdentity.has(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
+      if (!this.hasIdentity(scope.agentSlug)) return { outcome: 'refused', code: 'no_identity', message: `agent '${scope.agentSlug}' has no identity on ${scope.channelType}` };
       const existing = this.subscriptionOf(scope);
       if (existing?.ended) return { outcome: 'refused', code: 'ended', message: "this process's subscription for the conversation has ended" };
       const refusal = this.subscribeRefusals.get(scope.agentSlug);
@@ -1067,7 +1095,7 @@ export class FakeKernel {
 
   /** The channel's part of a post: faults, cards, the message itself. */
   private async post(agentSlug: string, conversationId: string, message: ScopedConversationSendRequest['message'], processId: string): Promise<{ outcome: 'delivered'; messageId: string; cardMessageId?: string } | { outcome: 'unreachable'; code: string; message: string }> {
-    if (this.noIdentity.has(agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
+    if (!this.hasIdentity(agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
     const fault = this.sendFaults.shift();
     if (fault === 'throw') throw new Error('channel connection reset');
     // A channel call that never answers.
@@ -1126,7 +1154,7 @@ export class FakeKernel {
       if (!principalId) return { outcome: 'unreachable', code: 'not_permitted', message: `'${request.principal}' is not a user principal ('user:<id>')` };
       const granted = this.authorizeSend(request.agentSlug, request.authorization, 'direct_message', { kind: 'person', channelType: request.channelType, principalId });
       if ('outcome' in granted) return granted;
-      if (this.noIdentity.has(request.agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity', authorizationId: granted.authorizationId };
+      if (!this.hasIdentity(request.agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity', authorizationId: granted.authorizationId };
       const blocked = this.dmBlocked.get(request.principal);
       if (blocked) return { outcome: 'unreachable', code: blocked, message: `cannot reach ${request.principal}: ${blocked}`, authorizationId: granted.authorizationId };
       this.dms.push({ as: request.agentSlug, principal: request.principal, text: request.message.text, processId: request.authorization.processId });
@@ -1173,13 +1201,14 @@ export class FakeKernel {
       archetype: 'facilitator',
       displayName: this.names.get(agentSlug) ?? `${agentSlug.charAt(0).toUpperCase()}${agentSlug.slice(1)}`,
       ...(this.languages.has(agentSlug) ? { language: this.languages.get(agentSlug) as string } : {}),
-      ownIdentityChannelTypes: this.noIdentity.has(agentSlug) ? [] : [this.channelType],
+      ownIdentityChannelTypes: this.identityChannels(agentSlug),
+      ...(this.agentSettings.has(agentSlug) ? { archetypeSettings: this.agentSettings.get(agentSlug) } : {}),
     }),
   };
 
   private readinessOf(request: { agentSlug: string; conversationId: string }): ChannelReadinessReport {
     const missing = [
-      ...(this.noIdentity.has(request.agentSlug) ? [{ code: 'no_identity', message: 'the facilitator has no bot of its own' }] : []),
+      ...(!this.hasIdentity(request.agentSlug) ? [{ code: 'no_identity', message: 'the facilitator has no bot of its own' }] : []),
       ...(this.notReady.get(`${request.agentSlug}|${request.conversationId}`) ?? []),
     ];
     const has = (code: string): boolean => missing.some((m) => m.code === code);
@@ -1263,7 +1292,7 @@ export class FakeKernel {
       // can list it as that agent, and only a kernel that knows how.
       if (this.ownBotOnly.has(conversationId)) {
         const asked = this.rosterAsAgent ? opts?.agentSlug : undefined;
-        if (!asked || this.noIdentity.has(asked)) return undefined;
+        if (!asked || !this.hasIdentity(asked)) return undefined;
       }
       const stated = this.rosterStatus.get(conversationId);
       return {
@@ -1271,8 +1300,8 @@ export class FakeKernel {
         partial: stated !== undefined ? stated !== 'complete' : this.partialRosters.has(conversationId),
         ...(stated !== undefined ? { status: stated } : {}),
         participants: [
-          ...members.map((m) => ({ userRef: { kind: 'teams-aad', id: m.id, displayName: m.displayName, ...(m.email ? { email: m.email } : {}) } })),
-          { userRef: { kind: 'teams-bot', id: 'bot', displayName: 'Bot' }, isBot: true },
+          ...members.map((m) => ({ userRef: { kind: this.userKind, id: m.id, displayName: m.displayName, ...(m.email ? { email: m.email } : {}) } })),
+          { userRef: { kind: this.botKind, id: 'bot', displayName: 'Bot' }, isBot: true },
         ],
       };
     }

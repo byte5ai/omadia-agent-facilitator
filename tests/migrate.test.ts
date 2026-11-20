@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, OBSOLETE_CONFIG_KEYS, parseConfig } from '../src/config.js';
+import { CONFIG_KEYS, FACILITATOR_SETTING_KEYS, OBSOLETE_CONFIG_KEYS, parseConfig } from '../src/config.js';
 import { onMigrate, privacyNote } from '../src/plugin.js';
 
 const manifest = readFileSync(join(process.cwd(), 'manifest.yaml'), 'utf8');
@@ -48,7 +48,10 @@ test('the manifest declares the bypass it needs, with the reason', () => {
 });
 
 test('every setting the engine reads is a field of the manifest and documented, and nothing else is', () => {
-  const fields = [...manifest.matchAll(/^ {4}- key: "([a-z_]+)"/gm)].map((m) => m[1] ?? '');
+  // The setup block only: the archetype's per-facilitator settings use the
+  // same shape and are checked below.
+  const setup = manifest.slice(manifest.indexOf('\nsetup:\n'));
+  const fields = [...setup.matchAll(/^ {4}- key: "([a-z_]+)"/gm)].map((m) => m[1] ?? '');
   assert.deepEqual([...fields].sort(), [...CONFIG_KEYS].sort());
   for (const key of CONFIG_KEYS) assert.ok(readme.includes(`\`${key}\``), `README documents ${key}`);
   for (const key of OBSOLETE_CONFIG_KEYS) assert.ok(!fields.includes(key));
@@ -59,4 +62,8 @@ test('every setting the engine reads is a field of the manifest and documented, 
     return undefined;
   });
   assert.deepEqual([...new Set(asked)].sort(), [...CONFIG_KEYS].sort());
+});
+
+test('every per-facilitator setting the engine reads is documented', () => {
+  for (const key of FACILITATOR_SETTING_KEYS) assert.ok(readme.includes(`\`${key}\``), `README documents ${key}`);
 });

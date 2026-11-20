@@ -57,6 +57,24 @@
   window's end, hourly for at most 24 hours, then "participants could not be
   verified".
 
+- **Defaults per facilitator** (byte5ai/omadia#2066, spec 2043 §5.6, §7): the
+  archetype declares `agent_settings` (`default_decision_method`,
+  `default_prioritisation_method`, `ranked_points`, `reminder_offsets_hours`).
+  The operator sets them on the facilitator's page; the engine reads them from
+  the facilitator's profile (`AgentProfile.archetypeSettings`) and puts them
+  over the instance settings, which stay the default. A facilitation stores
+  the offsets its reminders come from, so moving the deadline keeps the
+  facilitator's offsets.
+- **Field scenario without Teams** in the test suite: Slack, Discord and
+  Telegram, each through the facilitator's own identity on that channel; a
+  Teams identity does not make it ready elsewhere.
+
+### Changed
+
+- **Working modes are no longer omitted** (byte5ai/omadia#2060, spec 2043
+  §2.3): `persona_skill` left `archetype.omits`. The kernel accepts modes that
+  add moderation methods and refuses any identity replacement.
+
 ## 1.5.7
 
 ### Changed
