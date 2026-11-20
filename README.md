@@ -150,6 +150,36 @@ All fields are optional; defaults in brackets.
 | `followup_horizon_days` [90] | no follow-up runs longer than this after the close; later due dates are refused when agreed |
 | `protocol_mail_enabled` [false] | mail the protocol of EVERY facilitation through the follow-up integration. Without it a facilitation mails its protocol only when the request asked for it (`protocolByMail` at the start) |
 
+### Per facilitator
+
+On the facilitator's page ("Facilitators", section of this archetype) an
+operator sets defaults for that facilitator alone. The kernel stores them per
+agent (archetype agent settings, declared under `archetype.agent_settings` in
+`manifest.yaml`) and hands them to the engine with the facilitator's profile.
+Every one is optional: unset, the instance field of the same name applies. A
+value that is not valid is ignored and logged; the instance field applies.
+
+| Field | Meaning |
+|---|---|
+| `default_decision_method` | `ranked`, `single`, `approval` or `consent`: the method of a template's deciding step and of a vote that names only its options. A consent step (format alignment) stays consent |
+| `default_prioritisation_method` | `ranked` or `approval`: the method of a template's prioritising step |
+| `ranked_points` | points per rank for this facilitator's ranked votes |
+| `reminder_offsets_hours` | this facilitator's reminders before the deadline; announced in the handshake, and derived again from them when the group moves the deadline |
+
+A facilitation can still state its own reminders, points and method; the group
+decides. A kernel without archetype agent settings (plugin-api older than the
+version that adds `AgentProfile.archetypeSettings`) hands over none, and the
+instance fields apply.
+
+### Working modes
+
+A facilitator can have working modes that add moderation methods (spec 2043
+§2.3), for example a retrospective or a dot-voting technique. The kernel
+refuses a mode that would replace the facilitator's identity, composes every
+mode beneath the identity and the neutrality contract, and never lets a mode
+change who speaks. Earlier versions of this manifest omitted working modes
+altogether (`persona_skill`); that omission is gone.
+
 ### Privacy mode
 
 The kernel adds a privacy mode to every plugin with tools (`_privacy_mode`,
