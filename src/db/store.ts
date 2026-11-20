@@ -47,7 +47,9 @@ export const createFacilitation = (q: Queryable, values: NewFacilitation): Promi
 export const getFacilitation = (q: Queryable, id: string): Promise<Facilitation | undefined> =>
   one<Facilitation>(q, 'SELECT * FROM plg_omadia_agent_facilitator_facilitations WHERE id = $1', [id]);
 
-/** The one facilitation of a conversation that is configuring, active or concluding. */
+/** The one facilitation of a conversation that is configuring, active or
+ *  concluding: its home conversation, or a linked session conversation of
+ *  one of its sessions that is not over (spec 5.3). */
 export const findLiveByConversation = (
   q: Queryable,
   channelType: string,
@@ -55,8 +57,12 @@ export const findLiveByConversation = (
 ): Promise<Facilitation | undefined> =>
   one<Facilitation>(
     q,
-    `SELECT * FROM plg_omadia_agent_facilitator_facilitations
-      WHERE channel_type = $1 AND conversation_id = $2 AND phase IN ('configuring', 'active', 'concluding')`,
+    `SELECT f.* FROM plg_omadia_agent_facilitator_facilitations f
+      WHERE f.channel_type = $1 AND f.phase IN ('configuring', 'active', 'concluding')
+        AND (f.conversation_id = $2
+             OR EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_sessions s
+                         WHERE s.facilitation_id = f.id AND s.conversation_id = $2 AND s.status IN ('scheduled', 'live', 'confirming')))
+      ORDER BY (f.conversation_id = $2) DESC LIMIT 1`,
     [channelType, conversationId],
   );
 

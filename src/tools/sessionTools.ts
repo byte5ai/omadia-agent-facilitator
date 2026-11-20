@@ -3,16 +3,14 @@
 import * as store from '../db/store.js';
 import type { Modality } from '../model.js';
 import { Refusal } from '../engine/core.js';
-import { roundOptions } from '../engine/decide.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
-import { endSession, prepareSessionStart, recordSpoken, scheduleSession, speakingOrder, startSession } from '../engine/sessions.js';
-import { parseBallot, resolvePerson } from '../methods/ballot.js';
+import { endSession, prepareSessionStart, scheduleSession, speakingOrder, startSession } from '../engine/sessions.js';
+import { resolvePerson } from '../methods/ballot.js';
 import { defineTool, liveFacilitation, oneOf, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ToolDefinition } from './toolkit.js';
 
 const MODALITIES: readonly Modality[] = ['online', 'hybrid'];
-const KINDS = ['idea', 'position', 'concern', 'question', 'proposal', 'vote', 'confirmation', 'objection', 'abstention', 'commitment'] as const;
 
 export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
@@ -65,13 +63,15 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
           if (action === 'start') {
             const next = sessions.find((s) => s.status === 'scheduled');
             if (!next) throw new Refusal('no_session', 'No session is scheduled.');
-            await startSession(w, next, prefetched);
+            const started = await startSession(w, next, prefetched?.snapshot, prefetched?.live);
+            // Not thrown: what was said and scheduled about it must stay.
+            if (started.status !== 'live') return 'The session could not go live: its meeting chat is not ready. The group was told what is missing; I try again shortly.';
             return 'The session is running. What can be perceived in it was said in the group.';
           }
           const running = sessions.find((s) => s.status === 'live');
           if (!running) throw new Refusal('no_session', 'No session is running.');
           await endSession(w, running);
-          return 'The session has ended. Follow-up continues in the chat.';
+          return 'The session has ended. Its summary went out in its conversation; where it needs the group\'s confirmation it waits for it.';
         });
       },
     ),
@@ -92,37 +92,5 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
       },
     ),
 
-    defineTool(
-      engine,
-      {
-        name: 'facilitation_record_spoken',
-        description:
-          'Record what a person SAID in the call, from the transcript. Only possible when the session gives transcribed speech and the group consented. It stays unconfirmed: the engine asks the person to confirm in the chat, and it counts only then.',
-        properties: {
-          speaker: { type: 'string', description: 'Name of the participant who said it, as the transcript attributes it.' },
-          kind: { type: 'string', enum: [...KINDS] },
-          summary: { type: 'string', description: 'What they said, in one sentence, in the language of the group.' },
-          ballot: { type: 'string', description: 'While a vote is open: their ballot in the announced format.' },
-        },
-        required: ['speaker', 'kind', 'summary'],
-      },
-      async (args, ctx) => {
-        const f = await liveFacilitation(engine, ctx);
-        const kind = oneOf(args, 'kind', KINDS);
-        if (!kind) throw new Refusal('bad_input', "'kind' is required.");
-        const ballotText = optionalString(args, 'ballot');
-        return engine.core.work(f.id, async (w) => {
-          const step = await store.openStepOf(w.tx, w.f.id);
-          let ballot;
-          if (ballotText !== undefined && step?.method) {
-            const parsed = parseBallot({ method: step.method, options: roundOptions(step), text: ballotText });
-            if (parsed.kind !== 'ballot') throw new Refusal('bad_ballot', `'${ballotText}' is not a valid ballot for this step.`);
-            ballot = parsed.ballot;
-          }
-          const recorded = await recordSpoken(w, { speaker: requiredString(args, 'speaker'), kind, summary: requiredString(args, 'summary'), ...(ballot ? { ballot } : {}) });
-          return `Recorded for ${recorded.speaker.displayName} as unconfirmed. It counts once they confirmed in the chat; they were asked there.`;
-        });
-      },
-    ),
   ];
 }

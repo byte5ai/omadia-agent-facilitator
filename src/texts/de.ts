@@ -434,7 +434,7 @@ export const de: Texts = {
     card_answers: 'die Umfragen',
     presence: 'wer dazukommt und geht',
     hand_raise: 'gehobene Hände',
-    transcribed_speech: 'das im Call Gesagte als Transkript mit Sprecher:in',
+    transcribed_speech: 'das im Call Gesagte als Transkript',
     shared_documents: 'geteilte Dokumente',
     not: {
       transcribed_speech: 'Ich höre den Call nicht',

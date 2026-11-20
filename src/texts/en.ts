@@ -524,7 +524,7 @@ export const en = {
     card_answers: 'the polls',
     presence: 'who joins and leaves',
     hand_raise: 'raised hands',
-    transcribed_speech: 'what is said in the call, as a transcript with the speaker',
+    transcribed_speech: 'what is said in the call, as a transcript',
     shared_documents: 'shared documents',
     not: {
       transcribed_speech: 'I do not hear the call',

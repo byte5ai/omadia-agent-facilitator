@@ -121,6 +121,17 @@ async function record(engine: EngineCore, f: Facilitation, scope: ExecutionScope
 
 const homeOf = (f: Facilitation): Extract<ExecutionTarget, { kind: 'conversation' }> => ({ kind: 'conversation', channelType: f.channelType, conversationId: f.conversationId });
 
+/** The linked session conversations of a facilitation (5.3): a scope opened
+ *  later (a closing) lists them, so the session protocols reach them. The
+ *  kernel adds a conversation to the open scopes when it is linked. */
+async function sessionConversationsOf(engine: EngineCore, f: Facilitation): Promise<Extract<ExecutionTarget, { kind: 'conversation' }>[]> {
+  const linked = await engine.db().query<{ conversation_id: string }>(
+    `SELECT DISTINCT conversation_id FROM plg_omadia_agent_facilitator_sessions WHERE facilitation_id = $1 AND conversation_id IS NOT NULL ORDER BY conversation_id`,
+    [f.id],
+  );
+  return linked.rows.map((r) => ({ kind: 'conversation', channelType: f.channelType, conversationId: r.conversation_id }));
+}
+
 /** The deadline the engine wants a scope of this kind to have right now. */
 async function wantedDeadline(engine: EngineCore, f: Facilitation, kind: ExecutionScopeKind): Promise<Date | undefined> {
   const now = engine.now().getTime();
@@ -131,6 +142,17 @@ async function wantedDeadline(engine: EngineCore, f: Facilitation, kind: Executi
   if (kind === 'scheduling') {
     const until = f.followupPolicy.meeting ? Date.parse(f.followupPolicy.meeting.to) : NaN;
     return bounded(Number.isFinite(until) ? until : now + DAY_MS);
+  }
+  // active, in its bounded deadline wait (5.6): until the waiting session
+  // closings have ended, bounded by their own limits.
+  if (f.settings.deadlineWait === true) {
+    const waiting = await engine.db().query<{ until: Date | null }>(
+      `SELECT max(coalesce(window_ends_at, absolute_until)) AS until FROM plg_omadia_agent_facilitator_closings
+        WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND ended_at IS NULL`,
+      [f.id],
+    );
+    const until = waiting.rows[0]?.until;
+    if (until) return bounded(until.getTime() + SCOPE_MARGIN_MS);
   }
   // active: the facilitation's deadline, or a runoff that runs beyond it;
   // without a deadline the facilitation's maximum duration.
@@ -168,7 +190,7 @@ async function openAtKernel(engine: EngineCore, f: Facilitation, kind: Execution
     ...(eventId !== '' ? { eventId } : {}),
     ...(deadline ? { deadline: deadline.toISOString() } : {}),
     budget: SCOPE_BUDGETS[kind],
-    ...(kind === 'configuring' ? { home: { channelType: f.channelType, conversationId: f.conversationId } } : { targets: [homeOf(f)] }),
+    ...(kind === 'configuring' ? { home: { channelType: f.channelType, conversationId: f.conversationId } } : { targets: [homeOf(f), ...(await sessionConversationsOf(engine, f))] }),
   });
   if (opened.outcome === 'opened') {
     engine.log(`facilitation ${f.id}: execution scope '${kind}'${eventId ? ` (${eventId})` : ''} opened until ${opened.scope.deadline}`);
@@ -265,6 +287,14 @@ const PURPOSES: Readonly<Record<string, ExecutionPurpose>> = {
 /** What an outgoing message is for, in the kernel's terms. */
 export const purposeFor = (purpose: string, essential: boolean): ExecutionPurpose => PURPOSES[purpose] ?? (essential ? 'essential_message' : 'moderation');
 
+/** The `closing` scope of one closing event (a session close: `session:<id>`)
+ *  and the authorization fields of an action drawn from it. */
+export async function closingScopeAction(engine: EngineCore, f: Facilitation, eventId: string): Promise<{ ok: true; value: ActionScope } | ScopeRefusal> {
+  const found = await ensureScope(engine, f, 'closing', eventId);
+  if (!found.ok) return found;
+  return { ok: true, value: { scope: found.scope, authorization: { scopeId: found.scope.scopeId, processId: f.id, phase: phaseFor(f, 'closing') } } };
+}
+
 export interface ActionScope {
   scope: ScopeRow;
   authorization: Omit<SendAuthorization, 'purpose' | 'emission'>;
@@ -305,6 +335,19 @@ export async function peopleFor(engine: EngineCore, f: Facilitation, kind: Execu
     const principalId = platformId(p.principalId);
     if (principalId === undefined) continue;
     people.push({ kind: 'person', channelType: f.channelType, principalId, ...(unrestricted(p.principalId) ? {} : { restriction: 'status_only' as const }) });
+  }
+  // Session participants may ask for their sessions' status privately (5.3,
+  // criterion 46), and get nothing else.
+  if (kind !== 'follow_up') {
+    const guests = await db.query<{ principal_id: string }>(
+      `SELECT DISTINCT principal_id FROM plg_omadia_agent_facilitator_session_participants WHERE facilitation_id = $1 AND status = 'active'`,
+      [f.id],
+    );
+    for (const g of guests.rows) {
+      const principalId = platformId(g.principal_id);
+      if (principalId === undefined || people.some((p) => p.principalId === principalId)) continue;
+      people.push({ kind: 'person', channelType: f.channelType, principalId, restriction: 'status_only' });
+    }
   }
   return people.sort((a, b) => a.principalId.localeCompare(b.principalId));
 }
@@ -425,7 +468,7 @@ export async function syncScopes(engine: EngineCore, facilitationId: string, onP
     if (row.kind === 'active' || row.kind === 'follow_up') {
       const wanted = await wantedDeadline(engine, f, row.kind);
       if (wanted && Math.abs(wanted.getTime() - row.deadline.getTime()) > MINUTE_MS) {
-        const moved = await execution.extendScope(row.scopeId, { deadline: wanted.toISOString() });
+        const moved = await execution.extendScope(row.scopeId, { deadline: wanted.toISOString(), ...(row.kind === 'active' && f.settings.deadlineWait === true ? { deadlineWait: true } : {}) });
         if (moved.outcome === 'extended') await engine.db().query(`UPDATE ${TABLE} SET deadline = $2 WHERE id = $1`, [row.id, new Date(moved.scope.deadline)]);
         else engine.log(`facilitation ${f.id}: the deadline of its ${row.kind} scope could not be moved to ${wanted.toISOString()} (${moved.code}: ${moved.message})`);
       }

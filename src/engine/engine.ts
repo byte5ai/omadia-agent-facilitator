@@ -31,6 +31,9 @@ import { reconcileAll, reconcileSubscription } from './subscription.js';
 import type { SubscriptionState } from './subscription.js';
 import { installTransparency } from './transparency.js';
 import { runFacilitatorTurn } from './turn.js';
+import { installSessionClose, sessionSummariesDelivered } from './sessionClose.js';
+import { handleLinkRequest, linkedMeetingEvent, replaySessionConversations, syncAllSessionConversations, syncSessionConversations } from './sessionLinks.js';
+import { installTranscript } from './transcript.js';
 
 const REPLAY_PAGE = 200;
 
@@ -58,6 +61,8 @@ function installOnce(): void {
   installTransparency();
   installGovernance();
   installSessions();
+  installSessionClose();
+  installTranscript();
   installCapabilities();
 }
 
@@ -73,9 +78,14 @@ export class FacilitationEngine {
     this.core = new EngineCore(deps);
     installOnce();
     this.core.onAfterDispatch(advanceClosings);
+    // A session summary that went out opens its consent window, or is done.
+    this.core.onAfterDispatch(sessionSummariesDelivered);
     // After every unit of work the kernel's scopes follow the facilitation's
     // state: what is over ends, a changed deadline moves, the people are told.
     this.core.onAfterRelease((engine, facilitationId) => syncScopes(engine, facilitationId));
+    // The kernel's state of each linked session conversation follows the
+    // session's (spec 5.3).
+    this.core.onAfterRelease((engine, facilitationId) => syncSessionConversations(engine, facilitationId));
   }
 
   private readiness: (() => Promise<unknown>) | undefined;
@@ -124,6 +134,7 @@ export class FacilitationEngine {
       if (!readable.has(f.id)) continue;
       this.attach(f.facilitatorAgent);
       await this.replay(f);
+      await replaySessionConversations(this.core, f, (record) => this.receive(f.facilitatorAgent, record));
     }
   }
 
@@ -183,13 +194,24 @@ export class FacilitationEngine {
           const decision = await this.track(decideAddressed(this.core, request));
           if (!decision.handled) return { handled: false };
           void this.track(
-            decision.work().catch((err: unknown) => {
+            decision
+              .work()
+              .then((done) => {
+                // A question in a linked session conversation before its session gets the facilitator's answer there.
+                if (done?.modelTurn) this.queueTurn(decision.facilitationId, done.record);
+              })
+              .catch((err: unknown) => {
               this.core.log(`facilitation ${decision.facilitationId}: an addressed message it took could not be worked on: ${err instanceof Error ? err.message : String(err)}`);
             }),
           );
           return { handled: true };
         }),
       );
+    }
+    // A request to link a meeting chat, made inside it (kernel #2089): a
+    // typed event, without read access before the link.
+    if (typeof messages.onLinkRequest === 'function') {
+      disposers.push(messages.onLinkRequest(agentSlug, (request) => (this.stopped ? Promise.resolve({ handled: false as const }) : this.track(handleLinkRequest(this.core, request)))));
     }
     // What the channel offers can change mid-session; meetings start and end.
     const capabilities = this.core.deps.kernel.sessionCapabilities();
@@ -222,7 +244,11 @@ export class FacilitationEngine {
       (async () => {
         try {
           const live = (await store.listSubscribed(this.core.db())).find((f) => f.conversationId === event.conversationId && f.facilitatorAgent === agentSlug);
-          if (!live) return;
+          if (!live) {
+            // A meeting of a linked session conversation starts or ends that session.
+            await linkedMeetingEvent(this.core, agentSlug, event);
+            return;
+          }
           if (event.kind === 'participant_joined' || event.kind === 'participant_left') {
             await this.core.work(live.id, (w) => w.event('session_presence', 'engine', { kind: event.kind, sessionRef: event.sessionRef, participants: event.participants ?? [] }));
             return;
@@ -314,9 +340,26 @@ export class FacilitationEngine {
         await this.finishConcluding();
         await purgeExpired(this.core);
         await syncAllScopes(this.core);
+        await syncAllSessionConversations(this.core);
+        await this.deliveredSessionSummaries();
         await this.catchUp();
       })(),
     );
+  }
+
+  /** A session summary that went out while the engine went down: its
+   *  delivery is taken note of on the next pass (the consent window opens). */
+  private async deliveredSessionSummaries(): Promise<void> {
+    const pending = await this.core.db().query<{ facilitation_id: string }>(
+      `SELECT DISTINCT facilitation_id FROM plg_omadia_agent_facilitator_closings WHERE kind = 'session' AND ended_at IS NULL AND delivery_status = 'pending' LIMIT 50`,
+    );
+    for (const row of pending.rows) {
+      try {
+        await this.core.flush(row.facilitation_id);
+      } catch (err) {
+        this.core.log(`facilitation ${row.facilitation_id}: a session summary's delivery could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   /** A facilitation that is concluding is looked at on every tick: the close

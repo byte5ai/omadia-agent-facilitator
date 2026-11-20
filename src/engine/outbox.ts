@@ -20,14 +20,14 @@ import type { EngineCore, GroupFallback } from './core.js';
 import { limitsOf, messageQuotaReached } from './quota.js';
 import { executionCodeOf, recordRefusal } from './refusals.js';
 import { getClosing } from './resultStatus.js';
-import { isFinalRefusal, purposeFor, scopeForAction, syncPeople } from './scopes.js';
+import { closingScopeAction, isFinalRefusal, purposeFor, scopeForAction, syncPeople } from './scopes.js';
 
 type SendResult = { ok: true; messageId?: string; cardMessageId?: string } | { ok: false; code: string; message: string };
 
 type StoredPayload = OutboxPayload & {
   /** `prose`: a model wrote the text. Everything else is a filled template. */
   emission?: 'prose';
-  link?: { kind: 'ack' | 'proposal' | 'card'; id: string };
+  link?: { kind: 'ack' | 'proposal' | 'card' | 'transcript' | 'closing'; id: string };
   /** What goes to the group when this private message cannot arrive. */
   fallback?: GroupFallback;
 };
@@ -77,14 +77,15 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
   const payload = row.payload as StoredPayload;
   const service = engine.deps.kernel.conversationSend();
   if (!service) return { ok: false, code: 'no_service', message: "kernel service 'conversationSend@2' is not available" };
-  const found = await scopeForAction(engine, f, row.purpose);
+  const found = payload.closingEvent ? await closingScopeAction(engine, f, payload.closingEvent) : await scopeForAction(engine, f, row.purpose);
   if (!found.ok) return failed(`not_authorized:${found.code}`, found.message);
   const authorization: SendAuthorization = {
     ...found.value.authorization,
     purpose: purposeFor(row.purpose, row.deliveryClass === 'essential'),
     emission: payload.emission === 'prose' ? 'prose' : 'template',
   };
-  const to = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: f.conversationId };
+  // A linked session conversation, or the home conversation (5.3).
+  const to = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: payload.conversationId ?? f.conversationId };
 
   if (payload.cardUpdate) {
     const card = await store.getCard(q, payload.cardUpdate.cardId);
@@ -143,7 +144,7 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
   return direct.outcome === 'delivered' ? { ok: true, ...(direct.messageId !== undefined ? { messageId: direct.messageId } : {}) } : unreachable(direct);
 }
 
-async function stampLink(q: Queryable, payload: StoredPayload, messageId: string | undefined, cardMessageId?: string): Promise<void> {
+async function stampLink(q: Queryable, facilitationId: string, payload: StoredPayload, messageId: string | undefined, cardMessageId?: string): Promise<void> {
   if (!payload.link) return;
   if (payload.link.kind === 'card') {
     // Answers and updates refer to the card's own message.
@@ -152,6 +153,15 @@ async function stampLink(q: Queryable, payload: StoredPayload, messageId: string
   }
   if (messageId === undefined) return;
   if (payload.link.kind === 'ack') await update(q, 'plg_omadia_agent_facilitator_acks', { id: payload.link.id }, { promptMessageId: messageId });
+  else if (payload.link.kind === 'closing') await update(q, 'plg_omadia_agent_facilitator_closings', { id: payload.link.id }, { messageId });
+  else if (payload.link.kind === 'transcript') {
+    // `<revision>:<segment id>`: a reply to this post adopts exactly that revision.
+    const at = payload.link.id.indexOf(':');
+    await q.query(
+      `UPDATE plg_omadia_agent_facilitator_transcript_segments SET post_message_id = $4 WHERE facilitation_id = $1 AND segment_id = $2 AND revision = $3`,
+      [facilitationId, payload.link.id.slice(at + 1), Number(payload.link.id.slice(0, at)), messageId],
+    );
+  }
   else await update(q, 'plg_omadia_agent_facilitator_proposals', { id: payload.link.id }, { announceMessageId: messageId });
 }
 
@@ -293,7 +303,7 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'sent', sentAt: engine.now(), channelMessageId: result.messageId ?? null });
     // An update of a card is no new message in the conversation.
     if (!(row.payload as StoredPayload).cardUpdate) await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
-    await stampLink(client, row.payload as StoredPayload, result.messageId, result.cardMessageId);
+    await stampLink(client, f.id, row.payload as StoredPayload, result.messageId, result.cardMessageId);
     await store.appendEvent(client, {
       facilitationId: f.id,
       kind: 'message_sent',

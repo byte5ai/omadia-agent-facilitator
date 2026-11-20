@@ -252,8 +252,17 @@ const deadline: JobHandler = async (w) => {
     return;
   }
   for (const hook of beforeDeadline) await hook(w);
+  // The bounded wait for session closings (spec 5.6): evaluated once they ended.
+  for (const wait of deadlineWaits) if (await wait(w)) return;
   await advance(w, 'deadline');
 };
+
+const deadlineWaits: Array<(w: Work) => Promise<boolean>> = [];
+/** Something the deadline evaluation waits for; `true`: it waits (the
+ *  evaluation is scheduled again when that has ended). */
+export function onDeadlineWait(wait: (w: Work) => Promise<boolean>): void {
+  if (!deadlineWaits.includes(wait)) deadlineWaits.push(wait);
+}
 
 const beforeDeadline: Array<(w: Work) => Promise<void>> = [];
 /** Work that must be settled before the deadline evaluates (an open proposal). */

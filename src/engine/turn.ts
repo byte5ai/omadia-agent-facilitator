@@ -20,6 +20,7 @@ import { recordRefusal } from './refusals.js';
 import { TURN_MODEL_CALLS, scopeForAction } from './scopes.js';
 import { participationOf } from './status.js';
 import { checkTurnText } from './turnGuard.js';
+import { sessionTurnContext } from './sessionLinks.js';
 
 export const SILENT = '[silent]';
 
@@ -93,6 +94,11 @@ export async function buildEngineContext(q: Queryable, f: Facilitation): Promise
   return lines.join('\n');
 }
 
+/** What the facilitator keeps in mind when it answers in a linked session
+ *  conversation: people there may not be home participants (5.3, 5.8). */
+const SESSION_CONVERSATION_NOTE =
+  '# This message is from a linked session conversation\nYou answer in the session conversation, not in the home conversation. People here may be session participants only: never quote, summarise or refer to messages, contributions, names or the protocol of the home conversation. Talk about the session agenda and what was said here.';
+
 /** Run one turn for a free-text message and post the answer. */
 export async function runFacilitatorTurn(engine: EngineCore, facilitationId: string, record: ConversationMessageRecord): Promise<void> {
   const db = engine.db();
@@ -114,15 +120,17 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     agentSlug: f.facilitatorAgent,
     sessionKey: `facilitation:${f.id}`,
     channelType: f.channelType,
-    conversationId: f.conversationId,
+    // A message of a linked session conversation is answered there (5.3).
+    conversationId: record.conversationId,
     inboundEventId: record.eventId,
     input: `From: ${record.author.displayName ?? record.author.id} (message id: ${record.messageId})\n${record.text ?? ''}`,
-    engineContext: await buildEngineContext(db, f),
+    // A session conversation's turn sees the session only (5.3, 5.8).
+    engineContext: record.conversationId !== f.conversationId ? `${await sessionTurnContext(db, f, record.conversationId)}\n\n${SESSION_CONVERSATION_NOTE}` : await buildEngineContext(db, f),
     ...found.value.authorization,
     purpose: 'moderation',
     emission: 'prose',
     budget: { modelCalls: TURN_MODEL_CALLS },
-    target: { kind: 'conversation', channelType: f.channelType, conversationId: f.conversationId },
+    target: { kind: 'conversation', channelType: f.channelType, conversationId: record.conversationId },
   });
   // What the tools of this turn did. If one already made the facilitator post
   // (the handshake, a step, a question to somebody), that was the answer:
@@ -136,7 +144,7 @@ export async function runFacilitatorTurn(engine: EngineCore, facilitationId: str
     return;
   }
   const say = (w: Work, text: string, prose = false): void =>
-    w.post({ purpose: 'moderation', key: `turn:${record.eventId}`, to: 'group', deliveryClass: 'droppable', versionBound: false, requiredPhases: ['configuring', 'active'], text, ...(prose ? { emission: 'prose' as const } : {}) });
+    w.post({ purpose: 'moderation', key: `turn:${record.eventId}`, to: 'group', conversationId: record.conversationId, deliveryClass: 'droppable', versionBound: false, requiredPhases: ['configuring', 'active'], text, ...(prose ? { emission: 'prose' as const } : {}) });
 
   // The marker anywhere in the answer means: say nothing.
   if (isSilent(outcome.text)) {

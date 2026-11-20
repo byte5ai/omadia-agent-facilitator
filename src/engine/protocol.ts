@@ -12,6 +12,7 @@ import type { Work } from './core.js';
 import { facilitatorName } from './lifecycle.js';
 import { initiatorName } from './names.js';
 import { deliveryStatusWords, listClosings, markOf, resultStatusWords } from './resultStatus.js';
+import { adoptedMarker } from './transcript.js';
 
 const CHANGE_EVENTS = ['proposal_accepted', 'proposal_rejected', 'runoff', 'proposal_amended'];
 const CAPABILITY_EVENTS = ['capability_used', 'capability_refused', 'grant_issued', 'grant_revoked'];
@@ -95,7 +96,9 @@ export async function buildProtocol(q: Queryable, f: Facilitation, opts: Protoco
       contributions.map((c) => {
         const step = steps.find((s) => s.id === c.stepId);
         const imported = importOf(c);
-        return `${step ? `${step.title}: ` : ''}${name(c.participantPrincipal)}: ${String(c.payload['summary'] ?? '')}${imported ? ` (${p.imported(imported.origin, name(imported.by))})` : ''}`;
+        // Adopted from the transcript, never "said by" (spec 5.3).
+        const adopted = adoptedMarker(c, f.language);
+        return `${step ? `${step.title}: ` : ''}${name(c.participantPrincipal)}: ${String(c.payload['summary'] ?? '')}${imported ? ` (${p.imported(imported.origin, name(imported.by))})` : ''}${adopted ? ` (${adopted})` : ''}`;
       }),
     ),
     ...section(p.clusters, clusters.map((c) => `${c.label} (${String(c.memberContributionIds.length)})`)),

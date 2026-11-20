@@ -704,7 +704,9 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
 
 /** What ends with a facilitation, in the same transaction as the phase change. */
 export async function releaseOnEnd(w: Work): Promise<void> {
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
+  // A session summary that awaits confirmation keeps its window past the
+  // close (spec 5.2); a stop or abort ends it in its own hook (sessionClose.ts).
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'session_confirmation'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
 }
