@@ -39,7 +39,7 @@ function archetypeList(field: string): string[] {
 
 test('the archetype block states the facilitator descriptor the kernel enforces', () => {
   assert.match(manifest, /^archetype:\n  id: "facilitator"$/m);
-  const omits = ['plugin_grant', 'tool_grant', 'memory', 'default_agent', 'channel_binding', 'persona_skill', 'fast_path', 'agent_to_agent', 'consultation', 'sub_agent', 'assistance'];
+  const omits = ['plugin_grant', 'tool_grant', 'memory', 'default_agent', 'channel_binding', 'fast_path', 'agent_to_agent', 'consultation', 'sub_agent', 'assistance'];
   assert.deepEqual(archetypeList('omits'), omits);
   assert.deepEqual(archetypeList('adds'), ['conversation_messages', 'agent_turn', 'own_identity_send', 'session_capabilities']);
   assert.deepEqual(archetypeList('requires'), ['own_channel_identity']);
@@ -50,6 +50,11 @@ test('the archetype block states the facilitator descriptor the kernel enforces'
   }
   assert.match(manifest, /^  noun: "a facilitator"$/m);
   assert.match(manifest, /^  role_contract: \|\n    ## Neutrality contract \(fixed, takes precedence\)$/m);
+});
+
+test('working modes are not omitted: a moderation mode is allowed, the kernel refuses identity replacement (spec 2043 §2.3)', () => {
+  assert.ok(!archetypeList('omits').includes('persona_skill'));
+  assert.ok(!/^    persona_skill:/m.test(manifest));
 });
 
 test('the German manifest texts use the product terms', () => {
