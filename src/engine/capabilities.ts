@@ -26,7 +26,7 @@ import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
 import { onAborted } from './lifecycle.js';
-import { listClosings } from './resultStatus.js';
+import { getClosing, listClosings } from './resultStatus.js';
 import { scheduleJob } from './jobs.js';
 import { openProposal, registerProposalKind } from './proposals.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
@@ -230,7 +230,15 @@ const uniqueMail = (list: Array<string | null | undefined>): string[] => [...new
 
 type Claim<T> = { state: 'skip' } | { state: 'unknown' } | { state: 'go'; plan: T };
 
-async function claimJob<T>(engine: EngineCore, job: Job, attemptedStage: string | undefined, plan: (w: Work) => Promise<T | undefined>): Promise<Claim<T>> {
+async function claimJob<T>(
+  engine: EngineCore,
+  job: Job,
+  attemptedStage: string | undefined,
+  plan: (w: Work) => Promise<T | undefined>,
+  /** What is kept with the stage, so that an unknown outcome can still say
+   *  what was planned. */
+  remember: (planned: T) => Record<string, unknown> = () => ({}),
+): Promise<Claim<T>> {
   return engine.work(job.facilitationId, async (w) => {
     const current = await one<Job>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE id = $1 FOR UPDATE', [job.id]);
     if (!current || current.status !== 'pending' || current.leaseOwner !== engine.instanceId) return { state: 'skip' };
@@ -240,7 +248,7 @@ async function claimJob<T>(engine: EngineCore, job: Job, attemptedStage: string 
       await finishJob(w, job, { outcome: 'nothing_to_do' });
       return { state: 'skip' };
     }
-    if (attemptedStage) await update(w.tx, 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { payload: { ...current.payload, stage: attemptedStage } });
+    if (attemptedStage) await update(w.tx, 'plg_omadia_agent_facilitator_jobs', { id: job.id }, { payload: { ...current.payload, ...remember(planned), stage: attemptedStage } });
     return { state: 'go', plan: planned };
   });
 }
@@ -274,6 +282,13 @@ interface Mail {
 const protocolMail: ExternalJob = async (engine, job) => {
   await refreshAddresses(engine, job.facilitationId);
   const claim = await claimJob<Mail[]>(engine, job, 'mail_attempted', async (w) => {
+    // Bound to its closing: never after its dispatch or absolute limit.
+    const closing = typeof job.payload['closingId'] === 'string' ? await getClosing(w.tx, job.payload['closingId']) : undefined;
+    if (closing && (w.now >= closing.absoluteUntil || (closing.dispatchUntil !== null && w.now >= closing.dispatchUntil))) {
+      await w.event('protocol_mail', 'engine', { outcome: 'dropped', reason: 'the dispatch limit of its closing passed', closingId: closing.id });
+      w.engine.log(`facilitation ${w.f.id}: protocol mail not sent, the dispatch limit of its closing passed`);
+      return undefined;
+    }
     const { participants, stakeholders } = await peopleOf(w);
     const t = texts(w.f.language);
     const subject = t.protocolMailSubject(w.f.goal);
@@ -296,30 +311,49 @@ const protocolMail: ExternalJob = async (engine, job) => {
       return undefined;
     }
     return mails;
-  });
+  }, (mails) => ({ planned: mails.map((m) => ({ recipients: m.recipients, ...(m.stakeholder ? { stakeholder: m.stakeholder } : {}) })) }));
   if (claim.state === 'skip') return;
-  const outcomes: Array<{ mail: Mail | undefined; outcome: ScopedOutcome<{ outcome: string }> }> = [];
-  if (claim.state === 'unknown') outcomes.push({ mail: undefined, outcome: { ok: false, code: 'unknown_outcome' } });
-  else {
+  type Planned = Pick<Mail, 'recipients' | 'stakeholder'>;
+  const outcomes: Array<{ mail: Planned; outcome: ScopedOutcome<{ outcome: string }> }> = [];
+  if (claim.state === 'unknown') {
+    // What was planned, with the outcome of each mail that had one before
+    // the process ended; the rest is unknown. Never sent again.
+    const current = await one<Job>(engine.db(), 'SELECT * FROM plg_omadia_agent_facilitator_jobs WHERE id = $1', [job.id]);
+    const planned = Array.isArray(current?.payload['planned']) ? (current.payload['planned'] as Planned[]) : [];
+    const known = (current?.payload['outcomes'] ?? {}) as Record<string, string>;
+    for (const [i, mail] of planned.entries()) outcomes.push({ mail, outcome: known[String(i)] === 'sent' ? { ok: true, value: { outcome: 'sent' } } : { ok: false, code: 'unknown_outcome' } });
+    if (planned.length === 0) outcomes.push({ mail: { recipients: [] }, outcome: { ok: false, code: 'unknown_outcome' } });
+  } else {
     const api = await scoped(engine, job.facilitationId);
-    for (const mail of claim.plan) outcomes.push({ mail, outcome: await api.sendMail(mail.recipients, mail.subject, mail.body) });
+    for (const [i, mail] of claim.plan.entries()) {
+      const outcome = await api.sendMail(mail.recipients, mail.subject, mail.body);
+      outcomes.push({ mail, outcome });
+      // Each mail's outcome is kept as it comes.
+      await engine.db().query(`UPDATE plg_omadia_agent_facilitator_jobs SET payload = jsonb_set(payload, '{outcomes}', coalesce(payload->'outcomes', '{}'::jsonb) || jsonb_build_object($2::text, $3::text)) WHERE id = $1`, [
+        job.id,
+        String(i),
+        outcome.ok ? 'sent' : outcome.code,
+      ]);
+    }
   }
   await engine.work(job.facilitationId, async (w) => {
     const t = texts(w.f.language);
-    const failed = outcomes.find((o) => !o.outcome.ok);
-    const sentTo = outcomes.filter((o) => o.outcome.ok).reduce((n, o) => n + (o.mail?.recipients.length ?? 0), 0);
-    if (!failed) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
-    else if (!failed.outcome.ok && failed.outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
-    else if (!failed.outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
+    const failures = outcomes.filter((o) => !o.outcome.ok);
+    // An unknown outcome is said before any other failure: it may have arrived.
+    const failed = failures.find((o) => !o.outcome.ok && o.outcome.code === 'unknown_outcome') ?? failures[0];
+    const sentTo = outcomes.filter((o) => o.outcome.ok).reduce((n, o) => n + o.mail.recipients.length, 0);
+    if (sentTo > 0 || !failed) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
+    if (failed && !failed.outcome.ok && failed.outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
+    else if (failed && !failed.outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
     // What became of the mail, per recipient. "Sent" is said of nobody the
     // integration did not confirm.
     const each = (o: ScopedOutcome<unknown>): string => (o.ok ? 'sent' : o.code === 'unknown_outcome' ? 'unknown' : 'not_sent');
-    const recipients =
-      claim.state === 'go'
-        ? outcomes.flatMap((o) => (o.mail?.recipients ?? []).map((address) => ({ address, outcome: each(o.outcome), ...(o.mail?.stakeholder ? { stakeholder: true, disclosure: o.mail.stakeholder.disclosure, withheld: o.mail.stakeholder.withheld } : {}) })))
-        : uniqueMail((await peopleOf(w)).participants.map((p) => p.email)).map((address) => ({ address, outcome: 'unknown' }));
-    await w.event('protocol_mail', 'engine', { outcome: failed ? (failed.outcome.ok ? 'sent' : failed.outcome.code) : 'sent', recipients });
-    await finishJob(w, job, failed && !failed.outcome.ok ? { outcome: failed.outcome.code } : { outcome: 'sent' });
+    const recipients = outcomes.flatMap((o) =>
+      o.mail.recipients.map((address) => ({ address, outcome: each(o.outcome), ...(o.mail.stakeholder ? { stakeholder: true, disclosure: o.mail.stakeholder.disclosure, withheld: o.mail.stakeholder.withheld } : {}) })),
+    );
+    const code = failed && !failed.outcome.ok ? failed.outcome.code : 'sent';
+    await w.event('protocol_mail', 'engine', { outcome: code, recipients });
+    await finishJob(w, job, { outcome: code });
   });
 };
 

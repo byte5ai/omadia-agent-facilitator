@@ -161,7 +161,7 @@ async function undelivered(w: Work, c: Closing, error: string): Promise<void> {
 
 /** Decide a confirmation at its window's end (with the electorate as it was
  *  just queried). */
-async function decideConfirmation(w: Work, c: Closing): Promise<void> {
+async function decideConfirmation(w: Work, c: Closing, final = false): Promise<void> {
   const t = texts(w.f.language);
   const proposal = await confirmationOf(w.tx, c);
   const participants = await store.listParticipants(w.tx, w.f.id);
@@ -173,12 +173,12 @@ async function decideConfirmation(w: Work, c: Closing): Promise<void> {
   const electorate = standing.length > 0 ? undefined : await finalConsentElectorate(w, c.windowEndsAt ?? w.now);
   if (standing.length > 0) mark = { status: 'not_confirmed', reason: 'objection' };
   else if (electorate?.state === 'verified') mark = { status: 'confirmed' };
-  else if (electorate?.state === 'retry') {
+  else if (electorate?.state === 'retry' && !final) {
     // Said once.
     await scheduleJob(w, 'closing_window', `${c.id}:${electorate.at.toISOString()}`, electorate.at, { closingId: c.id });
     if (!(await store.listEvents(w.tx, w.f.id, ['electorate_unverified'])).some((e) => e.payload['closingId'] === c.id)) {
       await w.event('electorate_unverified', 'engine', { closingId: c.id });
-      w.post({ purpose: 'closing_status', key: `${c.id}:unverified`, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.closing.electorateUnverified() });
+      w.post({ purpose: 'closing_status', key: `${c.id}:unverified`, to: 'group', deliveryClass: 'essential', text: t.closing.electorateUnverified(), closing: { id: c.id, version: c.documentVersion } });
     }
     return;
   } else mark = { status: 'not_confirmed', reason: 'electorate_unverified' };
@@ -216,6 +216,32 @@ async function dispatchSettled(q: Queryable, c: Closing): Promise<boolean> {
   return waiting.rows.length === 0;
 }
 
+/** Drop what a closing still has to send, each on record (nothing ends
+ *  silently): its pending sends and its pending protocol mail. */
+export async function dropClosingSends(w: Work, c: Closing, reason: string): Promise<void> {
+  const dropped = await w.tx.query<{ purpose: string; target_principal: string | null }>(
+    `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = $2 WHERE closing_id = $1 AND status IN ('pending', 'sending') RETURNING purpose, target_principal`,
+    [c.id, reason],
+  );
+  const mail = await w.tx.query(
+    `UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $3 WHERE facilitation_id = $1 AND kind = 'protocol_mail' AND status = 'pending' AND payload->>'closingId' = $2 RETURNING id`,
+    [w.f.id, c.id, w.now],
+  );
+  for (const row of dropped.rows) await w.event('closing_send_dropped', 'engine', { closingId: c.id, purpose: row.purpose, to: row.target_principal ?? 'group', reason });
+  if ((mail.rowCount ?? 0) > 0) await w.event('protocol_mail', 'engine', { outcome: 'dropped', reason, closingId: c.id });
+  if (dropped.rows.length + (mail.rowCount ?? 0) > 0) w.engine.log(`facilitation ${w.f.id}: ${String(dropped.rows.length)} send(s) and ${String(mail.rowCount ?? 0)} mail job(s) of closing ${c.eventId} dropped (${reason})`);
+}
+
+/** The kernel ended the process while its result was closing (spec A
+ *  §5.10): the result closing ends with it, nothing more of it is sent. */
+export async function endResultClosingForAbort(w: Work): Promise<void> {
+  const c = await resultClosingOf(w.tx, w.f.id);
+  if (!c || c.endedAt !== null) return;
+  await dropClosingSends(w, c, 'the facilitation was aborted');
+  await patchClosing(w.tx, c.id, { ...(c.resultStatus === null ? finalPatch({ status: 'aborted' }, w.now) : {}), part: 'done', partStartedAt: w.now, endedAt: w.now });
+  await w.event('closing_ended', 'engine', { closingId: c.id, aborted: true });
+}
+
 const endHooks: Array<(w: Work, c: Closing) => Promise<void>> = [];
 /** What follows when a closing has ended (the facilitation's end, retention). */
 export function onClosingEnded(hook: (w: Work, c: Closing) => Promise<void>): void {
@@ -251,9 +277,12 @@ async function advanceOne(engine: EngineCore, client: Db, facilitationId: string
       const current = (await one<Closing>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_closings WHERE id = $1 FOR UPDATE', [c.id])) ?? c;
       if (current.endedAt !== null) return;
       if (current.part === 'waiting') {
-        if (await sessionClosingsPending(w.tx, w.f.id)) return;
+        // Bounded: delivery and dispatch must still fit the absolute limit.
+        const waitedOut = now >= current.absoluteUntil.getTime() - CLOSING_LIMITS.deliveryMs - CLOSING_LIMITS.dispatchMs;
+        if (!waitedOut && (await sessionClosingsPending(w.tx, w.f.id))) return;
         const next = (await patchClosing(w.tx, current.id, { part: 'delivery', partStartedAt: w.now })) ?? current;
-        await w.event('closing_waited', 'engine', { closingId: current.id });
+        await w.event('closing_waited', 'engine', { closingId: current.id, waitedOut });
+        if (waitedOut) w.engine.log(`facilitation ${w.f.id}: the result stopped waiting for open session closings at its limit`);
         postDocument(w, next);
         return;
       }
@@ -270,16 +299,26 @@ async function advanceOne(engine: EngineCore, client: Db, facilitationId: string
         const gaveUp = sends.find((r) => r.status === 'failed' || r.status === 'dropped');
         if (gaveUp) return undelivered(w, current, gaveUp.lastError ?? gaveUp.dropReason ?? 'unknown');
         if (now >= current.partStartedAt.getTime() + CLOSING_LIMITS.deliveryMs || now >= current.absoluteUntil.getTime()) {
-          await w.tx.query(`UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'the delivery limit of its closing passed' WHERE closing_id = $1 AND status IN ('pending', 'sending')`, [current.id]);
+          await dropClosingSends(w, current, 'the delivery limit of its closing passed');
           return undelivered(w, current, 'not delivered within the delivery limit');
         }
+        return;
+      }
+      if (current.part === 'confirmation') {
+        // Decided by its window job; if that job is gone (given up, cancelled),
+        // the window's end is decided here, so nothing waits forever.
+        if (current.windowEndsAt === null || now < current.windowEndsAt.getTime()) return;
+        const due = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind = 'closing_window' AND status = 'pending' LIMIT 1`, [w.f.id]);
+        if (due.rows.length > 0 && now < current.absoluteUntil.getTime()) return;
+        await w.event('closing_window_recovered', 'engine', { closingId: current.id });
+        await decideConfirmation(w, current, now >= current.absoluteUntil.getTime());
         return;
       }
       if (current.part === 'dispatch') {
         const over = (current.dispatchUntil !== null && now >= current.dispatchUntil.getTime()) || now >= current.absoluteUntil.getTime();
         if (!over && !(await dispatchSettled(w.tx, current))) return;
         if (over) {
-          await w.tx.query(`UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'the dispatch limit of its closing passed' WHERE closing_id = $1 AND status IN ('pending', 'sending')`, [current.id]);
+          await dropClosingSends(w, current, 'the dispatch limit of its closing passed');
         }
         const ended = (await patchClosing(w.tx, current.id, { part: 'done', partStartedAt: w.now, endedAt: w.now })) ?? current;
         await w.event('closing_ended', 'engine', { closingId: current.id, over });
@@ -296,11 +335,17 @@ async function adoptLegacyResult(engine: EngineCore, client: Db, facilitationId:
   const f = await store.getFacilitation(client, facilitationId);
   if (!f || f.phase !== 'concluding' || (await resultClosingOf(client, facilitationId))) return;
   await engine.workOn(client, facilitationId, async (w) => {
-    const closing = await openClosing(w.tx, { facilitationId, kind: 'result', document: String(w.f.result?.['text'] ?? ''), requiresConfirmation: false, now: w.f.concludedAt ?? w.now });
-    const adopted = await w.tx.query(`UPDATE plg_omadia_agent_facilitator_outbox SET closing_id = $2, document_version = 1 WHERE facilitation_id = $1 AND purpose = $3 AND closing_id IS NULL`, [facilitationId, closing.id, RESULT_PURPOSE]);
-    await w.event('closing_adopted', 'engine', { closingId: closing.id, rows: adopted.rowCount ?? 0 });
-    if ((adopted.rowCount ?? 0) === 0) postDocument(w, closing);
+    const closing = await legacyClosing(w);
+    const adopted = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_outbox WHERE closing_id = $1 LIMIT 1`, [closing.id]);
+    if (adopted.rows.length === 0) postDocument(w, closing);
   });
+}
+
+async function legacyClosing(w: Work): Promise<Closing> {
+  const closing = await openClosing(w.tx, { facilitationId: w.f.id, kind: 'result', document: String(w.f.result?.['text'] ?? ''), requiresConfirmation: false, now: w.f.concludedAt ?? w.now });
+  const adopted = await w.tx.query(`UPDATE plg_omadia_agent_facilitator_outbox SET closing_id = $2, document_version = 1 WHERE facilitation_id = $1 AND purpose = $3 AND closing_id IS NULL`, [w.f.id, closing.id, RESULT_PURPOSE]);
+  await w.event('closing_adopted', 'engine', { closingId: closing.id, rows: adopted.rowCount ?? 0 });
+  return closing;
 }
 
 /**
@@ -310,15 +355,16 @@ async function adoptLegacyResult(engine: EngineCore, client: Db, facilitationId:
  * where confirmation was required and `published` otherwise. No separate
  * abort report. Returns the closing, or undefined when there is none.
  */
-export async function stopResultClosing(w: Work, actor: string): Promise<Closing | undefined> {
-  const c = await resultClosingOf(w.tx, w.f.id);
-  if (!c || c.resultStatus !== null) return c;
+export async function stopResultClosing(w: Work, actor: string): Promise<Closing> {
+  // A facilitation that concluded before 1.6 has no closing yet: it gets one.
+  const c = (await resultClosingOf(w.tx, w.f.id)) ?? (await legacyClosing(w));
+  if (c.resultStatus !== null) return c;
   const mark = stoppedMark(c.requiresConfirmation);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind = 'closing_window'`, [w.f.id, w.now]);
   // The version that asked for consent is not sent any more; the new one
   // carries the status instead of the request.
-  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'replaced: the facilitation was stopped' WHERE closing_id = $1 AND status IN ('pending', 'sending')`, [c.id]);
+  await dropClosingSends(w, c, 'replaced: the facilitation was stopped');
   const redeliver = c.requiresConfirmation || c.deliveryStatus !== 'delivered';
   const next =
     (await patchClosing(w.tx, c.id, {

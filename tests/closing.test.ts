@@ -325,3 +325,41 @@ test('40. the result waits for a session closing that needs confirmation; only a
   assert.equal((await closingOf(conv)).part, 'confirmation');
   assert.equal(results(conv).length, 1, 'only then the final summary goes out');
 });
+
+test('robustness: a window whose job is gone is decided at its end anyway; the kernel ending a concluding process ends its result closing', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cl-robust-window', [ANNA, BERT, CARA]);
+  const f = await startActive(h, conv, FREE);
+  await tool(conv, 'facilitation_close');
+  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'failed' WHERE facilitation_id = $1 AND kind = 'closing_window'`, [f.id]);
+  h.clock.advance(24 * HOUR_MS + MINUTE_MS);
+  await h.tick();
+  assert.equal((await closingOf(conv)).resultStatus, 'confirmed');
+  assert.equal((await store.listEvents(h.db.pool, f.id, ['closing_window_recovered'])).length, 1);
+
+  const other = h.kernel.conversation('cl-robust-kernel', [ANNA, BERT, CARA]);
+  const g = await startActive(h, other, FREE);
+  for (let i = 0; i < 3; i += 1) h.kernel.sendFaults.push({ code: 'throttled', message: 'try later' });
+  await tool(other, 'facilitation_close');
+  const { abortInWork } = await import('../src/engine/lifecycle.js');
+  await h.engine.core.work(g.id, (w) => abortInWork(w, { reason: 'the facilitator was disabled', actor: 'kernel' }));
+  h.clock.advance(HOUR_MS);
+  await h.tick();
+  const c = await closingOf(other);
+  assert.deepEqual([c.resultStatus, c.part], ['aborted', 'done']);
+  assert.equal((await h.facilitation(other)).phase, 'aborted');
+  assert.equal(results(other).length, 0, 'the result is not sent after the process was aborted');
+  assert.ok((await store.listEvents(h.db.pool, g.id, ['closing_send_dropped'])).length > 0, 'its dropped send is on record');
+});
+
+test('robustness: a stop on a facilitation that concluded before 1.6 (no closing row) still delivers the frozen result', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cl-legacy-stop', [ANNA, BERT, CARA]);
+  const f = await startActive(h, conv, FREE);
+  // As 1.5.x left it: concluding, the result in the outbox, no closing.
+  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_facilitations SET phase = 'concluding', concluded_at = $2, result = '{"text":"Result for \\"Align on the roadmap\\":\\n- old"}'::jsonb WHERE id = $1`, [f.id, h.clock.now()]);
+  await say(conv, 'anna', 'stop');
+  await h.tick();
+  const c = await closingOf(conv);
+  assert.deepEqual([c.resultStatus, c.deliveryStatus], ['published', 'delivered']);
+  assert.equal(results(conv).length, 1);
+  assert.ok((await h.facilitation(conv)).endedAt);
+});

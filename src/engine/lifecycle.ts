@@ -33,6 +33,7 @@ import type { Roll } from './roll.js';
 import type { CloseRule, DodCriteria, ElectorateSource, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { openClosing } from './resultStatus.js';
+import { endResultClosingForAbort } from './closing.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { refusalText } from './refusals.js';
@@ -723,6 +724,8 @@ export async function abortInWork(w: Work, input: AbortInput): Promise<void> {
   const sent = await invitationsSent(w);
   const base = input.groupText ?? t.aborted(input.reason);
   const text = sent.length > 0 ? `${base}\n${t.closing.invitationsSent(sent)}` : base;
+  // The kernel ended it while its result was closing: that closing ends too.
+  if (w.f.phase === 'concluding') await endResultClosingForAbort(w);
   await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: input.reason });
   await releaseOnEnd(w);
   await markEnded(w);

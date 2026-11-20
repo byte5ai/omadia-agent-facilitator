@@ -238,6 +238,9 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
   const outside = await outsideClosing(engine, client, row);
   if (outside !== undefined) {
     await drop(client, row, outside);
+    // Nothing ends silently: on record, and in the log for the operator.
+    await store.appendEvent(client, { facilitationId: f.id, kind: 'closing_send_dropped', actor: 'engine', occurredAt: engine.now(), payload: { closingId: row.closingId, purpose: row.purpose, to: row.targetKind === 'group' ? 'group' : row.targetPrincipal, reason: outside } });
+    engine.log(`facilitation ${f.id}: ${row.purpose} not sent: ${outside}`);
     return;
   }
   // Re-check under the lock: the state the message was computed from must
