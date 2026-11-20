@@ -92,6 +92,8 @@ test('a closing event keeps its frozen document, version and separate statuses',
   assert.equal(again.id, result.id);
   assert.equal(again.document, 'Result v1');
 
+  const objected = await patchClosing(db.pool, result.id, { objections: [{ principal: 'user:ben', reason: 'too early', messageId: 'm1' }] });
+  assert.equal(objected?.objections[0]?.reason, 'too early');
   const stopped = await patchClosing(db.pool, result.id, { ...finalPatch(stoppedMark(true), T0), deliveryStatus: 'not_delivered' });
   assert.deepEqual(stopped && markOf(stopped), { status: 'not_confirmed', reason: 'stopped' });
   assert.equal(stopped?.deliveryStatus, 'not_delivered');
@@ -103,6 +105,12 @@ test('a closing event keeps its frozen document, version and separate statuses',
   assert.equal((await listClosings(db.pool, f.id)).length, 2);
   assert.equal((await getClosingByEvent(db.pool, f.id, 'abort'))?.id, abort.id);
 
-  // "not confirmed" without a reason is refused by the table itself.
+  // Concurrent openers of one event get the same row.
+  await db.pool.query(`DELETE FROM plg_omadia_agent_facilitator_closings WHERE id = $1`, [abort.id]);
+  const [a, b] = await Promise.all([1, 2].map((n) => openClosing(db.pool, { facilitationId: f.id, kind: 'abort', document: `Abort ${String(n)}`, requiresConfirmation: false, now: T0 })));
+  assert.equal(a?.id, b?.id);
+
+  // A reason exactly for "not confirmed", refused by the table itself.
+  await assert.rejects(db.pool.query(`UPDATE plg_omadia_agent_facilitator_closings SET result_status = 'published', result_reason = 'objection' WHERE id = $1`, [result.id]));
   await assert.rejects(db.pool.query(`UPDATE plg_omadia_agent_facilitator_closings SET result_status = 'not_confirmed', result_reason = NULL WHERE id = $1`, [result.id]));
 });

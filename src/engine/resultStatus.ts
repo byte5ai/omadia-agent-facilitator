@@ -18,7 +18,7 @@
 
 import { DAY_MS, HOUR_MS } from '../clock.js';
 import type { Queryable } from '../db/pool.js';
-import { insert, one, rows, update } from '../db/sql.js';
+import { insertIfAbsent, one, rows, update } from '../db/sql.js';
 import type { Closing, ClosingKind, DeliveryStatus, NotConfirmedReason, ResultMark } from '../model.js';
 import { texts } from '../texts/index.js';
 
@@ -98,7 +98,7 @@ export async function openClosing(q: Queryable, input: NewClosing): Promise<Clos
   const eventId = closingEventId(input.kind, input.sessionId);
   const existing = await getClosingByEvent(q, input.facilitationId, eventId);
   if (existing) return existing;
-  return insert<Closing>(q, TABLE, {
+  const inserted = await insertIfAbsent<Closing>(q, TABLE, {
     facilitationId: input.facilitationId,
     kind: input.kind,
     sessionId: input.sessionId ?? null,
@@ -112,7 +112,11 @@ export async function openClosing(q: Queryable, input: NewClosing): Promise<Clos
     ...(input.kind === 'abort' ? { resultStatus: 'aborted', finalAt: input.now } : {}),
     absoluteUntil: new Date(input.now.getTime() + CLOSING_LIMITS.absoluteMs),
     startedAt: input.now,
-  });
+  }, '(facilitation_id, event_id)');
+  if (inserted) return inserted;
+  const raced = await getClosingByEvent(q, input.facilitationId, eventId);
+  if (!raced) throw new Error(`closing ${eventId} of facilitation ${input.facilitationId} could not be opened`);
+  return raced;
 }
 
 export const getClosing = (q: Queryable, id: string): Promise<Closing | undefined> => one<Closing>(q, `SELECT * FROM ${TABLE} WHERE id = $1`, [id]);
@@ -123,8 +127,9 @@ export const getClosingByEvent = (q: Queryable, facilitationId: string, eventId:
 export const listClosings = (q: Queryable, facilitationId: string): Promise<Closing[]> =>
   rows<Closing>(q, `SELECT * FROM ${TABLE} WHERE facilitation_id = $1 ORDER BY started_at, id`, [facilitationId]);
 
+/** jsonb travels as text: `objections` is serialised here. */
 export const patchClosing = (q: Queryable, id: string, patch: Partial<Omit<Closing, 'id' | 'facilitationId' | 'kind' | 'sessionId' | 'eventId'>>): Promise<Closing | undefined> =>
-  update<Closing>(q, TABLE, { id }, patch);
+  update<Closing>(q, TABLE, { id }, patch.objections === undefined ? patch : { ...patch, objections: JSON.stringify(patch.objections) });
 
 /** Set the result status: the document is final from now on. */
 export function finalPatch(mark: ResultMark, now: Date): Pick<Closing, 'resultStatus' | 'resultReason' | 'finalAt'> {

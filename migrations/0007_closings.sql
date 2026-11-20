@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS plg_omadia_agent_facilitator_closings (
   ended_at               timestamptz,
   UNIQUE (facilitation_id, event_id),
   CHECK ((kind = 'session') = (session_id IS NOT NULL)),
-  CHECK (result_status IS DISTINCT FROM 'not_confirmed' OR result_reason IS NOT NULL)
+  -- A reason exactly for "not confirmed".
+  CHECK ((result_status IS NOT DISTINCT FROM 'not_confirmed') = (result_reason IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS plg_omadia_agent_facilitator_closings_open ON plg_omadia_agent_facilitator_closings (facilitation_id) WHERE ended_at IS NULL;
 
@@ -62,8 +63,14 @@ ALTER TABLE plg_omadia_agent_facilitator_outbox ADD COLUMN IF NOT EXISTS documen
 -- When the facilitation reached `ended` (or `aborted`): retention counts
 -- from here, never from `closed` (5.8).
 ALTER TABLE plg_omadia_agent_facilitator_facilitations ADD COLUMN IF NOT EXISTS ended_at timestamptz;
-UPDATE plg_omadia_agent_facilitator_facilitations SET ended_at = closed_at
- WHERE ended_at IS NULL AND closed_at IS NOT NULL AND (phase = 'aborted' OR followup_state <> 'active');
+-- Existing rows: an abort or a close without follow-up ended at the close; a
+-- follow-up that ran ended when its `followup_ended` event was written.
+UPDATE plg_omadia_agent_facilitator_facilitations f SET ended_at = CASE
+    WHEN f.phase = 'closed' AND f.followup_state = 'ended' THEN coalesce(
+      (SELECT max(e.occurred_at) FROM plg_omadia_agent_facilitator_events e WHERE e.facilitation_id = f.id AND e.kind = 'followup_ended'),
+      greatest(f.closed_at, f.followup_ends_at))
+    ELSE f.closed_at END
+ WHERE f.ended_at IS NULL AND f.closed_at IS NOT NULL AND (f.phase = 'aborted' OR f.followup_state <> 'active');
 
 -- How much a stakeholder may know of what the protocol leaves out for them
 -- (5.8, AVE 5.11): `full` gets every part it may know, `existence` a note
