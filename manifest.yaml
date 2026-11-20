@@ -31,7 +31,7 @@ identity:
   kind: "archetype"
   domain: "facilitation"
   name: "Facilitator archetype"
-  version: "1.5.7"
+  version: "1.6.0"
   description:
     en: "Delivers the archetype facilitator, an impartial moderator of group processes, and runs its facilitations: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Liefert den Archetyp Facilitator, einen unparteiischen Moderator von Gruppenprozessen, und führt seine Moderationen: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -52,7 +52,9 @@ compat:
   # private status requests (1.68) and kernel-issued grants (1.69). An older
   # kernel is not offered this version. Its own schema (1.62.0) is part of it:
   # there is no way back to a version that expects the shared pool.
-  core: ">=1.69.0 <2.0"
+  # 1.82.0 adds `conversationSend@2` `react` (quiet recording with a reaction,
+  # spec 5.14); 1.6.0 is built against it, so it is the floor.
+  core: ">=1.82.0 <2.0"
   node: ">=20"
 
 # The archetype this plugin delivers. Read strictly by the kernel.

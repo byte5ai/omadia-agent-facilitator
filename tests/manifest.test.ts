@@ -29,7 +29,7 @@ test('version is the same in package.json, manifest.yaml and the engine', () => 
 test('the manifest is of kind archetype and keeps the engine capability for kernels that find it by that', () => {
   assert.match(manifest, new RegExp(`provides:\\n\\s+- "${FACILITATION_ENGINE_CAPABILITY}"`));
   assert.match(manifest, /^\s{2}kind: "archetype"$/m);
-  assert.match(manifest, /^\s{2}core: ">=1\.69\.0 <2\.0"$/m);
+  assert.match(manifest, /^\s{2}core: ">=1\.82\.0 <2\.0"$/m);
 });
 
 /** The entries of one list of the `archetype:` block. */

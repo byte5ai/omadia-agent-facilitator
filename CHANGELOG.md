@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.6.0
+
+### Compatibility
+
+- **Requires plugin-api 1.82.0** (`compat.core: ">=1.82.0 <2.0"`): the release is built
+  against the kernel contract that carries `conversationSend@2` `react`. A kernel below
+  1.82.0 is not offered this version and stays on 1.5.7.
 
 ### Added
 
