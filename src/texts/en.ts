@@ -239,12 +239,13 @@ export const en = {
   actionNotYours: (name: string, number: number): string => `${name}, action item #${String(number)} is not yours to close.`,
   /** The status of a facilitation that has ended: what it reached and what
    *  is still followed up. Nothing about an open step; there is none. */
-  statusAfterClose: (s: { phase: string; goal: string; reason?: string; decisions: readonly string[]; contributed: readonly string[]; actions: readonly string[]; open: number; until?: string }): string =>
+  statusAfterClose: (s: { phase: string; goal: string; reason?: string; decisions: readonly string[]; contributed: readonly string[]; actions: readonly string[]; open: number; notAccepted?: readonly string[]; until?: string }): string =>
     [
       `Status: ${s.phase}${s.reason ? ` (${s.reason})` : ''}. Goal: ${s.goal}`,
       ...(s.decisions.length > 0 ? ['Decisions:', ...s.decisions.map((d) => `- ${d}`)] : []),
       `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody'}`,
       ...(s.actions.length > 0 ? [`Action items (${String(s.open)} open):`, ...s.actions.map((a) => `- ${a}`)] : ['Action items: none']),
+      ...(s.notAccepted && s.notAccepted.length > 0 ? ['Open points:', ...s.notAccepted.map((a) => `- ${a}`)] : []),
       ...(s.until ? [`Followed up until: ${s.until}`] : []),
     ].join('\n'),
   actionStatus: (lines: readonly string[]): string => `Status of the action items:\n${lines.map((l) => `- ${l}`).join('\n')}`,

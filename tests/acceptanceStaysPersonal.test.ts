@@ -72,6 +72,17 @@ test('37. a "yes" after the freeze changes nothing and is answered once, also af
   const f = await h.facilitation(conv);
   assert.equal(lifecycleOf(f), 'following_up');
 
+  // A yes that answers something else is not an acceptance: a 👍 on the
+  // result, a "yes" in reply to another message.
+  const resultPost = h.kernel.groupPosts(conv).find((p) => p.text.startsWith('Result for'));
+  const quiet = posts(conv).length;
+  if (resultPost?.messageId) await h.kernel.react(conv, 'bert', resultPost.messageId, 'like');
+  await h.kernel.say(conv, 'bert', 'yes', { replyTo: resultPost?.messageId ?? 'other' });
+  await h.settle();
+  assert.equal(posts(conv).slice(quiet).filter((t) => t.includes('stays an open point')).length, 0, 'not about the nomination');
+  const status = (await h.tool('facilitation_status', {}, { conversation: conv, agent: 'mira' })).split('\n');
+  assert.ok(status.includes('Open points:') && status.includes('- #1 Book the venue: proposed for Bert, not accepted'), status.join(' | '));
+
   await h.restart();
   const before = posts(conv).length;
   await h.kernel.say(conv, 'bert', 'yes', { replyTo: prompt });

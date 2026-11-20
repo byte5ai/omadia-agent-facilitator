@@ -97,12 +97,17 @@ export async function endFollowup(w: Work): Promise<void> {
   w.post({ purpose: 'followup_ended', key: 'end', to: 'group', deliveryClass: 'essential', text: texts(w.f.language).followupEnded() });
 }
 
+/** The action items for a status post: what an owner accepted, and the
+ *  nominations nobody accepted as open points (criterion 37). */
 export async function actionStatusLines(w: Pick<Work, 'tx' | 'f'>): Promise<string[]> {
   const t = texts(w.f.language);
   const participants = await store.listParticipants(w.tx, w.f.id);
-  return (await store.listActionItems(w.tx, w.f.id)).map((a) =>
-    t.actionLine(a.number, a.description, participants.find((p) => p.principalId === a.ownerPrincipal)?.displayName ?? a.ownerPrincipal, formatWhen(a.dueDate, w.f.timezone, w.f.language), t.actionStatusWords[a.status]),
-  );
+  const name = (principal: string): string => participants.find((p) => p.principalId === principal)?.displayName ?? principal;
+  const items = await store.listActionItems(w.tx, w.f.id);
+  return [
+    ...items.filter((a) => a.status === 'confirmed' || a.status === 'done').map((a) => t.actionLine(a.number, a.description, name(a.ownerPrincipal), formatWhen(a.dueDate, w.f.timezone, w.f.language), t.actionStatusWords[a.status])),
+    ...items.filter((a) => a.status === 'proposed').map((a) => t.notAccepted(a.number, a.description, name(a.ownerPrincipal))),
+  ];
 }
 
 const DONE = /^(?:(?:done|erledigt|fertig)\s*#?(\d{1,3})|#?(\d{1,3})\s*(?:done|erledigt|fertig))$/;
@@ -190,6 +195,19 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
  * nomination's own message counts as that "yes", or a free-standing one when
  * nothing else is open that it could answer.
  */
+async function somethingElseWaits(w: Work, principal: string): Promise<boolean> {
+  if (await store.openProposal(w.tx, w.f.id)) return true;
+  const other = await w.tx.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_facilitations f
+      WHERE f.id <> $1 AND f.channel_type = $2 AND f.conversation_id = $3 AND f.phase IN ('configuring', 'active', 'concluding')
+        AND (EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_acks k WHERE k.facilitation_id = f.id AND k.status = 'pending' AND k.principal = $4)
+             OR EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_proposals p WHERE p.facilitation_id = f.id AND p.status = 'open'))
+      LIMIT 1`,
+    [w.f.id, w.f.channelType, w.f.conversationId, principal],
+  );
+  return other.rows.length > 0;
+}
+
 const lateAcceptance: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || w.f.phase === 'active' || w.f.phase === 'configuring') return undefined;
   const reaction = record.kind === 'reaction' && record.reaction !== undefined && !record.reaction.removed && isPositiveReaction(record.reaction.name);
@@ -203,8 +221,12 @@ const lateAcceptance: InboundHandler = async ({ w, record, author, command }) =>
   );
   const target = reaction ? record.messageId : record.replyToMessageId;
   const bound = late.rows.filter((r) => r.prompt !== null && r.prompt === target);
-  const open = bound.length === 0 && late.rows.length === 1 && !(await store.openProposal(w.tx, w.f.id)) ? late.rows : bound;
-  const hit = open[0];
+  // Free-standing means a new message that replies to nothing: a reaction or
+  // a reply elsewhere is about that other message. Nor is it free-standing
+  // while anything else waits for this person's yes in this conversation
+  // (another facilitation's nomination, an open proposal here).
+  const freeStanding = bound.length === 0 && !reaction && record.replyToMessageId === undefined && late.rows.length === 1 && !(await somethingElseWaits(w, author.principalId));
+  const hit = freeStanding ? late.rows[0] : bound[0];
   if (!hit) return undefined;
   if (hit.answered) return { outcome: 'late_acceptance_repeated' };
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET detail = detail || '{"lateAnswered": true}'::jsonb WHERE id = $1`, [hit.ack_id]);

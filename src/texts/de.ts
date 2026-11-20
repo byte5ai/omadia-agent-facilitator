@@ -210,6 +210,7 @@ export const de: Texts = {
       ...(s.decisions.length > 0 ? ['Entscheidungen:', ...s.decisions.map((d) => `- ${d}`)] : []),
       `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'niemand'}`,
       ...(s.actions.length > 0 ? [`Aufgaben (${String(s.open)} offen):`, ...s.actions.map((a) => `- ${a}`)] : ['Aufgaben: keine']),
+      ...(s.notAccepted && s.notAccepted.length > 0 ? ['Offene Punkte:', ...s.notAccepted.map((a) => `- ${a}`)] : []),
       ...(s.until ? [`Nachverfolgung bis: ${s.until}`] : []),
     ].join('\n'),
   actionStatus: (lines) => `Stand der Aufgaben:\n${lines.map((l) => `- ${l}`).join('\n')}`,
