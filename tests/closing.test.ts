@@ -270,3 +270,58 @@ test('the absolute limit: nothing of a closing is sent after 30 days', { skip: P
   const c = await closingOf(conv);
   assert.equal(c.deliveryStatus, 'not_delivered');
 });
+
+test('38. a closing document survives later changes: its send fails, the state moves on, after a restart the same version is delivered; a stale reminder is not', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cl-38', [ANNA, BERT, CARA]);
+  await startActive(h, conv, FREE);
+  const f0 = await h.facilitation(conv);
+  // A reminder computed now, bound to this state.
+  await h.db.pool.query(
+    `INSERT INTO plg_omadia_agent_facilitator_outbox (facilitation_id, idempotency_key, purpose, target_kind, payload, delivery_class, required_state_version, owner, created_at)
+     VALUES ($1, $2, 'reminder', 'group', '{"text":"Reminder: two contributions are still open."}'::jsonb, 'droppable', $3, 'other-engine', $4)`,
+    [f0.id, `${f0.id}:reminder:stale`, f0.stateVersion, h.clock.now()],
+  );
+  for (let i = 0; i < 2; i += 1) h.kernel.sendFaults.push({ code: 'throttled', message: 'try later' });
+  await tool(conv, 'facilitation_close');
+  const row = (await h.db.pool.query<{ closing_id: string; document_version: number; required_state_version: number | null; status: string }>(
+    `SELECT closing_id, document_version, required_state_version, status FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'result'`,
+    [f0.id],
+  )).rows[0];
+  const c = await closingOf(conv);
+  assert.deepEqual([row?.closing_id, row?.document_version, row?.required_state_version], [c.id, 1, null], 'closing event id and document version instead of a state version');
+  // The state moves on (an objection, a status request) before the retry.
+  await h.db.pool.query('UPDATE plg_omadia_agent_facilitator_facilitations SET state_version = state_version + 5 WHERE id = $1', [f0.id]);
+  await h.restart();
+  for (let i = 0; i < 3; i += 1) {
+    h.clock.advance(HOUR_MS);
+    await h.tick();
+  }
+  const after = await closingOf(conv);
+  assert.deepEqual([after.deliveryStatus, after.documentVersion], ['delivered', 1]);
+  assert.equal(results(conv).length, 1);
+  assert.ok(!posts(conv).some((t) => t.startsWith('Reminder: two contributions')), 'the stale reminder is not sent');
+});
+
+test('40. the result waits for a session closing that needs confirmation; only after it ended the final summary goes out', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('cl-40', [ANNA, BERT, CARA]);
+  const f = await startActive(h, conv, FREE);
+  // A session whose summary waits for its consent window (F1 opens these).
+  const session = (await h.db.pool.query<{ id: string }>(
+    `INSERT INTO plg_omadia_agent_facilitator_sessions (facilitation_id, kind, status, created_at) VALUES ($1, 'live', 'confirming', $2) RETURNING id`,
+    [f.id, h.clock.now()],
+  )).rows[0];
+  const sessionClosing = (await h.db.pool.query<{ id: string }>(
+    `INSERT INTO plg_omadia_agent_facilitator_closings (facilitation_id, kind, session_id, event_id, document, requires_confirmation, part, part_started_at, absolute_until, started_at)
+     VALUES ($1, 'session', $2, $3, 'Session summary', true, 'confirmation', $4, $5, $4) RETURNING id`,
+    [f.id, session?.id, `session:${session?.id ?? ''}`, h.clock.now(), new Date(h.clock.now().getTime() + 30 * DAY_MS)],
+  )).rows[0];
+  await tool(conv, 'facilitation_close');
+  assert.equal((await closingOf(conv)).part, 'waiting');
+  assert.equal(results(conv).length, 0, 'the final summary waits');
+  // The session closes "not confirmed" (an objection counted).
+  await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_closings SET result_status = 'not_confirmed', result_reason = 'objection', final_at = $2, part = 'done', ended_at = $2 WHERE id = $1`, [sessionClosing?.id, h.clock.now()]);
+  await h.restart();
+  await h.tick();
+  assert.equal((await closingOf(conv)).part, 'confirmation');
+  assert.equal(results(conv).length, 1, 'only then the final summary goes out');
+});

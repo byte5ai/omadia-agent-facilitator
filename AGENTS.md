@@ -93,3 +93,42 @@ byte5ai/omadia `docs/adr/`.
   `unverifiable` (24 h after the window: result `not confirmed`, reason
   "participants could not be verified"). The closing procedure (#2064) calls
   it; it never tells the group itself.
+
+## Closing procedure (spec 5.2; ADR 0024 in byte5ai/omadia)
+
+- `src/engine/closing.ts` drives every open closing after each delivery and on every tick
+  (`advanceClosings`, registered as after-dispatch hook): `waiting` (the result waits for open
+  session closings that need confirmation: rows of kind `session` with `requires_confirmation`
+  and no status) → `delivery` (≤ 7 days) → `confirmation` (window from the confirmed delivery,
+  `final_confirm_window_hours`, default 24, max 72; decided only at its end; electorate via
+  F3 `finalConsentElectorate`, hourly retries ≤ 24 h) → `dispatch` (≤ 7 days from final) →
+  `done`. Nothing of a closing is sent after its absolute limit (30 days).
+- `conclude(w, { atDeadline, confirm })`: `confirm` only for a free-text definition of done
+  closed on request with more than one participant (`closeOnRequest`). The `dod_met` proposal
+  is no longer opened.
+- The final confirmation is a proposal of kind `final_confirmation` (`windowOnly`: the
+  proposals module never settles it). In `concluding` only its answers, status and stop count.
+- Stop in `concluding` (`stopAfterConcluding`, also an operator terminate): `closed` with
+  `close_reason = 'stopped'`, the result re-delivered as version 2 marked
+  `not confirmed (facilitation stopped)` / `published`, no abort report, no follow-up, no
+  follow-up invitation. Only `actor: 'kernel'` aborts a concluding facilitation.
+- A failed delivery closes `closed` with delivery status `not_delivered` (no longer `aborted`).
+- Abort reports are closing documents (closing kind `abort`) and list invitations already sent.
+- Session protocols (F1): open a closing with `openClosing(kind: 'session')`, post the document
+  with purpose `session_summary` or `session_protocol` and `closing: { id, version }`; the same
+  procedure moves it on. Stakeholders never receive session protocols.
+
+## Protocols, stakeholders, retention, quotas
+
+- `buildProtocol` puts `Result status:` and `Delivery:` right after the title.
+- Stakeholders get `stakeholderProtocol(q, f, disclosure)` (`src/engine/stakeholderProtocol.ts`),
+  one mail each, at the close or the abort only. Labels: `protocol` (header, decisions, next
+  steps, open points), `talk` (summaries, clusters, participants), `contribution` (never to a
+  stakeholder). `full` knows `protocol` + `talk`; `existence` and `none` only `protocol`; the
+  note about withheld parts from `existence` up.
+- `markEnded(w)` sets `ended_at` and `purge_after` (retention from `ended`/`aborted`). Follow-up
+  ends at min(last due + `followup_grace_days`, close + `followup_horizon_days`); a later due
+  date is refused (`due_beyond_horizon`). Purge waits for every open closing and scope;
+  `EFFECTIVE_DELETION_SQL` gives the effective time, shown in the facilitations view.
+- `facilitator_limits` (`limitsOf` in `src/engine/quota.ts`) overrides active, starts per hour
+  and messages per facilitation for single facilitators; the instance limit stays shared.
