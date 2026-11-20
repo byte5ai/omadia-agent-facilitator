@@ -45,7 +45,6 @@ const enTexts = {
   adoptNoStep: (name: string): string => `${name}, no step is open, so there is nothing to adopt it for right now.`,
   adoptedMarker: 'adopted from the transcript',
   stepElectorateSession: (step: string, session: string): string => `"${step}" is decided by the participants of "${session}", here in this chat.`,
-  mediaConsentGuests: (): string => 'Everybody in this meeting chat can answer: "agreed", or "objection: <reason>".',
   notConfirmedAtDeadline: (session: string, status: string): string => `the summary of the session "${session}" is ${status}, so the definition of done is not met at the deadline`,
 };
 
@@ -93,7 +92,6 @@ const deTexts: SessionTexts = {
   adoptNoStep: (name) => `${name}, gerade ist kein Schritt offen, für den du es übernehmen könntest.`,
   adoptedMarker: 'aus dem Transkript übernommen',
   stepElectorateSession: (step, session) => `Über „${step}“ entscheiden die Teilnehmenden von „${session}“, hier in diesem Chat.`,
-  mediaConsentGuests: () => 'Alle in diesem Meeting-Chat können antworten: „einverstanden“ oder „Einwand: <Grund>“.',
   notConfirmedAtDeadline: (session, status) => `die Zusammenfassung der Sitzung „${session}“ ist ${status}, damit ist die Definition of Done zur Deadline nicht erfüllt`,
 };
 

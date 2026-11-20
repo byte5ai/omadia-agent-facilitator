@@ -381,6 +381,8 @@ async function noteGuest(w: Work, session: Session, record: ConversationMessageR
     '(session_id, principal_id)',
   );
   if (added) await w.event('session_participant_joined', principal, { sessionId: session.id, home: home?.status === 'active' });
+  // The flag follows the person's home membership as it is now.
+  else await w.tx.query(`UPDATE ${GUESTS} SET home = $3 WHERE session_id = $1 AND principal_id = $2 AND home <> $3`, [session.id, principal, home?.status === 'active']);
 }
 
 /**

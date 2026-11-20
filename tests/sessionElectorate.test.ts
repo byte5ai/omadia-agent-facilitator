@@ -101,3 +101,21 @@ test('§6.3: in a linked session the media consent is asked in its chat, and a g
   assert.equal(session?.mediaConsent, 'refused');
   assert.match(posts(meeting).at(-1) ?? '', /I do not process the speech of this call/);
 });
+
+test('review: during a session step a guest can neither stop the facilitation nor answer a proposal of the home group; a question at home still gets an answer', { skip: PG_SKIP }, async () => {
+  const { home, meeting, f, gus } = await liveSession('el-guard');
+  await h.tool('facilitation_step_electorate', { scope: 'session' }, { conversation: home });
+  await say(meeting, gus, 'stop');
+  assert.equal((await h.facilitation(home)).phase, 'active', 'a session participant does not stop the facilitation');
+  // A question of a home participant who is not in the session: answered by a turn.
+  const turns = h.kernel.turns.length;
+  await say(home, 'cara', 'How long does this vote run?');
+  assert.equal(h.kernel.turns.length, turns + 1);
+  // A home-wide proposal (a change of the definition of done): the guest's objection counts nothing.
+  await h.tool('facilitation_propose_change', { change: 'definition_of_done', definitionOfDone: 'A venue is booked' }, { conversation: home });
+  const open = await store.openProposal(h.db.pool, f.id);
+  assert.ok(open, 'the change is put to the home group');
+  await say(meeting, gus, 'objection: no', { replyTo: open?.announceMessageId ?? '' });
+  const after = await store.openProposal(h.db.pool, f.id);
+  assert.equal(after?.objections.some((o) => o.principal === `user:${gus}`), false, 'not of the home electorate');
+});

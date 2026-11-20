@@ -24,6 +24,7 @@ import { cancelJobs, scheduleJob } from './jobs.js';
 import { onBeforeDeadline, registerJobHandler } from './scheduler.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { everybodyKnown } from './roll.js';
+import { stepElectorate } from './sessionElectorate.js';
 
 export interface ProposalKind {
   /** What is proposed, as a phrase for the announcement. */
@@ -160,9 +161,14 @@ const ELECTORATE_RETRY_MS = HOUR_MS;
  * later; at the deadline it fails, since nothing is decided past it.
  */
 async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean): Promise<boolean> {
-  const check = await verifyElectorate(w);
-  if (windowMayPass(check)) return true;
-  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: check.verified ? 'verified' : check.reason });
+  // A proposal with its own electorate verifies that one; the hourly retry
+  // below is the same.
+  const ownCheck = kindOf(proposal).verifyElectorate;
+  const stepId = proposal.payload['stepId'];
+  const step = typeof stepId === 'string' ? await store.getStep(w.tx, stepId) : undefined;
+  const ok = ownCheck ? await ownCheck(w, proposal) : windowMayPass(await verifyElectorate(w, step ? { step } : {}));
+  if (ok) return true;
+  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: 'electorate_unverified' });
   if (atDeadline) return false;
   // One retry waits at a time: every message also looks again, and must not
   // start another hourly chain.
@@ -180,8 +186,20 @@ async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean
 
 const standingOf = (proposal: Proposal, active: readonly Participant[]): ProposalObjection[] =>
   proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
-const activeOf = async (w: Work, proposal?: Proposal): Promise<Participant[]> =>
-  (proposal ? await kindOf(proposal).electorate?.(w, proposal) : undefined) ?? (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+/** Whose answers decide a proposal: its kind's own electorate, the session
+ *  participants of a session step it is about (5.5), or the active home
+ *  participants. `own`: it is not the home electorate. */
+async function electorateOf(w: Work, proposal: Proposal): Promise<{ people: Participant[]; own: boolean }> {
+  const ownPeople = await kindOf(proposal).electorate?.(w, proposal);
+  if (ownPeople) return { people: ownPeople, own: true };
+  const stepId = proposal.payload['stepId'];
+  if (typeof stepId === 'string') {
+    const step = await store.getStep(w.tx, stepId);
+    if (step?.electorateSessionId) return { people: (await stepElectorate(w.tx, w.f, step)).people, own: true };
+  }
+  return { people: (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active'), own: false };
+}
+const activeOf = async (w: Work, proposal: Proposal): Promise<Participant[]> => (await electorateOf(w, proposal)).people;
 
 /** Accept when the window is over without a standing objection (on a
  *  verified list of participants), or when every active participant agreed. */
@@ -190,8 +208,7 @@ async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atD
   if (kindOf(proposal).windowOnly === true) return false;
   if (windowOver) {
     // A standing objection rejects whoever else belongs to the list.
-    const ownCheck = kindOf(proposal).verifyElectorate;
-    const allowed = ownCheck ? await ownCheck(w, proposal) : await electorateAllows(w, proposal, atDeadline);
+    const allowed = await electorateAllows(w, proposal, atDeadline);
     if (standingOf(proposal, await activeOf(w, proposal)).length === 0 && !allowed) {
       if (!atDeadline) return false;
       await decideProposal(w, { ...proposal, objections: [] }, false);
@@ -200,7 +217,7 @@ async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atD
     // Read after the check: the fresh list may have brought or taken somebody.
     const active = await activeOf(w, proposal);
     const standing = standingOf(proposal, active);
-    const everybody = (kindOf(proposal).electorate !== undefined || everybodyKnown(w.f)) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
+    const everybody = ((await electorateOf(w, proposal)).own || everybodyKnown(w.f)) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
     const needsAll = kindOf(proposal).unanimous?.(w, proposal) === true;
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
@@ -241,8 +258,11 @@ async function withdrawConsent(w: Work, proposal: Proposal, author: Participant)
 /** Answers to the open proposal: agreed, objection, extend. */
 const proposalAnswers: InboundHandler = async ({ w, record, author: homeAuthor, command }) => {
   // A session participant answers a proposal of their session (5.5).
-  const open = homeAuthor ? undefined : await store.openProposal(w.tx, w.f.id);
-  const author = homeAuthor ?? (open ? await kindOf(open).answerer?.(w, open, record) : undefined);
+  const open = homeAuthor?.scope === 'session' || !homeAuthor ? await store.openProposal(w.tx, w.f.id) : undefined;
+  let author = homeAuthor;
+  if (open && !homeAuthor) author = await kindOf(open).answerer?.(w, open, record);
+  // A session participant answers only a proposal whose electorate they belong to.
+  if (open && author?.scope === 'session' && !(await electorateOf(w, open)).people.some((p) => p.principalId === author?.principalId)) return undefined;
   if (!author || (w.f.phase !== 'active' && w.f.phase !== 'configuring' && w.f.phase !== 'concluding')) return undefined;
   const proposal = await store.openProposal(w.tx, w.f.id);
   if (!proposal) return undefined;

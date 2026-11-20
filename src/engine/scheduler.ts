@@ -21,6 +21,7 @@ import { stoppedByOperator } from './scopes.js';
 import { participationOf } from './status.js';
 import { retryHeldDecisions } from './electorate.js';
 import { expectedNames, listKnown } from './roll.js';
+import { stepElectorate } from './sessionElectorate.js';
 
 export const LEASE_MS = 2 * MINUTE_MS;
 export const MAX_JOB_ATTEMPTS = 5;
@@ -186,7 +187,9 @@ export async function scheduleDeadlineJobs(w: Work): Promise<void> {
 async function waitingFor(w: Work): Promise<{ open: number; people: Participant[] }> {
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step) return { open: 0, people: [] };
-  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  // The step's electorate: a session step waits for its session's people (5.5).
+  const electorate = await stepElectorate(w.tx, w.f, step);
+  const active = electorate.people;
   if (step.method === 'assignment') {
     const outcome = await evaluateStep(w, step, false);
     if (outcome.state !== 'assignment_open') return { open: 0, people: [] };
@@ -196,7 +199,7 @@ async function waitingFor(w: Work): Promise<{ open: number; people: Participant[
   if (step.method) {
     const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
     const people = active.filter((p) => !cast.has(p.principalId));
-    return { open: people.length + expectedNames(w.f).length, people };
+    return { open: people.length + (electorate.session ? 0 : expectedNames(w.f).length), people };
   }
   const { missing } = await participationOf(w.tx, w.f);
   return { open: missing.length, people: missing };

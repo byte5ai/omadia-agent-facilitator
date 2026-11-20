@@ -31,8 +31,12 @@ import { PRIORITY, registerInboundHandler } from './inbound.js';
 import { onStepOpened } from './lifecycle.js';
 import { isBot } from './membership.js';
 import { sessionTitleOf } from './sessionLinks.js';
+import { parseBallot } from '../methods/ballot.js';
+import { roundOptions } from './decide.js';
 
 const SESSIONS = 'plg_omadia_agent_facilitator_sessions';
+/** How long the fresh member list of a session conversation may take. */
+const SESSION_ROSTER_TIMEOUT_MS = 5_000;
 const MEMBERS = 'plg_omadia_agent_facilitator_session_participants';
 
 export const activeMembers = (q: Queryable, sessionId: string): Promise<SessionParticipant[]> =>
@@ -41,6 +45,7 @@ export const activeMembers = (q: Queryable, sessionId: string): Promise<SessionP
 /** A session member in the shape the methods count with. */
 export function asParticipant(m: SessionParticipant): Participant {
   return {
+    scope: 'session',
     facilitationId: m.facilitationId,
     principalId: m.principalId,
     canonicalPrincipal: m.principalId,
@@ -70,6 +75,15 @@ export async function stepElectorate(q: Queryable, f: Pick<Facilitation, 'id'>, 
     if (session) return { people: (await activeMembers(q, session.id)).map(asParticipant), session };
   }
   return { people: (await store.listParticipants(q, f.id)).filter((p) => p.status === 'active') };
+}
+
+/** Everybody a ballot of the step may name: the home participants, and
+ *  for a session step its members too. */
+export async function namingPeople(q: Queryable, f: Pick<Facilitation, 'id'>, step: Pick<Step, 'electorateSessionId'> | undefined): Promise<Participant[]> {
+  const home = await store.listParticipants(q, f.id);
+  if (!step?.electorateSessionId) return home;
+  const members = (await activeMembers(q, step.electorateSessionId)).map(asParticipant).filter((m) => !home.some((p) => p.principalId === m.principalId));
+  return [...home, ...members];
 }
 
 /** The member of a session, if this person is one. */
@@ -122,8 +136,15 @@ async function syncMembers(w: Work, sessionId: string, humans: readonly { princi
  * asked again, fresh; a declared list is complete by its own rules.
  */
 export async function verifySessionElectorate(w: Work, session: Session): Promise<{ verified: true } | { verified: false; reason: Exclude<RosterStatus, 'complete'> }> {
-  if (session.electorateSource !== 'platform_roster' || !session.conversationId) return { verified: true };
-  const roster = await w.engine.deps.kernel.rosters()?.getRoster(w.f.channelType, session.conversationId, { agentSlug: w.f.facilitatorAgent, fresh: true }).catch(() => undefined);
+  // A declared session list is never known to be complete: nobody named it
+  // (5.5); a step of it is decided by its window, its timebox or the group.
+  if (session.electorateSource !== 'platform_roster' || !session.conversationId) return { verified: false, reason: 'unknown' };
+  const call = w.engine.deps.kernel.rosters()?.getRoster(w.f.channelType, session.conversationId, { agentSlug: w.f.facilitatorAgent, fresh: true });
+  let timer: NodeJS.Timeout | undefined;
+  // Bounded like the home check: the facilitation's lock is held meanwhile.
+  const roster = call
+    ? await Promise.race([call.catch(() => undefined), new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), SESSION_ROSTER_TIMEOUT_MS)))]).finally(() => clearTimeout(timer))
+    : undefined;
   const humans = (roster?.participants ?? []).filter((p) => p.isBot !== true && !isBot({ kind: p.userRef.kind, id: p.userRef.id }));
   const status: RosterStatus = humans.length === 0 ? 'unknown' : rosterStatusOf(roster);
   if (status === 'partial' || status === 'unknown') return { verified: false, reason: status };
@@ -169,12 +190,18 @@ export async function declareStepElectorate(w: Work, scope: 'session' | 'home'):
 /** In a session step only its members contribute; everybody else's message
  *  takes no effect on it (5.3: "messages from people who are not eligible
  *  for the step"). Status, stop and answers to proposals are read before. */
-const onlyMembers: InboundHandler = async ({ w, record }) => {
-  if (record.kind === 'transcript_segment' || record.kind === 'deleted') return undefined;
+const onlyMembers: InboundHandler = async ({ w, record, command }) => {
+  // Edits are left alone: an edit never displaces what was counted before.
+  if (record.kind !== 'created' && record.kind !== 'card_answer') return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.electorateSessionId || w.f.phase !== 'active') return undefined;
   if (await sessionMember(w.tx, step.electorateSessionId, principalKey(record.author))) return undefined;
-  return { outcome: 'not_eligible_for_step' };
+  if (record.kind === 'card_answer') return { outcome: 'not_eligible_for_step' };
+  // What would count: a ballot of the step, or a point while it collects.
+  // Anything else (a question, "next") is read as before.
+  const ballot = step.method ? parseBallot({ method: step.method, options: roundOptions(step), text: command }) : undefined;
+  const counts = ballot ? ballot.kind !== 'not_a_ballot' : step.kind === 'collect';
+  return counts ? { outcome: 'not_eligible_for_step' } : undefined;
 };
 
 /** A step that was planned for the session declares it when it opens during

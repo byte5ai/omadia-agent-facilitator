@@ -30,7 +30,7 @@ import { HOUR_MS } from '../clock.js';
 import * as store from '../db/store.js';
 import { principalKey, rosterStatusOf } from '../kernel.js';
 import type { ConversationRoster, RosterParticipant, RosterStatus } from '../kernel.js';
-import type { ElectorateSource, Participant } from '../model.js';
+import type { ElectorateSource, Participant, Step } from '../model.js';
 import { texts } from '../texts/index.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
@@ -68,8 +68,11 @@ const asked = new WeakMap<object, { check: Promise<ElectorateCheck>; notice: boo
  * `notice: false` keeps the group from being told (a decision that is only
  * looked at, not taken).
  */
-export function verifyElectorate(w: Work, opts: { notice?: boolean } = {}): Promise<ElectorateCheck> {
+export function verifyElectorate(w: Work, opts: { notice?: boolean; step?: Pick<Step, 'electorateSessionId'> } = {}): Promise<ElectorateCheck> {
   const notice = opts.notice !== false;
+  // A decision of a step run inside a session is about its session's list
+  // (5.5); every other decision about the home list.
+  if (opts.step?.electorateSessionId) return sessionCheck(w, opts.step.electorateSessionId, notice);
   const cached = asked.get(w.tx);
   // A quiet answer is reused only by another quiet check: a check that may
   // tell the group asks again, so that the notice is not lost.
@@ -101,16 +104,16 @@ export async function retryHeldDecisions(w: Work): Promise<void> {
   }
 }
 
+async function sessionCheck(w: Work, sessionId: string, notice: boolean): Promise<ElectorateCheck> {
+  const electorate = await stepElectorate(w.tx, w.f, { electorateSessionId: sessionId });
+  if (!electorate.session) return { verified: false, reason: 'unknown' };
+  const checked = await verifySessionElectorate(w, electorate.session);
+  if (checked.verified) return checked;
+  await unverified(w, checked.reason, notice);
+  return { verified: false, reason: checked.reason };
+}
+
 async function check_(w: Work, notice: boolean): Promise<ElectorateCheck> {
-  // A step run inside a session has its session's electorate (5.5).
-  const step = await store.openStepOf(w.tx, w.f.id);
-  const electorate = step?.electorateSessionId ? await stepElectorate(w.tx, w.f, step) : undefined;
-  if (electorate?.session) {
-    const checked = await verifySessionElectorate(w, electorate.session);
-    if (checked.verified) return checked;
-    await unverified(w, checked.reason, notice);
-    return { verified: false, reason: checked.reason };
-  }
   if (w.f.electorateSource === 'declared_list') {
     if (w.f.settings.openRoster === true) return { verified: false, reason: 'undeclared' };
     return everybodyKnown(w.f) ? { verified: true } : { verified: false, reason: 'names_pending' };

@@ -67,6 +67,12 @@ async function applyMembership(w: Work, event: ConversationMembershipEvent): Pro
     }
   }
   if (!changed) return;
+  // Session members follow the home membership: one who joined or left the
+  // home conversation is (no longer) a home participant there too (5.5).
+  for (const raw of event.members) {
+    if (isBot(raw)) continue;
+    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_session_participants SET home = $3 WHERE facilitation_id = $1 AND principal_id = $2`, [w.f.id, principalKey(raw), event.kind === 'members_added']);
+  }
   w.bump();
   for (const hook of hooks) await hook(w);
 }
@@ -108,7 +114,8 @@ async function applySessionMembership(w: Work, sessionId: string, event: Convers
     const added = await w.tx.query(
       `INSERT INTO plg_omadia_agent_facilitator_session_participants (facilitation_id, session_id, principal_id, display_name, status, joined_at, home)
        VALUES ($1, $2, $3, $4, 'active', $5, $6)
-       ON CONFLICT (session_id, principal_id) DO UPDATE SET status = 'active', left_at = NULL WHERE plg_omadia_agent_facilitator_session_participants.status = 'left'`,
+       ON CONFLICT (session_id, principal_id) DO UPDATE SET status = 'active', left_at = NULL, home = EXCLUDED.home
+         WHERE plg_omadia_agent_facilitator_session_participants.status = 'left' OR plg_omadia_agent_facilitator_session_participants.home <> EXCLUDED.home`,
       [w.f.id, sessionId, principal, raw.displayName ?? raw.id, w.now, home],
     );
     if ((added.rowCount ?? 0) > 0) await w.event('session_participant_joined', principal, { sessionId, by: 'membership_event' });

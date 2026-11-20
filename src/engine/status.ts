@@ -59,7 +59,7 @@ export function tallyOf(f: Facilitation, participation: Participation, hasOpenPr
     options: step.roundOptions ?? step.options,
     ...(Array.isArray(points) ? { points: points as number[] } : {}),
     ballots,
-    activeParticipants: [...participation.active.map((p) => p.principalId), ...expectedKeys(f)],
+    activeParticipants: [...participation.active.map((p) => p.principalId), ...(step.electorateSessionId ? [] : expectedKeys(f))],
     closeRule: effectiveCloseRule(f),
     deadlineReached: false,
     hasOpenProposal,
@@ -124,8 +124,8 @@ export async function statusText(q: Queryable, f: Facilitation, audience: Status
     definitionOfDone: dod?.text ?? '',
     // The named people nobody was matched to are still to come.
     ...(audience === 'private'
-      ? { contributed: participation.contributed.map((p) => p.displayName), missing: [...participation.missing.map((p) => p.displayName), ...(step ? expectedNames(f) : [])] }
-      : { contributed: participation.contributed.length, missing: participation.missing.length + (step ? expectedNames(f).length : 0) }),
+      ? { contributed: participation.contributed.map((p) => p.displayName), missing: [...participation.missing.map((p) => p.displayName), ...(step && !step.electorateSessionId ? expectedNames(f) : [])] }
+      : { contributed: participation.contributed.length, missing: participation.missing.length + (step && !step.electorateSessionId ? expectedNames(f).length : 0) }),
     ...(step?.method && options.length > 0 ? { options: t.options(options) } : {}),
     ...(counted && counted.tally.votes + counted.tally.abstentions > 0
       ? { tally: options.map((o) => `${o.label} ${String(counted.tally.scores[o.key] ?? 0)}`).join(', ') }

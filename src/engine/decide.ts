@@ -29,7 +29,7 @@ import { registerJobHandler } from './scheduler.js';
 import { closingSummary } from './protocol.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
-import { stepElectorate } from './sessionElectorate.js';
+import { namingPeople, stepElectorate } from './sessionElectorate.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
 const pointsOf = (step: Step): readonly number[] => {
@@ -131,7 +131,7 @@ export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing:
     // "Nobody objected" is said about a verified list. At the end of the
     // window the decision waits for one (retried with the next contribution
     // or reminder); nothing waits past the deadline, so there it fails.
-    const check = await verifyElectorate(w);
+    const check = await verifyElectorate(w, { step });
     if (windowMayPass(check)) return evaluateStep(w, step, closing);
     await w.event('decision_held', 'engine', { stepId: step.id, reason: check.verified ? 'verified' : check.reason, atDeadline: closing });
     if (closing) return { state: 'electorate_unverified' } as const;
@@ -143,7 +143,7 @@ export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing:
     return { state: 'waiting', missing: [] };
   }
   if (closing || !DECIDED_BY_COMPLETENESS.has(outcome.state)) return outcome;
-  const check = await verifyElectorate(w);
+  const check = await verifyElectorate(w, { step });
   if (!check.verified) {
     await w.event('decision_held', 'engine', { stepId: step.id, reason: check.reason });
     return { state: 'waiting', missing: [] };
@@ -223,7 +223,7 @@ async function promptNominees(w: Work, input: BallotInput, contribution: Contrib
  *  counts at once; one read from free text waits for its author. */
 export async function recordBallot(w: Work, input: BallotInput): Promise<Contribution> {
   const t = texts(w.f.language);
-  const participants = await store.listParticipants(w.tx, w.f.id);
+  const participants = await namingPeople(w.tx, w.f, input.step);
   const summary = summariseBallot(input.ballot, roundOptions(input.step), people(participants), t.words);
   const hadOlder =
     input.ballot.type !== 'assignment' &&
@@ -426,7 +426,9 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | {
   }
   const t = texts(w.f.language);
   const options = roundOptions(step);
-  const participants = await store.listParticipants(w.tx, w.f.id);
+  // Names come from everybody the step may name; "missing" from its electorate (5.5).
+  const participants = await namingPeople(w.tx, w.f, step);
+  const electorate = await stepElectorate(w.tx, w.f, step);
   const deadlineReached = trigger === 'deadline';
   // Closed early by the group: counted as it stands, like at the deadline.
   // What the deadline would end without a result (a tie, an objection, open
@@ -434,7 +436,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | {
   const closing = deadlineReached || trigger === 'group';
   const outcome = await evaluatedWithKnownElectorate(w, step, closing);
   const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
-  const votesMissing = closing && (expectedNames(w.f).length > 0 || participants.some((p) => p.status === 'active' && !cast.has(p.principalId)));
+  const votesMissing = closing && ((!electorate.session && expectedNames(w.f).length > 0) || electorate.people.some((p) => !cast.has(p.principalId)));
   const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, texts(w.f.language).unnamedPerson);
 
   switch (outcome.state) {
@@ -590,7 +592,7 @@ const ballots: InboundHandler = async ({ w, record, author, retired, command }) 
 export async function withoutTakenItems(w: Work, step: Step, author: Participant, ballot: Ballot, key: string): Promise<Ballot | undefined> {
   if (ballot.type !== 'assignment' || step.method !== 'assignment') return ballot;
   const t = texts(w.f.language);
-  const participants = await store.listParticipants(w.tx, w.f.id);
+  const participants = await namingPeople(w.tx, w.f, step);
   const current = (await evaluateStep(w, step, false)) as Extract<Evaluation, { assignments: ItemAssignment[] }>;
   const free = ballot.nominations.filter((n) => {
     const holder = current.assignments.find((a) => a.item === n.item);

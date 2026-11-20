@@ -92,6 +92,8 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
     w.post({ purpose: 'status', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text });
     return { outcome: 'status' };
   }
+  // A session participant may stop listening (6.3), never the facilitation.
+  if (STOP.test(command) && author.scope === 'session') return { outcome: 'stop_not_for_session_participants' };
   if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring' || w.f.phase === 'concluding')) {
     const route = await correlate(w, record, author, { kind: 'stop' });
     if (route === 'asked') return { outcome: 'which_process' };
@@ -281,6 +283,8 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
     // In a step run inside this session, its participants contribute (5.5).
     const step = await store.openStepOf(w.tx, w.f.id);
     if (!step?.electorateSessionId) return undefined;
+    const own = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_sessions WHERE id = $1 AND conversation_id = $2`, [step.electorateSessionId, record.conversationId]);
+    if (own.rows.length === 0) return undefined;
     const member = await sessionMember(w.tx, step.electorateSessionId, key);
     return member ? asParticipant(member) : undefined;
   }

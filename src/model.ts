@@ -360,6 +360,9 @@ export type ElectorateSource = 'platform_roster' | 'declared_list';
 export type ParticipantSource = 'roster' | 'declared' | 'named' | 'posted' | 'joined';
 
 export interface Participant {
+  /** Not a stored home participant: a session participant counted for a
+   *  step run inside their session (spec 5.5). Never written back. */
+  scope?: 'session';
   facilitationId: string;
   principalId: string;
   canonicalPrincipal: string | null;

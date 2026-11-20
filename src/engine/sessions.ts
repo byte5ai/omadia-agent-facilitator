@@ -32,7 +32,7 @@ import { cardAnswers, closeAllCards, closeStepCards, installCardReaders, postIde
 import { closeSession } from './sessionClose.js';
 import { goLiveAtKernel, missedSession, notLive } from './sessionLinks.js';
 import { activeMembers, asParticipant, sessionMember, verifySessionElectorate } from './sessionElectorate.js';
-import { verifyElectorate } from './electorate.js';
+import { verifyElectorate, windowMayPass } from './electorate.js';
 
 const TIME_NOTICE_MINUTES = 5;
 const MIN_TIMEBOX_FOR_NOTICE = 10;
@@ -532,7 +532,7 @@ export function installSessions(): void {
     },
     verifyElectorate: async (w, p) => {
       const session = await getSession(w.tx, String(p.payload['sessionId']));
-      return session?.conversationId ? (await verifySessionElectorate(w, session)).verified : (await verifyElectorate(w)).verified;
+      return session?.conversationId ? (await verifySessionElectorate(w, session)).verified : windowMayPass(await verifyElectorate(w));
     },
     answerer: async (w, p, record) => {
       const session = await getSession(w.tx, String(p.payload['sessionId']));
