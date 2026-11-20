@@ -12,7 +12,7 @@ import { CONFIG_DEFAULTS, facilitatorConfig, profileSettings } from '../src/conf
 import { rows } from '../src/db/sql.js';
 import * as store from '../src/db/store.js';
 import type { Job } from '../src/model.js';
-import { ANNA, BERT, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, createHarness, passWindow, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -142,6 +142,9 @@ test("a deadline change derives the reminders from the facilitator's offsets aga
     await h.kernel.say(conv, who, 'agreed');
     await h.settle();
   }
+  // Spec 5.7: the change holds when its consent window ends, also when
+  // everybody agreed before.
+  await passWindow(h, conv);
   const moved = await h.facilitation(conv);
   assert.equal(moved.deadline?.toISOString(), next);
   assert.deepEqual(moved.reminderPolicy.offsetsHours, [48, 6]);
