@@ -277,7 +277,7 @@ export class FakeKernel {
    *  the simulated channel, unless the agent is in {@link noIdentity}. */
   readonly ownIdentities = new Map<string, string[]>();
   /** Per agent: the archetype settings the operator set (`AgentProfile.archetypeSettings`). */
-  readonly agentSettings = new Map<string, Record<string, unknown>>();
+  readonly agentSettings = new Map<string, Record<string, string | readonly number[]>>();
   /** Per `agent|conversation`: what the readiness check reports missing. */
   readonly notReady = new Map<string, { code: string; message: string }[]>();
   /** `agent|conversation` keys whose missing consent a repair fixes; and the repairs asked for. */

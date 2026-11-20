@@ -105,7 +105,7 @@
   `facilitation_record_spoken` is removed. A reply that confirms a question
   whose text was corrected since confirms nothing.
 - Migration `0008_session_conversations`.
-- Uses plugin-api 1.79.0 where present (`setSessionState`, `onLinkRequest`,
+- Uses plugin-api 1.81.0 where present (`setSessionState`, `onLinkRequest`,
   `reserveConversation({ linkRequestId })`, `superseded`); on an older
   kernel a linked session cannot go live.
 
