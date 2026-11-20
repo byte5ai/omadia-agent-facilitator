@@ -17,9 +17,6 @@
   set as the facilitator's own identity; elsewhere recording stays silent. A
   reaction is not counted as a message of the facilitation. Feature-detected:
   an older kernel or a channel without reactions changes nothing.
-
-### Added
-
 - **Repeat after a rule change (#2062 criterion 57; migration 0010).** A
   change of the method of a closed step repeats it as a new step linked to it
   (`repeats_step_id`), opened at once with fresh contributions; a step that was
