@@ -25,6 +25,7 @@ import { closingSummary } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
 import { effectiveCloseRule, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
+import { stepElectorate } from './sessionElectorate.js';
 
 const isDeciding = (step: Step): boolean => step.method !== null;
 const needsOptions = (step: Step): boolean => step.method !== null && step.method !== 'consent' && step.options.length === 0;
@@ -150,7 +151,7 @@ const counts = (c: Contribution): boolean => c.status === 'valid' || c.status ==
 
 /** Who has contributed how much to the open step. Computed, never guessed. */
 export async function balanceOf(w: Pick<Work, 'tx' | 'f'>, step: Step): Promise<Balance> {
-  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  const active = (await stepElectorate(w.tx, w.f, step)).people;
   const contributions = (await store.listContributions(w.tx, w.f.id, step.id)).filter(counts);
   const perPerson = active.map((participant) => ({ participant, count: contributions.filter((c) => c.participantPrincipal === participant.principalId).length }));
   const invited = new Set(
@@ -234,7 +235,7 @@ async function timeboxEnded(w: Work, stepId: string): Promise<void> {
   if (step.timeboxEndsAt && step.timeboxEndsAt > w.now) return;
   if (isDeciding(step) && !needsOptions(step)) {
     const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
-    const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+    const active = (await stepElectorate(w.tx, w.f, step)).people;
     w.post({ purpose: 'timebox_over', key: step.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], text: t.timeboxOverVote(step.title, active.filter((p) => !cast.has(p.principalId)).length) });
     return;
   }
@@ -413,7 +414,8 @@ export function voteClosesLine(f: Facilitation, step: Step): string {
 /** Put "close the vote now" to the group. */
 export async function proposeVoteClose(w: Work, step: Step, proposedBy: string, proposalMessageId?: string): Promise<Proposal> {
   const cast = (await castBallots(w, step)).length;
-  const of = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active').length + expectedNames(w.f).length;
+  const electorate = await stepElectorate(w.tx, w.f, step);
+  const of = electorate.people.length + (electorate.session ? 0 : expectedNames(w.f).length);
   return openProposal(w, {
     kind: 'vote_close',
     summary: step.title,

@@ -24,6 +24,7 @@ import { expectedNames, sameName, sourceOfName } from './roll.js';
 import { namesOf, withoutMention } from './addressing.js';
 import { wantedMode } from './scopes.js';
 import { advanceSessionCursor, gateSessionRecord, sessionStatusText } from './sessionLinks.js';
+import { asParticipant, sessionMember } from './sessionElectorate.js';
 import { statusText } from './status.js';
 
 export interface InboundResult {
@@ -91,6 +92,8 @@ const commands: InboundHandler = async ({ w, record, author, command }) => {
     w.post({ purpose: 'status', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text });
     return { outcome: 'status' };
   }
+  // A session participant may stop listening (6.3), never the facilitation.
+  if (STOP.test(command) && author.scope === 'session') return { outcome: 'stop_not_for_session_participants' };
   if (STOP.test(command) && (w.f.phase === 'active' || w.f.phase === 'configuring' || w.f.phase === 'concluding')) {
     const route = await correlate(w, record, author, { kind: 'stop' });
     if (route === 'asked') return { outcome: 'which_process' };
@@ -275,7 +278,16 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
   let author = await store.getParticipant(w.tx, w.f.id, key);
   // In a linked session conversation nobody becomes a home participant by
   // writing: a person there is a session participant (5.3, 5.5).
-  if (record.conversationId !== w.f.conversationId) return author?.status === 'active' ? author : undefined;
+  if (record.conversationId !== w.f.conversationId) {
+    if (author?.status === 'active') return author;
+    // In a step run inside this session, its participants contribute (5.5).
+    const step = await store.openStepOf(w.tx, w.f.id);
+    if (!step?.electorateSessionId) return undefined;
+    const own = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_sessions WHERE id = $1 AND conversation_id = $2`, [step.electorateSessionId, record.conversationId]);
+    if (own.rows.length === 0) return undefined;
+    const member = await sessionMember(w.tx, step.electorateSessionId, key);
+    return member ? asParticipant(member) : undefined;
+  }
   const live = w.f.phase === 'configuring' || w.f.phase === 'active';
   // A participant the request named and nobody was matched to: the name on
   // this message says who it is.

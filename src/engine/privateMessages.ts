@@ -97,11 +97,18 @@ async function answerDone(engine: EngineCore, taking: readonly Taking[], number:
  *  session state and time slot; never names, tallies or anything of the
  *  home conversation. */
 async function answerGuestStatus(engine: EngineCore, request: PrivateMessageRequest, principal: string): Promise<PrivateMessageReply> {
+  // The sessions that are not over come first: that is what a guest asks about.
+  const found: { f: Facilitation; sessions: Awaited<ReturnType<typeof guestSessionsOf>> }[] = [];
   for (const processId of request.processIds) {
     const f = await store.getFacilitation(engine.db(), processId);
     if (!f || f.facilitatorAgent !== request.agentSlug || f.channelType !== request.channelType) continue;
     const sessions = await guestSessionsOf(engine.db(), f.id, principal);
-    if (sessions.length === 0) continue;
+    if (sessions.length > 0) found.push({ f, sessions });
+  }
+  const running = (s: { status: string }): boolean => s.status === 'scheduled' || s.status === 'live' || s.status === 'confirming';
+  found.sort((a, b) => Number(b.sessions.some(running)) - Number(a.sessions.some(running)));
+  for (const { f, sessions: all } of found) {
+    const sessions = all.some(running) ? all.filter(running) : all;
     const t = sessionTexts(f.language);
     const lines = sessions.map((s) =>
       t.guestStatusLine(sessionTitleOf(s, f), t.sessionState[s.status] ?? s.status, s.scheduledStart ? formatWhen(s.scheduledStart, f.timezone, f.language) : undefined),

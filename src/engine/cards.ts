@@ -40,6 +40,7 @@ import { DONE_WHEN_ALL, rulesOf } from './lifecycle.js';
 import { onHeldDecisionRetry, verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
+import { namingPeople } from './sessionElectorate.js';
 
 /** The one question of a card that puts a step to the vote. */
 export const VOTE_QUESTION = 'vote';
@@ -237,7 +238,7 @@ export async function postStepCard(w: Work, step: Step): Promise<boolean> {
   await closeCards(w, await openCardsOf(w, step.id), 'superseded', [t.card.superseded]);
   const support = cardSupport(w.engine, w.f.channelType);
   if (!support || !step.method) return false;
-  const questions = voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support);
+  const questions = voteQuestions(w.f, step, await namingPeople(w.tx, w.f, step), support);
   if (!questions) return false;
   // What the group reads when the channel refuses the card after all: the
   // whole announcement the card stands for.
@@ -255,7 +256,7 @@ export async function postStepCard(w: Work, step: Step): Promise<boolean> {
 export async function voteCardFits(w: Pick<Work, 'tx' | 'f' | 'engine'>, step: Step): Promise<boolean> {
   const support = cardSupport(w.engine, w.f.channelType);
   if (!support || !step.method) return false;
-  return voteQuestions(w.f, step, await store.listParticipants(w.tx, w.f.id), support) !== undefined;
+  return voteQuestions(w.f, step, await namingPeople(w.tx, w.f, step), support) !== undefined;
 }
 
 /** A collecting step: ideas can be sent through a text field as well. */
@@ -494,7 +495,7 @@ const ownRecord = (record: ConversationMessageRecord, perEvent: boolean): Conver
 const readVote: CardAnswerReader = async (w, { card, answers, record, author, verified }) => {
   const step = await store.openStepOf(w.tx, w.f.id);
   if (w.f.phase !== 'active' || !step || step.id !== card.stepId || step.round !== card.round) return { outcome: 'card_answer_stale' };
-  const parsed = ballotOf(step, answers, author, await store.listParticipants(w.tx, w.f.id));
+  const parsed = ballotOf(step, answers, author, await namingPeople(w.tx, w.f, step));
   if (!parsed) return { outcome: 'card_answer_invalid' };
   const ballot = await withoutTakenItems(w, step, author, parsed, record.eventId);
   if (!ballot) return { outcome: 'ballot_item_taken' };

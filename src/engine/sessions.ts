@@ -31,6 +31,8 @@ import { registerContextSection } from './turn.js';
 import { cardAnswers, closeAllCards, closeStepCards, installCardReaders, postIdeaCard, postStepCard } from './cards.js';
 import { closeSession } from './sessionClose.js';
 import { goLiveAtKernel, missedSession, notLive } from './sessionLinks.js';
+import { activeMembers, asParticipant, sessionMember, verifySessionElectorate } from './sessionElectorate.js';
+import { verifyElectorate, windowMayPass } from './electorate.js';
 
 const TIME_NOTICE_MINUTES = 5;
 const MIN_TIMEBOX_FOR_NOTICE = 10;
@@ -522,15 +524,33 @@ export function installSessions(): void {
     // Being listened to is never agreed to by a message meant for something else.
     boundOnly: true,
     unanimous: (w) => w.config.mediaConsentExplicit,
+    // In a linked session the people in the call decide, guests included:
+    // anyone of them can object (spec 6.3).
+    electorate: async (w, p) => {
+      const session = await getSession(w.tx, String(p.payload['sessionId']));
+      return session?.conversationId ? (await activeMembers(w.tx, session.id)).map(asParticipant) : undefined;
+    },
+    verifyElectorate: async (w, p) => {
+      const session = await getSession(w.tx, String(p.payload['sessionId']));
+      return session?.conversationId ? (await verifySessionElectorate(w, session)).verified : windowMayPass(await verifyElectorate(w));
+    },
+    answerer: async (w, p, record) => {
+      const session = await getSession(w.tx, String(p.payload['sessionId']));
+      if (!session?.conversationId || record.conversationId !== session.conversationId) return undefined;
+      const member = await sessionMember(w.tx, session.id, principalKey(record.author));
+      return member ? asParticipant(member) : undefined;
+    },
     accept: async (w, p) => {
       await setConsent(w, String(p.payload['sessionId']), 'granted');
       await w.event('media_consent', 'group', { sessionId: p.payload['sessionId'], granted: true });
-      w.post({ purpose: 'media_consent', key: p.id, to: 'group', deliveryClass: 'essential', text: texts(w.f.language).mediaConsentGranted() });
+      const there = await getSession(w.tx, String(p.payload['sessionId']));
+      w.post({ purpose: 'media_consent', key: p.id, to: 'group', ...(there?.conversationId ? { conversationId: there.conversationId } : {}), deliveryClass: 'essential', text: texts(w.f.language).mediaConsentGranted() });
     },
     reject: async (w, p) => {
       await setConsent(w, String(p.payload['sessionId']), 'refused');
       await w.event('media_consent', 'group', { sessionId: p.payload['sessionId'], granted: false });
-      w.post({ purpose: 'media_consent', key: p.id, to: 'group', deliveryClass: 'essential', text: texts(w.f.language).mediaConsentRefused() });
+      const there = await getSession(w.tx, String(p.payload['sessionId']));
+      w.post({ purpose: 'media_consent', key: p.id, to: 'group', ...(there?.conversationId ? { conversationId: there.conversationId } : {}), deliveryClass: 'essential', text: texts(w.f.language).mediaConsentRefused() });
     },
   });
 

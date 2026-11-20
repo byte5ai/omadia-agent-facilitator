@@ -9,6 +9,7 @@
 // What a proposal does when it is accepted is registered per kind: closing a
 // step, confirming clusters, a rule change.
 
+import type { ConversationMessageRecord } from '@omadia/plugin-api';
 import { HOUR_MS, MINUTE_MS } from '../clock.js';
 import { insert } from '../db/sql.js';
 import * as store from '../db/store.js';
@@ -23,6 +24,7 @@ import { cancelJobs, scheduleJob } from './jobs.js';
 import { onBeforeDeadline, registerJobHandler } from './scheduler.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { everybodyKnown } from './roll.js';
+import { stepElectorate } from './sessionElectorate.js';
 
 export interface ProposalKind {
   /** What is proposed, as a phrase for the announcement. */
@@ -41,6 +43,15 @@ export interface ProposalKind {
   windowOnly?: boolean;
   /** "extend N" is an answer to this kind of proposal. */
   extend?(w: Work, proposal: Proposal, minutes: number | undefined): Promise<void>;
+  /** Whose answers decide it, when that is not the active home participants
+   *  (a session's participants, spec 5.5). */
+  electorate?(w: Work, proposal: Proposal): Promise<Participant[] | undefined>;
+  /** Whether that electorate is verified for a decision at the window's end
+   *  (instead of the home electorate's check). */
+  verifyElectorate?(w: Work, proposal: Proposal): Promise<boolean>;
+  /** Who answers this message when it is no home participant (a session
+   *  participant in the session's own conversation). */
+  answerer?(w: Work, proposal: Proposal, record: ConversationMessageRecord): Promise<Participant | undefined>;
 }
 
 const kinds = new Map<string, ProposalKind>();
@@ -150,9 +161,14 @@ const ELECTORATE_RETRY_MS = HOUR_MS;
  * later; at the deadline it fails, since nothing is decided past it.
  */
 async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean): Promise<boolean> {
-  const check = await verifyElectorate(w);
-  if (windowMayPass(check)) return true;
-  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: check.verified ? 'verified' : check.reason });
+  // A proposal with its own electorate verifies that one; the hourly retry
+  // below is the same.
+  const ownCheck = kindOf(proposal).verifyElectorate;
+  const stepId = proposal.payload['stepId'];
+  const step = typeof stepId === 'string' ? await store.getStep(w.tx, stepId) : undefined;
+  const ok = ownCheck ? await ownCheck(w, proposal) : windowMayPass(await verifyElectorate(w, step ? { step } : {}));
+  if (ok) return true;
+  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: 'electorate_unverified' });
   if (atDeadline) return false;
   // One retry waits at a time: every message also looks again, and must not
   // start another hourly chain.
@@ -170,7 +186,20 @@ async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean
 
 const standingOf = (proposal: Proposal, active: readonly Participant[]): ProposalObjection[] =>
   proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
-const activeOf = async (w: Work): Promise<Participant[]> => (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+/** Whose answers decide a proposal: its kind's own electorate, the session
+ *  participants of a session step it is about (5.5), or the active home
+ *  participants. `own`: it is not the home electorate. */
+async function electorateOf(w: Work, proposal: Proposal): Promise<{ people: Participant[]; own: boolean }> {
+  const ownPeople = await kindOf(proposal).electorate?.(w, proposal);
+  if (ownPeople) return { people: ownPeople, own: true };
+  const stepId = proposal.payload['stepId'];
+  if (typeof stepId === 'string') {
+    const step = await store.getStep(w.tx, stepId);
+    if (step?.electorateSessionId) return { people: (await stepElectorate(w.tx, w.f, step)).people, own: true };
+  }
+  return { people: (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active'), own: false };
+}
+const activeOf = async (w: Work, proposal: Proposal): Promise<Participant[]> => (await electorateOf(w, proposal)).people;
 
 /** Accept when the window is over without a standing objection (on a
  *  verified list of participants), or when every active participant agreed. */
@@ -179,15 +208,16 @@ async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atD
   if (kindOf(proposal).windowOnly === true) return false;
   if (windowOver) {
     // A standing objection rejects whoever else belongs to the list.
-    if (standingOf(proposal, await activeOf(w)).length === 0 && !(await electorateAllows(w, proposal, atDeadline))) {
+    const allowed = await electorateAllows(w, proposal, atDeadline);
+    if (standingOf(proposal, await activeOf(w, proposal)).length === 0 && !allowed) {
       if (!atDeadline) return false;
       await decideProposal(w, { ...proposal, objections: [] }, false);
       return true;
     }
     // Read after the check: the fresh list may have brought or taken somebody.
-    const active = await activeOf(w);
+    const active = await activeOf(w, proposal);
     const standing = standingOf(proposal, active);
-    const everybody = everybodyKnown(w.f) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
+    const everybody = ((await electorateOf(w, proposal)).own || everybodyKnown(w.f)) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
     const needsAll = kindOf(proposal).unanimous?.(w, proposal) === true;
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
@@ -226,7 +256,13 @@ async function withdrawConsent(w: Work, proposal: Proposal, author: Participant)
 }
 
 /** Answers to the open proposal: agreed, objection, extend. */
-const proposalAnswers: InboundHandler = async ({ w, record, author, command }) => {
+const proposalAnswers: InboundHandler = async ({ w, record, author: homeAuthor, command }) => {
+  // A session participant answers a proposal of their session (5.5).
+  const open = homeAuthor?.scope === 'session' || !homeAuthor ? await store.openProposal(w.tx, w.f.id) : undefined;
+  let author = homeAuthor;
+  if (open && !homeAuthor) author = await kindOf(open).answerer?.(w, open, record);
+  // A session participant answers only a proposal whose electorate they belong to.
+  if (open && author?.scope === 'session' && !(await electorateOf(w, open)).people.some((p) => p.principalId === author?.principalId)) return undefined;
   if (!author || (w.f.phase !== 'active' && w.f.phase !== 'configuring' && w.f.phase !== 'concluding')) return undefined;
   const proposal = await store.openProposal(w.tx, w.f.id);
   if (!proposal) return undefined;
@@ -284,7 +320,9 @@ const proposalAnswers: InboundHandler = async ({ w, record, author, command }) =
   await patchProposal(w, proposal.id, { objections, consents: proposal.consents.filter((c) => c !== author.principalId) });
   w.bump();
   await w.event('proposal_objection', author.principalId, { proposalId: proposal.id, reason, messageId: record.messageId });
-  w.post({ purpose: 'proposal_objection', key: `${proposal.id}:${record.eventId}`, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.proposalObjection(author.displayName, reason) });
+  // A session's own proposal (its electorate is the session's) is answered in the session's chat.
+  const there = kindOf(proposal).electorate !== undefined && w.within !== undefined ? { conversationId: w.within } : {};
+  w.post({ purpose: 'proposal_objection', key: `${proposal.id}:${record.eventId}`, to: 'group', ...there, deliveryClass: 'droppable', versionBound: false, text: t.proposalObjection(author.displayName, reason) });
   return { outcome: 'proposal_objection' };
 };
 

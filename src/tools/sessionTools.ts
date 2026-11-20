@@ -6,6 +6,7 @@ import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
 import { endSession, prepareSessionStart, scheduleSession, speakingOrder, startSession } from '../engine/sessions.js';
+import { declareStepElectorate } from '../engine/sessionElectorate.js';
 import { resolvePerson } from '../methods/ballot.js';
 import { defineTool, liveFacilitation, oneOf, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ToolDefinition } from './toolkit.js';
@@ -72,6 +73,28 @@ export function sessionTools(engine: FacilitationEngine): ToolDefinition[] {
           if (!running) throw new Refusal('no_session', 'No session is running.');
           await endSession(w, running);
           return 'The session has ended. Its summary went out in its conversation; where it needs the group\'s confirmation it waits for it.';
+        });
+      },
+    ),
+
+    defineTool(
+      engine,
+      {
+        name: 'facilitation_step_electorate',
+        description:
+          'Who decides the open step: "session" = the participants of the session that runs in its linked meeting chat right now (people only in that chat count, people only at home do not), or "home" = the participants of the main conversation (the default). Only before anybody contributed to the step. Use "session" when the group wants a step decided by the people in the meeting.',
+        properties: { scope: { type: 'string', enum: ['session', 'home'] } },
+        required: ['scope'],
+      },
+      async (args, ctx) => {
+        const f = await liveFacilitation(engine, ctx);
+        const scope = oneOf(args, 'scope', ['session', 'home'] as const);
+        if (!scope) throw new Refusal('bad_input', "'scope' is 'session' or 'home'.");
+        return engine.core.work(f.id, async (w) => {
+          const declared = await declareStepElectorate(w, scope);
+          return scope === 'session'
+            ? `"${declared.step.title}" is now decided by the participants of the session${declared.session?.title ? ` "${declared.session.title}"` : ''}. That was said in the meeting chat.`
+            : `"${declared.step.title}" is decided by the participants of the main conversation.`;
         });
       },
     ),

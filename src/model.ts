@@ -281,6 +281,9 @@ export interface Session {
   /** The last readiness check of the session conversation (criterion 60). */
   readiness: 'ready' | 'not_ready' | null;
   readinessDetail: string | null;
+  /** Where the session's member list comes from, fixed when it is linked
+   *  (spec 5.5); null for a session in the home conversation. */
+  electorateSource: 'platform_roster' | 'declared_list' | null;
 }
 
 /** A person of a session conversation who is not a home participant (5.3). */
@@ -292,6 +295,8 @@ export interface SessionParticipant {
   status: 'active' | 'left';
   joinedAt: Date;
   leftAt: Date | null;
+  /** A home participant who is also in the session conversation. */
+  home: boolean;
 }
 
 /** One revision of a transcript segment of a live session (5.3). */
@@ -343,6 +348,9 @@ export interface Step {
   closedAt: Date | null;
   /** A repeat of this closed step after a rule change (spec 5.7). */
   repeatsStepId: string | null;
+  /** The session whose participants are this step's electorate instead of
+   *  the home participants (spec 5.5); null: the home participants. */
+  electorateSessionId: string | null;
 }
 
 /** Where the list of participants comes from (spec 5.5), fixed at start. */
@@ -352,6 +360,9 @@ export type ElectorateSource = 'platform_roster' | 'declared_list';
 export type ParticipantSource = 'roster' | 'declared' | 'named' | 'posted' | 'joined';
 
 export interface Participant {
+  /** Not a stored home participant: a session participant counted for a
+   *  step run inside their session (spec 5.5). Never written back. */
+  scope?: 'session';
   facilitationId: string;
   principalId: string;
   canonicalPrincipal: string | null;
