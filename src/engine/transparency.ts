@@ -16,8 +16,8 @@ import { conclude, onClosed } from './decide.js';
 import { displayNameOf, facilitatorName, onAborted, rulesOf, setHandshake, announceVote } from './lifecycle.js';
 import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
-import { expectedNames, listKnown } from './roll.js';
-import { openProposal, registerProposalKind } from './proposals.js';
+import { everybodyKnown, expectedNames, listKnown } from './roll.js';
+import { agree, openProposal, registerProposalKind } from './proposals.js';
 import { voteCardFits } from './cards.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
@@ -233,6 +233,30 @@ export async function proposeDodMet(w: Work): Promise<Proposal> {
   const t = texts(w.f.language);
   const summary = t.closeSummary(await closingSummary(w));
   return openProposal(w, { kind: 'dod_met', summary, proposedBy: 'facilitator', windowMinutes: Math.min(w.f.settings.confirmWindowMinutes, w.f.settings.changeWindowHours * 60) });
+}
+
+/**
+ * Somebody asked to close on a free-text definition of done. The one who
+ * asked agrees by asking. Where that person is the only participant there is
+ * nobody left to object: it concludes at once. Otherwise "the definition of
+ * done is met" is put to the group, with that person's consent on record.
+ */
+export async function closeOnRequest(w: Work, askedBy: string | undefined): Promise<'concluded' | 'proposed'> {
+  if (w.f.phase !== 'active') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
+  const dod = await store.currentDod(w.tx, w.f.id);
+  if (dod?.criteria) throw new Refusal('machine_checkable', 'This definition of done is checked automatically. The facilitation concludes by itself when it is met; there is nothing to confirm.');
+  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+  const asker = askedBy === undefined ? undefined : active.find((p) => p.principalId === askedBy);
+  if (asker && active.length === 1 && everybodyKnown(w.f) && !(await store.openProposal(w.tx, w.f.id))) {
+    await w.event('dod_met', asker.principalId, { by: 'the only participant' });
+    await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
+    w.bump();
+    await conclude(w, { atDeadline: false });
+    return 'concluded';
+  }
+  const proposal = await proposeDodMet(w);
+  if (asker) await agree(w, proposal, asker);
+  return w.f.phase === 'active' ? 'proposed' : 'concluded';
 }
 
 export function installTransparency(): void {

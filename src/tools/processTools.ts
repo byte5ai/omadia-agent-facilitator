@@ -12,6 +12,8 @@ import type { FacilitationEngine } from '../engine/engine.js';
 import { castBallots } from '../engine/decide.js';
 import { balanceOf, closeStep, extendStep, inviteSilentVoices, isChoiceVote, numberedContributions, proposeClusters, proposeVoteClose, setDecision, voteClosesLine } from '../engine/process.js';
 import { openProposal } from '../engine/proposals.js';
+import { closeOnRequest } from '../engine/transparency.js';
+import { principalKey } from '../kernel.js';
 import { protocolFor } from '../engine/governance.js';
 import { buildProtocol } from '../engine/protocol.js';
 import { texts } from '../texts/index.js';
@@ -85,6 +87,15 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             return `Not closed yet: ${String(invited)} ${invited === 1 ? 'person has' : 'people have'} not contributed to this step. They were invited privately and a neutral line was posted in the group. Give them a moment, then call close again. Do not name them.`;
           }
           await closeStep(w, step, 'facilitator');
+          // The last step of a facilitation whose definition of done is free
+          // text: nothing would close it now, so the close follows at once.
+          const rest = (await store.listSteps(w.tx, w.f.id)).filter((s) => s.status !== 'closed');
+          if (w.f.phase === 'active' && rest.length === 0 && !(await store.currentDod(w.tx, w.f.id))?.criteria && !(await store.openProposal(w.tx, w.f.id))) {
+            const how = await closeOnRequest(w, ctx.callerPrincipalId === undefined ? undefined : principalKey({ id: ctx.callerPrincipalId }));
+            return how === 'concluded'
+              ? 'Closed, and it was the last step: the facilitation is concluded and the result was posted in the group. Do not repeat it and do not call facilitation_close.'
+              : 'Closed, and it was the last step: the closing summary was put to the group, and the facilitation concludes when nobody objects. Do not repeat it and do not call facilitation_close.';
+          }
           return 'Closed. That was announced in the group and what comes next was opened there.';
         });
       },

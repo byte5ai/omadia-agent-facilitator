@@ -8,7 +8,7 @@ import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { parseInstant } from '../engine/lifecycle.js';
 import { askedOffsets } from '../engine/reminders.js';
-import { proposeChange, proposeDodMet } from '../engine/transparency.js';
+import { closeOnRequest, proposeChange } from '../engine/transparency.js';
 import type { ChangeRequest } from '../engine/transparency.js';
 import { toOptions } from '../methods/ballot.js';
 import { storedMessage } from './lifecycleTools.js';
@@ -105,13 +105,15 @@ export function transparencyTools(engine: FacilitationEngine): ToolDefinition[] 
       {
         name: 'facilitation_close',
         description:
-          'Only when the definition of done is free text: put "the definition of done is met" to the group, with the summary of decisions, next steps and open points. The facilitation concludes when nobody objects. A machine-checkable definition of done concludes by itself.',
+          'Close the facilitation when the group or a participant asks for it and the definition of done is free text. ONE call is all a close needs: the open step need not be closed first, and the answers of a questionnaire and the decisions are put into the result by the engine. It puts "the definition of done is met" to the group, with the summary of decisions, answers, next steps and open points; the person who asked counts as agreeing, and it concludes when nobody objects. Where that person is the only participant it concludes at once. A machine-checkable definition of done concludes by itself.',
       },
       async (_args, ctx) => {
         const f = await liveFacilitation(engine, ctx);
         return engine.core.work(f.id, async (w) => {
-          await proposeDodMet(w);
-          return 'The closing summary was put to the group. The facilitation concludes when nobody objects.';
+          const how = await closeOnRequest(w, ctx.callerPrincipalId === undefined ? undefined : principalKey({ id: ctx.callerPrincipalId }));
+          return how === 'concluded'
+            ? 'Concluded: the result was posted in the group. Do not repeat it; answer [silent] or with one short line.'
+            : 'The closing summary was put to the group. The facilitation concludes when nobody objects. Do not repeat the summary.';
         });
       },
     ),

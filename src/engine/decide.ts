@@ -230,6 +230,13 @@ export function setAfterStepDecided(hook: StepClosedHook): void {
   afterStepDecided = hook;
 }
 
+export type ResultAnswers = (w: Pick<Work, 'tx' | 'f'>) => Promise<string[]>;
+let resultAnswers: ResultAnswers = async () => [];
+/** What the group answered on a questionnaire belongs to the result. */
+export function setResultAnswers(provider: ResultAnswers): void {
+  resultAnswers = provider;
+}
+
 /** The definition of done is met: reminders stop in this transaction and the
  *  result goes to the group. */
 export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<void> {
@@ -247,14 +254,16 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
       .map((c) => c.participantPrincipal),
   );
   const summary = await closingSummary(w);
+  const answers = await resultAnswers(w);
   const text = t.result({
     goal: w.f.goal,
     decisions: decisions.map((d) => d.statement),
+    ...(answers.length > 0 ? { answers } : {}),
     actions: summary.actions,
     open: summary.open,
     ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length + expectedNames(w.f).length } } : {}),
   });
-  await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), atDeadline: ctx.atDeadline } });
+  await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), ...(answers.length > 0 ? { answers } : {}), atDeadline: ctx.atDeadline } });
   // Nothing time-based survives the conclusion: no reminder after completion.
   // Only the maximum duration stays, so a result that cannot be posted does
   // not keep the facilitation open forever.

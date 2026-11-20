@@ -1,5 +1,6 @@
 // Tools for the lifecycle and for authenticated contributions.
 
+import { MINUTE_MS } from '../clock.js';
 import * as store from '../db/store.js';
 import type { ContributionKind, MethodId } from '../model.js';
 import { parseBallot } from '../methods/ballot.js';
@@ -11,6 +12,7 @@ import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
 import type { AgendaStepInput } from '../engine/lifecycle.js';
 import { statusText } from '../engine/status.js';
+import { formatWhen } from '../texts/index.js';
 import { asObject, defineTool, liveFacilitation, requireReadable, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
 import type { ResolvedContext, ToolDefinition } from './toolkit.js';
 
@@ -66,6 +68,9 @@ async function openAndReport(engine: FacilitationEngine, facilitationId: string)
 
 const METHODS: readonly MethodId[] = ['ranked', 'single', 'approval', 'consent', 'assignment'];
 
+/** The longest span a relative deadline may name: thirty days. */
+const MAX_DEADLINE_MINUTES = 30 * 24 * 60;
+
 export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
     defineTool(
@@ -77,7 +82,8 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         properties: {
           goal: { type: 'string', description: 'What the group wants to reach.' },
           definitionOfDone: { type: 'string', description: 'When the facilitation is done, in the words agreed with the group. Leave it out if it is not agreed yet: a plain one is written from the goal, shown to the group at the opening, and you can call this tool again with the agreed wording.' },
-          deadline: { type: 'string', description: 'ISO 8601 with offset, e.g. 2026-11-21T17:00:00+01:00.' },
+          deadline: { type: 'string', description: 'A deadline given as a point in time: ISO 8601 with offset, e.g. 2026-11-21T17:00:00+01:00. For a deadline given as a span from now ("in 90 minutes", "in two hours") use deadlineInMinutes instead.' },
+          deadlineInMinutes: { type: 'number', description: 'A deadline given as a span from now: the minutes, e.g. 90 for "in 90 minutes" or "in anderthalb Stunden", 120 for "in two hours". The engine works out the time; you need not know what time it is. Never drop a deadline the request names: pass it here or in deadline.' },
           timezone: { type: 'string', description: 'IANA timezone of the group.' },
           language: { type: 'string', enum: ['de', 'en'] },
           method: { type: 'string', enum: [...METHODS], description: 'When the facilitation is one decision: ranked (points per rank), single (one option), approval (any set), consent (no standing objection), assignment (one confirmed name per item).' },
@@ -112,7 +118,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
       },
       async (args, ctx) => {
         if (!ctx.callerPrincipalId) throw new Refusal('no_caller', 'It is not known who asked. A facilitation needs an initiator.');
-        const deadline = optionalString(args, 'deadline');
+        const inMinutes = optionalNumber(args, 'deadlineInMinutes');
+        if (inMinutes !== undefined && optionalString(args, 'deadline') !== undefined) throw new Refusal('bad_deadline', "Pass either 'deadline' or 'deadlineInMinutes', not both. Nothing was created or changed.");
+        if (inMinutes !== undefined && !(inMinutes >= 1 && inMinutes <= MAX_DEADLINE_MINUTES)) throw new Refusal('bad_deadline', `'deadlineInMinutes' is a number of minutes from 1 to ${String(MAX_DEADLINE_MINUTES)}. Nothing was created or changed.`);
+        const deadline = inMinutes !== undefined ? new Date(engine.core.now().getTime() + Math.round(inMinutes) * MINUTE_MS).toISOString() : optionalString(args, 'deadline');
         const timezone = optionalString(args, 'timezone');
         const language = oneOf(args, 'language', ['de', 'en'] as const);
         const method = oneOf(args, 'method', METHODS);
@@ -167,6 +176,8 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...result.notes.map((n) => `Tell the group: ${n}`),
           ...(result.defaultedDod !== undefined ? [`No definition of done was given, so this one is used: "${result.defaultedDod}". Say it to the group; if they want another wording, call facilitation_start again with it.`] : []),
         ];
+        const set = result.facilitation.deadline;
+        notes.unshift(set ? `Deadline: ${formatWhen(set, result.facilitation.timezone, 'en')}.` : 'No deadline is set. If the request named one, call facilitation_start again with deadline or deadlineInMinutes; never tell the group there is none when they asked for one.');
         const what = result.created ? 'Facilitation created' : 'Setup updated';
         if (args['open'] === true) {
           const opened = await openAndReport(engine, result.facilitation.id);

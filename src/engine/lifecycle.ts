@@ -223,7 +223,7 @@ export function registerStartCheck(check: StartCheck): void {
 }
 
 /** A definition of done that is met as soon as everybody has contributed. */
-const DONE_WHEN_ALL =
+export const DONE_WHEN_ALL =
   /(?<!\p{L})(alle|jede[rs]?|everyone|everybody|all)(?!\p{L})[^.!?\n]{0,40}?(?<!\p{L})(abgestimmt|beigetragen|gewählt|geantwortet|voted|contributed|answered)(?!\p{L})/iu;
 
 const REPAIRABLE = new Set(['consent_missing', 'package_outdated']);

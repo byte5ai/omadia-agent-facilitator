@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.6
+
+Rollout defects D37 to D39 and observation O3 (found on 1.5.5).
+
+### Fixed
+
+- **D37, an answer on a questionnaire card counts.** In a step without a vote
+  a verified answer is that person's contribution: the status lists them under
+  "Contributed", nobody who answered is invited again, and a newer answer
+  replaces the earlier one. Next to a vote it is not a contribution: who
+  answered a questionnaire has not voted.
+- **D37, a facilitation that is a questionnaire finishes by itself.** When
+  every participant has answered, the card closes with the answers and the
+  facilitation concludes without a turn of the facilitator. This holds when
+  the facilitator posted the card with the new `closesWhenAllAnswered`, or
+  when the facilitation is one step without a vote whose definition of done
+  says that it is done once everybody answered.
+- **D37, the result names the answers.** The result of a facilitation lists
+  what was answered on its questionnaire (`Answers:` / `Antworten:`).
+- **D37, a turn knows the answers.** The state of a turn holds the latest
+  questionnaire with its answers, so no tool call is needed to read them.
+- **D38, closing on request fits a turn.** `facilitation_close` is one call:
+  it needs no step closed first, the person who asked counts as agreeing, and
+  where that person is the only participant the facilitation concludes at
+  once instead of asking a group of one for objections. Closing the last step
+  of a facilitation with a free-text definition of done is followed by the
+  same close in the same call, so it is not left open with nothing to do. A
+  turn reserves eight model calls instead of six.
+- **D39, a deadline given as a span from now is kept.** `facilitation_start`
+  takes `deadlineInMinutes` ("in 90 minutes" is 90) and works out the time
+  itself. Its answer states the deadline that holds, or that none is set and
+  what to do if the request named one.
+- **O3, the person reads what was taken over.** A questionnaire answer in a
+  step without a vote is acknowledged in the group with the value as the
+  engine keeps it ("15min" is acknowledged as 15). The receipt the channel
+  itself shows on the card is the channel's and unchanged.
+
 ## 1.5.5
 
 Finding O2 of the rollout: a question card closed while an operator had
