@@ -8,21 +8,21 @@ import { namesOf, withoutMention } from './addressing.js';
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { HOUR_MS } from '../clock.js';
-import type { Db } from '../db/pool.js';
-import { insert, rows, update } from '../db/sql.js';
+import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import { parseBallot, summariseBallot } from '../methods/ballot.js';
 import type { Ballot, Person } from '../methods/ballot.js';
 import { DEFAULT_POINTS, evaluate } from '../methods/evaluate.js';
 import type { AssignmentEvent, CastBallot, Evaluation, ItemAssignment } from '../methods/evaluate.js';
-import type { Ack, Contribution, ContributionKind, Decision, OutboxRow, Participant, Step, StepOption } from '../model.js';
+import type { Ack, Closing, Contribution, ContributionKind, Decision, Participant, Step, StepOption } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { askClarification, cancelOpenRequests, writtenAfterStart, confirmContribution, declineContribution, mention, recordContribution } from './contributions.js';
 import type { EngineCore, Work } from './core.js';
 import { PRIORITY, ackResolvers, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
-import { abortInWork, announceVote, displayNameOf, releaseConversation, releaseOnEnd, runAbortHooks } from './lifecycle.js';
+import { abortInWork, announceVote, displayNameOf, markEnded, releaseConversation, releaseOnEnd, setStopAfterConcluding } from './lifecycle.js';
+import { openResultClosing, setResultFinal, stopResultClosing } from './closing.js';
 import { onMembershipChange } from './membership.js';
 import { closingSummary } from './protocol.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
@@ -267,9 +267,17 @@ export function setResultAnswers(provider: ResultAnswers): void {
   resultAnswers = provider;
 }
 
-/** The definition of done is met: reminders stop in this transaction and the
- *  result goes to the group. */
-export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<void> {
+export interface ConcludeContext {
+  atDeadline: boolean;
+  /** The definition of done needs the group's confirmation of the final
+   *  summary (a free-text definition of done, spec 5.2). */
+  confirm?: boolean;
+}
+
+/** The definition of done is met: reminders stop in this transaction, an
+ *  immutable result is written and its closing procedure starts. Moderation
+ *  never re-opens. */
+export async function conclude(w: Work, ctx: ConcludeContext): Promise<void> {
   if (w.f.phase !== 'active') return;
   const t = texts(w.f.language);
   const decisions = await store.listDecisions(w.tx, w.f.id);
@@ -294,64 +302,54 @@ export async function conclude(w: Work, ctx: { atDeadline: boolean }): Promise<v
     open: summary.open,
     ...(ctx.atDeadline ? { atDeadline: { contributed: active.filter((p) => contributed.has(p.principalId)).length, of: active.length + expectedNames(w.f).length } } : {}),
   });
-  await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), ...(answers.length > 0 ? { answers } : {}), atDeadline: ctx.atDeadline } });
+  const requiresConfirmation = ctx.confirm === true;
+  await w.patch({ phase: 'concluding', concludedAt: w.now, result: { text, decisions: decisions.map((d) => d.statement), ...(answers.length > 0 ? { answers } : {}), atDeadline: ctx.atDeadline, requiresConfirmation } });
   // Nothing time-based survives the conclusion: no reminder after completion.
   // Only the maximum duration stays, so a result that cannot be posted does
   // not keep the facilitation open forever.
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind <> 'lifetime'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
-  w.post({ purpose: 'result', key: 'group', to: 'group', deliveryClass: 'essential', text });
-  await w.event('concluded', 'engine', { atDeadline: ctx.atDeadline });
+  // What was still put to the group cannot be answered any more.
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
+  await w.event('concluded', 'engine', { atDeadline: ctx.atDeadline, requiresConfirmation });
+  await openResultClosing(w, { document: text, requiresConfirmation });
 }
 
 export type AfterClose = (w: Work) => Promise<void>;
 const afterClose: AfterClose[] = [];
 /** Work that starts when a facilitation closed with a result (the report to
- *  the initiator, the follow-up of action items). */
+ *  the initiator, the protocol dispatch, the follow-up of action items). */
 export function onClosed(hook: AfterClose): void {
   if (!afterClose.includes(hook)) afterClose.push(hook);
 }
 
-/** concluding -> closed once the group has its result. Runs after every
- *  delivery, under the lock. */
-export async function closeWhenResultDelivered(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
-  const f = await store.getFacilitation(client, facilitationId);
-  if (!f) return;
-  if (f.phase === 'concluding') {
-    const results = await rows<OutboxRow>(client, `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND purpose = 'result' ORDER BY seq`, [f.id]);
-    const sent = results.some((r) => r.status === 'sent');
-    const gaveUp = results.find((r) => r.status === 'failed' || r.status === 'dropped');
-    if (!sent && gaveUp) {
-      await endUndelivered(engine, client, f.id, gaveUp.lastError ?? gaveUp.dropReason ?? 'unknown');
-      return;
-    }
-    if (!sent) return;
-    await engine.deps.hooks?.beforeClose?.();
-    await engine.workOn(client, f.id, async (w) => {
-      await w.patch({ phase: 'closed', closedAt: w.now, closeReason: 'result' });
-      await releaseOnEnd(w, engine.config.retentionDays);
-      await w.event('closed', 'engine', {});
-      for (const hook of afterClose) await hook(w);
-    });
+/** The result's status is set: concluding -> closed (a stop closed it
+ *  already), and what follows a close starts, once. */
+async function closeWithResult(w: Work, closing: Closing): Promise<void> {
+  if (w.f.phase === 'concluding') {
+    await w.engine.deps.hooks?.beforeClose?.();
+    await w.patch({ phase: 'closed', closedAt: w.now, closeReason: 'result' });
+    await releaseOnEnd(w);
+    await w.event('closed', 'engine', { status: closing.resultStatus, reason: closing.resultReason, deliveryStatus: closing.deliveryStatus });
   }
+  if (w.f.phase !== 'closed') return;
+  for (const hook of afterClose) await hook(w);
+  // Without a follow-up `closed` goes straight to `ended` (spec 5.2).
+  if (w.f.followupState !== 'active') await markEnded(w);
 }
 
 /**
- * The result exists but could not be posted, finally. The facilitation does
- * not stay `concluding`: it ends, with a record of why, a retention date, and
- * the result kept for the operator and for the initiator's report.
+ * Stop after `concluding` (spec 5.2, criterion 52). The facilitation becomes
+ * `closed`; the frozen result goes out without a consent request, marked by
+ * its status; it never enters `following_up`; agreed invitations are not
+ * sent. No abort report.
  */
-export async function endUndelivered(engine: EngineCore, client: Db, facilitationId: string, error: string): Promise<void> {
-  await engine.workOn(client, facilitationId, async (w) => {
-    if (w.f.phase !== 'concluding') return;
-    const t = texts(w.f.language);
-    const reason = t.abortResultUndelivered(error);
-    await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: reason });
-    await releaseOnEnd(w, engine.config.retentionDays);
-    await w.event('result_undelivered', 'engine', { error, result: w.f.result });
-    engine.log(`facilitation ${w.f.id}: ${reason}; ended without the group having its result`);
-    await runAbortHooks(w, t.resultUndeliveredReport(String(w.f.result?.['text'] ?? '')));
-  });
+export async function stopAfterConcluding(w: Work, actor: string): Promise<void> {
+  if (w.f.phase !== 'concluding') return;
+  await w.patch({ phase: 'closed', closedAt: w.now, closeReason: 'stopped' });
+  await releaseOnEnd(w);
+  await w.event('stopped', actor, {});
+  await stopResultClosing(w, actor);
 }
 
 /** After the lock is released: stop reading a conversation whose facilitation
@@ -546,6 +544,8 @@ export async function withoutTakenItems(w: Work, step: Step, author: Participant
 }
 
 export function installDecisionMethods(): void {
+  setResultFinal(closeWithResult);
+  setStopAfterConcluding(stopAfterConcluding);
   registerInboundHandler(ballots, PRIORITY.ballots);
   registerAfterInbound(async (w) => {
     await advance(w, 'contribution');

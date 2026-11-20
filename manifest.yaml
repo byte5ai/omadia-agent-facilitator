@@ -378,6 +378,46 @@ setup:
         de: "Wie lange nach dem Abschluss ein Facilitator das Protokoll versenden und den vereinbarten Folgetermin planen darf, wenn keine Aufgaben nachverfolgt werden. Mit Aufgaben endet die Berechtigung mit deren Nachverfolgung."
       required: false
       default: 14
+    - key: "final_confirm_window_hours"
+      type: "number"
+      label:
+        en: "Confirmation window of a final summary (hours)"
+        de: "Bestätigungsfenster einer Abschlusszusammenfassung (Stunden)"
+      help:
+        en: "Where the definition of done needs the group's confirmation, the final summary counts as confirmed when no objection stands this long after it was delivered. At most 72."
+        de: "Wo die Definition of Done die Bestätigung der Gruppe braucht, gilt die Abschlusszusammenfassung als bestätigt, wenn so lange nach ihrer Zustellung kein Einwand besteht. Höchstens 72."
+      required: false
+      default: 24
+    - key: "followup_grace_days"
+      type: "number"
+      label:
+        en: "Follow-up grace after the last due date (days)"
+        de: "Nachfrist der Nachverfolgung nach dem letzten Fälligkeitstermin (Tage)"
+      help:
+        en: "The follow-up of action items ends this long after the last due date, or earlier at the follow-up horizon."
+        de: "Die Nachverfolgung der Aufgaben endet so lange nach dem letzten Fälligkeitstermin, oder früher am Nachverfolgungshorizont."
+      required: false
+      default: 7
+    - key: "followup_horizon_days"
+      type: "number"
+      label:
+        en: "Follow-up horizon after the close (days)"
+        de: "Nachverfolgungshorizont nach dem Abschluss (Tage)"
+      help:
+        en: "No follow-up runs longer than this after the close. An action item due later than the horizon minus the grace period is refused when it is agreed."
+        de: "Keine Nachverfolgung läuft länger als so lange nach dem Abschluss. Eine Aufgabe, die später als Horizont minus Nachfrist fällig ist, wird bei der Vereinbarung abgelehnt."
+      required: false
+      default: 90
+    - key: "facilitator_limits"
+      type: "string"
+      label:
+        en: "Limits per facilitator"
+        de: "Limits pro Facilitator"
+      help:
+        en: "Own limits for single facilitators, by agent slug, separated by semicolons, e.g. 'mira: active=5, starts=10; rita: messages=200'. Keys: active (running facilitations), starts (per hour), messages (per facilitation). Everything else uses the limits above. The instance limit applies to all together."
+        de: "Eigene Limits für einzelne Facilitators, nach Agent-Slug, durch Semikolon getrennt, z. B. 'mira: active=5, starts=10; rita: messages=200'. Schlüssel: active (laufende Moderationen), starts (pro Stunde), messages (pro Moderation). Alles andere nutzt die Limits oben. Das Instanz-Limit gilt für alle zusammen."
+      required: false
+      default: ""
     - key: "protocol_mail_enabled"
       type: "boolean"
       label:

@@ -3,9 +3,10 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
-import { HOUR_MS, MINUTE_MS } from '../src/clock.js';
+import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { rows } from '../src/db/sql.js';
 import * as store from '../src/db/store.js';
+import { resultClosingOf } from '../src/engine/closing.js';
 import { withFacilitationLock } from '../src/db/tx.js';
 import { MAX_ESSENTIAL_ATTEMPTS } from '../src/engine/outbox.js';
 import { MAX_JOB_ATTEMPTS } from '../src/engine/scheduler.js';
@@ -300,19 +301,25 @@ test('review 2: a result that cannot be posted does not leave the facilitation c
   await say(conv, 'dave', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'concluding');
   assert.ok((await jobsOf(conv, 'lifetime')).some((j) => j.status === 'pending'), 'the maximum duration still applies while concluding');
-  // The echo of Dave's ballot took the first fault; the result takes the rest.
-  for (let i = 0; i < MAX_ESSENTIAL_ATTEMPTS + 2; i += 1) {
-    h.clock.advance(2 * HOUR_MS);
+  // The echo of Dave's ballot took the first fault; the result takes the
+  // rest. A closing document is retried for its whole delivery part (7 days,
+  // spec 5.2), not for a retry count.
+  for (let i = 0; i < 30; i += 1) h.kernel.sendFaults.push({ code: 'throttled', message: 'try later' });
+  for (let i = 0; i < 8; i += 1) {
+    h.clock.advance(DAY_MS);
     await h.tick();
   }
   h.kernel.sendFaults.length = 0;
   await h.tick();
   const result = (await outbox(conv)).find((r) => r.purpose === 'result');
-  assert.equal(result?.status, 'failed');
-  assert.equal(result?.attempts, MAX_ESSENTIAL_ATTEMPTS);
+  assert.equal(result?.status, 'dropped');
+  assert.match(result?.dropReason ?? '', /delivery limit/);
   const ended = await h.facilitation(conv);
-  assert.equal(ended.phase, 'aborted', 'an end state, not concluding');
-  assert.match(ended.closeReason ?? '', /result could not be posted/);
+  // Spec 5.2, criterion 44: the result is closed with delivery status "not
+  // delivered" and result status "published" (no confirmation was needed).
+  assert.equal(ended.phase, 'closed', 'an end state, not concluding');
+  const closing = await resultClosingOf(h.db.pool, f.id);
+  assert.deepEqual([closing?.deliveryStatus, closing?.resultStatus, closing?.resultReason], ['not_delivered', 'published', null]);
   assert.ok(ended.purgeAfter, 'retention is scheduled');
   assert.ok(ended.result, 'the result itself is kept');
   assert.equal((await store.listEvents(h.db.pool, f.id, ['result_undelivered'])).length, 1);

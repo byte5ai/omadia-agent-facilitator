@@ -85,7 +85,7 @@ test('the result goes to the group first, then to the initiator with the protoco
   assert.deepEqual(report.map((d) => [d.as, d.principal]), [['mira', 'user:anna']]);
   assert.match(report[0]?.text ?? '', /^Hello Anna, you started this facilitation, so here is the report\. It contains nothing the group was not told\./);
   assert.match(report[0]?.text ?? '', /Result for "Pick a venue":\n- Pick a venue: Harbour/);
-  assert.match(report[0]?.text ?? '', /Protocol: Pick a venue\nFacilitator: Mira\nStarted by: Anna/);
+  assert.match(report[0]?.text ?? '', /Protocol: Pick a venue\nResult status: published\nDelivery: delivered\nFacilitator: Mira\nStarted by: Anna/);
   assert.match(report[0]?.text ?? '', /Contributions:\n- Pick a venue: Anna: A \(Harbour\)/);
 
   const left = h.kernel.conversation('tr-result-left', FOUR);
@@ -135,7 +135,7 @@ test('a report that cannot arrive privately: the protocol stands in the group, o
   const result = after.findIndex((p) => /^Result for "Pick a venue"/.test(p));
   const tail = after.slice(result + 1);
   assert.equal(tail.length, 1, tail.join('\n---\n'));
-  assert.match(tail[0] ?? '', /^I could not send the report with the protocol to everybody privately, so here it is:\n\nProtocol: Pick a venue\nFacilitator: Mira\nStarted by: Anna/);
+  assert.match(tail[0] ?? '', /^I could not send the report with the protocol to everybody privately, so here it is:\n\nProtocol: Pick a venue\nResult status: published\nDelivery: delivered\nFacilitator: Mira\nStarted by: Anna/);
   assert.doesNotMatch(tail[0] ?? '', /It is all here in the group/);
   // Whoever can be reached still gets it privately.
   assert.deepEqual(h.kernel.dms.slice(dmsBefore).map((d) => d.principal).sort(), ['user:cara', 'user:dave']);
@@ -255,17 +255,19 @@ test('moving the deadline moves the reminders with it', { skip: PG_SKIP }, async
   assert.deepEqual(pending, [['reminder', at(24)], ['reminder', at(2)], ['deadline', next]]);
 });
 
-test('a free-text definition of done is met when the group says so; a machine-checkable one needs no confirmation', { skip: PG_SKIP }, async () => {
+test('a free-text definition of done is confirmed by the group inside the closing; an objection closes it "not confirmed"; a machine-checkable one needs no confirmation', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('tr-freetext', [ANNA, BERT]);
   await startActive(h, conv, { goal: 'Align on the roadmap', definitionOfDone: 'Everybody can live with the roadmap' });
   assert.equal((await dod(conv))[0]?.criteria, null);
-  assert.match(await tool(conv, 'facilitation_close'), /put to the group/);
-  assert.match(last(conv), /^Proposal: the definition of done is met, and we close with this:\nDecisions:/);
-  await say(conv, 'anna', 'agreed');
-  assert.equal((await h.facilitation(conv)).phase, 'active');
-  await say(conv, 'bert', 'agreed');
+  assert.match(await tool(conv, 'facilitation_close'), /posted in the group for confirmation/);
+  assert.match(last(conv), /^Result for "Align on the roadmap":[\s\S]*Please check this summary\. It counts as confirmed if no objection stands 24 hours after this message arrived\./);
+  assert.equal((await h.facilitation(conv)).phase, 'concluding');
+  await say(conv, 'bert', 'objection: the budget is missing');
+  assert.equal((await h.facilitation(conv)).phase, 'concluding', 'moderation never re-opens');
+  h.clock.advance(24 * HOUR_MS);
+  await h.tick();
   assert.equal((await h.facilitation(conv)).phase, 'closed');
-  assert.match(last(conv), /^Result for "Align on the roadmap":/);
+  assert.match(posts(conv).join('\n'), /Result status: not confirmed \(objection\)\. Standing objections: Bert: the budget is missing/);
 
   const vote = h.kernel.conversation('tr-machine', [ANNA, BERT]);
   await startActive(h, vote, VOTE);

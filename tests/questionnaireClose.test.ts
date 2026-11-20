@@ -59,7 +59,7 @@ test('D37: one participant answers the questionnaire the facilitation is for: it
   assert.equal(f.phase, 'closed', 'it finished by itself');
   const result = String(f.result?.['text'] ?? '');
   assert.match(result, /^Ergebnis zu "Pausendauer im Testlauf":\nAntworten:\n- Wie viele Minuten soll die Pause dauern\?: Anna: 15\n/);
-  assert.ok(said.includes(result), 'the group read the result');
+  assert.ok(said.some((p) => p === `${result}\n\nErgebnis-Status: veröffentlicht`), 'the group read the result, marked with its status');
   assert.ok(!said.some((p) => /ohne Ergebnis/.test(p)));
   const update = h.kernel.cardUpdates.find((u) => u.cardMessageId === posted?.cardMessageId);
   assert.equal(update?.update.state, 'closed', 'the card is closed in the channel');
@@ -148,21 +148,28 @@ test('D38: closing the last step does not leave the facilitation open: the close
   await h.settle();
   assert.equal((await h.facilitation(one)).phase, 'closed');
 
-  // With others in the group it is theirs to object: put to them, with the
-  // consent of the one who asked on record.
+  // With others in the group it is theirs to object: the facilitation
+  // concludes and the final summary is put to them inside the closing; it is
+  // confirmed when no objection stands at the end of its window (spec 5.2).
   const three = h.kernel.conversation('qc-step-three', FOUR);
   await tool(three, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna', 'Bert', 'Cara'], open: true });
   await tool(three, 'facilitation_questionnaire', PAUSE);
   for (const who of ['anna', 'bert', 'cara']) await answer(three, who, '15');
-  assert.match(await tool(three, 'facilitation_step', { action: 'close' }), /^Closed, and it was the last step: the closing summary was put to the group/);
+  assert.match(await tool(three, 'facilitation_step', { action: 'close' }), /^Closed, and it was the last step: the facilitation is concluded and its closing summary was posted in the group for confirmation/);
   await h.settle();
   const f = await h.facilitation(three);
-  assert.equal(f.phase, 'active');
-  const proposal = (await h.db.pool.query<{ kind: string; consents: string[] }>(`SELECT kind, consents FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1 AND status = 'open'`, [f.id])).rows[0];
-  assert.deepEqual([proposal?.kind, proposal?.consents], ['dod_met', ['user:anna']]);
+  assert.equal(f.phase, 'concluding');
+  assert.match(posts(three).at(-1) ?? '', /Bitte prüft diese Zusammenfassung\. Sie gilt als bestätigt, wenn 24 Stunden/);
+  const proposal = (await h.db.pool.query<{ kind: string }>(`SELECT kind FROM plg_omadia_agent_facilitator_proposals WHERE facilitation_id = $1 AND status = 'open'`, [f.id])).rows[0];
+  assert.equal(proposal?.kind, 'final_confirmation');
+  // Everybody agreeing does not end the window early: consent may be withdrawn until then.
   await say(three, 'bert', 'einverstanden');
   await say(three, 'cara', 'einverstanden');
+  assert.equal((await h.facilitation(three)).phase, 'concluding');
+  h.clock.advance(24 * 60 * MINUTE_MS);
+  await h.tick();
   assert.equal((await h.facilitation(three)).phase, 'closed');
+  assert.match(posts(three).join('\n'), /Ergebnis-Status: bestätigt\./);
 });
 
 test('D39: a deadline given as a span from now is set by the engine, and the answer of the start says which deadline holds', { skip: PG_SKIP }, async () => {
@@ -212,7 +219,7 @@ test('1.5.7: a facilitation closed with a questionnaire nobody answered says so 
   assert.equal(f.phase, 'closed');
   const result = String(f.result?.['text'] ?? '');
   assert.equal(result, 'Ergebnis zu "Pause planen":\nAuf den Fragebogen "Pause" hat niemand geantwortet, deshalb gibt es keine Antworten zu berichten.\nDiese Moderation ist abgeschlossen. Danke euch.');
-  assert.ok(posts(conv).includes(result));
+  assert.ok(posts(conv).includes(`${result}\n\nErgebnis-Status: veröffentlicht`));
 
   const plain = h.kernel.conversation('qc-no-questionnaire', FOUR);
   await tool(plain, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna'], open: true });

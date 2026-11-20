@@ -6,13 +6,15 @@
 
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
-import { HOUR_MS, MINUTE_MS } from '../clock.js';
+import { DAY_MS, HOUR_MS, MINUTE_MS } from '../clock.js';
 import { insert, one, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Ack, ActionItem, Participant } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
 import { mention } from './contributions.js';
 import type { Work } from './core.js';
+import { Refusal } from './core.js';
+import { markEnded } from './lifecycle.js';
 import { onClosed } from './decide.js';
 import { PRIORITY, ackResolvers, isPositiveReaction, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
@@ -31,6 +33,12 @@ export interface NewActionItem {
 /** Propose an action item to its owner. It counts once they said yes. */
 export async function proposeActionItem(w: Work, input: NewActionItem): Promise<ActionItem> {
   const t = texts(w.f.language);
+  // Beyond the follow-up horizon nothing would be followed up: refused
+  // visibly when agreed, never accepted silently (spec 5.8, criterion 26).
+  const latest = latestDueDate(w);
+  if (input.dueDate.getTime() > latest.getTime()) {
+    throw new Refusal('due_beyond_horizon', t.dueBeyondHorizon(formatWhen(latest, w.f.timezone, w.f.language), w.config.followupHorizonDays));
+  }
   const next = await one<{ n: number }>(w.tx, 'SELECT coalesce(max(number), 0) + 1 AS n FROM plg_omadia_agent_facilitator_action_items WHERE facilitation_id = $1', [w.f.id]);
   const item = await insert<ActionItem>(w.tx, 'plg_omadia_agent_facilitator_action_items', {
     facilitationId: w.f.id,
@@ -64,22 +72,37 @@ export async function proposeActionItem(w: Work, input: NewActionItem): Promise<
   return item;
 }
 
+/** The follow-up deadline: the earlier of the last due date plus the grace
+ *  period and the instance's horizon after `closed` (spec 5.2, 5.8). */
+export function followupEnd(w: Pick<Work, 'config' | 'now'>, lastDue: Date): Date {
+  const grace = lastDue.getTime() + w.config.followupGraceDays * DAY_MS;
+  const horizon = w.now.getTime() + w.config.followupHorizonDays * DAY_MS;
+  return new Date(Math.min(grace, horizon));
+}
+
+/** The latest due date that can still be agreed: the horizon minus the
+ *  grace period, counted from now (the close is not earlier than now). */
+export const latestDueDate = (w: Pick<Work, 'config' | 'now'>): Date => new Date(w.now.getTime() + (w.config.followupHorizonDays - w.config.followupGraceDays) * DAY_MS);
+
 /** Follow-up starts when the facilitation closed with confirmed items and
  *  the group agreed to it. */
 async function startFollowup(w: Work): Promise<void> {
   if (!w.f.followupPolicy.actionItems) return;
+  // A stopped facilitation never enters `following_up` (spec 5.2, crit. 56).
+  if (w.f.closeReason === 'stopped') return;
   const items = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.status === 'confirmed');
   if (items.length === 0) return;
   const last = new Date(Math.max(...items.map((a) => a.dueDate.getTime())));
-  await w.patch({ followupState: 'active', followupEndsAt: last });
+  const end = followupEnd(w, last);
+  await w.patch({ followupState: 'active', followupEndsAt: end });
   for (const item of items) {
     const at = new Date(item.dueDate.getTime() - w.f.followupPolicy.leadHours * HOUR_MS);
     await scheduleJob(w, 'action_reminder', item.id, at > w.now ? at : new Date(w.now.getTime() + MINUTE_MS), { itemId: item.id });
   }
   const statusAt = w.f.followupPolicy.statusAt ? new Date(w.f.followupPolicy.statusAt) : undefined;
   if (statusAt && statusAt > w.now) await scheduleJob(w, 'action_status', 'agreed', statusAt, {});
-  await scheduleJob(w, 'followup_end', 'end', new Date(last.getTime() + MINUTE_MS), {});
-  await w.event('followup_started', 'engine', { items: items.length, until: last.toISOString() });
+  await scheduleJob(w, 'followup_end', 'end', end, {});
+  await w.event('followup_started', 'engine', { items: items.length, until: end.toISOString() });
 }
 
 const endHooks: Array<(w: Work) => Promise<void>> = [];
@@ -91,6 +114,7 @@ export function onFollowupEnded(hook: (w: Work) => Promise<void>): void {
 export async function endFollowup(w: Work): Promise<void> {
   if (w.f.followupState !== 'active') return;
   await w.patch({ followupState: 'ended' });
+  await markEnded(w);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('action_reminder', 'action_status', 'followup_end')`, [w.f.id, w.now]);
   await w.event('followup_ended', 'engine', {});
   for (const hook of endHooks) await hook(w);

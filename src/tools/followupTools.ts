@@ -2,7 +2,7 @@
 // meeting. Both are agreed by the group before anything is sent or read.
 
 import { rows } from '../db/sql.js';
-import type { ActionItem, Facilitation, StakeholderRole } from '../model.js';
+import type { ActionItem, Disclosure, Facilitation, StakeholderRole } from '../model.js';
 import * as store from '../db/store.js';
 import { proposeFollowupMeeting, proposeStakeholder, refreshAddresses } from '../engine/capabilities.js';
 import { markActionDone } from '../engine/actionItems.js';
@@ -13,6 +13,7 @@ import { defineTool, liveFacilitation, oneOf, optionalNumber, optionalString, re
 import type { ToolDefinition } from './toolkit.js';
 
 const ROLES: readonly StakeholderRole[] = ['receives_protocol', 'invited_to_followups'];
+const DISCLOSURES: readonly Disclosure[] = ['full', 'existence', 'none'];
 
 export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
   return [
@@ -75,6 +76,11 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
           name: { type: 'string' },
           address: { type: 'string', description: 'Mail address; required for somebody who is not in this conversation.' },
           role: { type: 'string', enum: [...ROLES] },
+          disclosure: {
+            type: 'string',
+            enum: ['full', 'existence', 'none'],
+            description: 'What the protocol says about parts left out for this person: full (every part they may know, contributions never), existence (default: also a note that something was left out), none (neither content nor a hint).',
+          },
         },
         required: ['name', 'role'],
       },
@@ -83,8 +89,9 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
         const role = oneOf(args, 'role', ROLES);
         if (!role) throw new Refusal('bad_input', "'role' is required.");
         const address = optionalString(args, 'address');
+        const disclosure = oneOf(args, 'disclosure', DISCLOSURES) ?? 'existence';
         return engine.core.work(f.id, async (w) => {
-          await proposeStakeholder(w, { displayName: requiredString(args, 'name'), ...(address ? { address } : {}), role, addedBy: ctx.callerPrincipalId ?? 'facilitator' });
+          await proposeStakeholder(w, { displayName: requiredString(args, 'name'), ...(address ? { address } : {}), role, disclosure, addedBy: ctx.callerPrincipalId ?? 'facilitator' });
           return 'Put to the group. The person becomes a stakeholder only when nobody objects.';
         });
       },

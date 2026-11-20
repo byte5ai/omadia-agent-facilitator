@@ -172,12 +172,13 @@ test('the status after the close says what was reached, who contributed and whic
   const status = posts(conv).at(-1) ?? '';
   const lines = status.split('\n');
   assert.equal(lines[0], `Status: closed, action items are being followed up. Goal: Next steps ${conv}`);
-  assert.equal(lines[1], 'Contributed: Anna', 'who took on an action item, not "nobody yet"');
-  assert.equal(lines[2], 'Action items (1 open):');
-  assert.match(lines[3] ?? '', /^- #1 Task 1 \(Anna, due .+\): open$/);
-  assert.match(lines[4] ?? '', /^- #2 Task 2 \(Anna, due .+\): done$/);
-  assert.match(lines[5] ?? '', /^Followed up until: /);
-  assert.equal(lines.length, 6);
+  assert.equal(lines[1], 'Result status: published');
+  assert.equal(lines[2], 'Contributed: Anna', 'who took on an action item, not "nobody yet"');
+  assert.equal(lines[3], 'Action items (1 open):');
+  assert.match(lines[4] ?? '', /^- #1 Task 1 \(Anna, due .+\): open$/);
+  assert.match(lines[5] ?? '', /^- #2 Task 2 \(Anna, due .+\): done$/);
+  assert.match(lines[6] ?? '', /^Followed up until: /);
+  assert.equal(lines.length, 7);
   assert.doesNotMatch(status, /Still open|nobody yet|Definition of done/, 'nothing about a step that no longer exists');
   // The private answer is the same status.
   // (Anna takes part in other follow-ups of this file: she is asked which.)

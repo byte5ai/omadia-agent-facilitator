@@ -231,6 +231,8 @@ export const en = {
     `Before we close "${title}": whoever has not had the chance yet is welcome to add something now.`,
   parked: (topic: string): string => `Parked for later, so we stay on the current step: ${topic}`,
 
+  dueBeyondHorizon: (latest: string, days: number): string =>
+    `That due date is too late: follow-up runs at most ${String(days)} days after the close, so the latest due date I can follow up is ${latest}. Nothing was recorded; agree an earlier date.`,
   actionPrompt: (owner: string, number: number, description: string, due: string): string =>
     `${owner}, action item #${String(number)} is proposed for you: ${description}, due ${due}. Reply "yes" to take it or "no" to decline, here in the group.`,
   actionConfirmed: (owner: string, number: number, description: string, due: string): string =>
@@ -246,9 +248,10 @@ export const en = {
   actionNotYours: (name: string, number: number): string => `${name}, action item #${String(number)} is not yours to close.`,
   /** The status of a facilitation that has ended: what it reached and what
    *  is still followed up. Nothing about an open step; there is none. */
-  statusAfterClose: (s: { phase: string; goal: string; reason?: string; decisions: readonly string[]; contributed: readonly string[]; actions: readonly string[]; open: number; notAccepted?: readonly string[]; until?: string }): string =>
+  statusAfterClose: (s: { phase: string; goal: string; reason?: string; resultStatus?: string; decisions: readonly string[]; contributed: readonly string[]; actions: readonly string[]; open: number; notAccepted?: readonly string[]; until?: string }): string =>
     [
       `Status: ${s.phase}${s.reason ? ` (${s.reason})` : ''}. Goal: ${s.goal}`,
+      ...(s.resultStatus ? [`Result status: ${s.resultStatus}`] : []),
       ...(s.decisions.length > 0 ? ['Decisions:', ...s.decisions.map((d) => `- ${d}`)] : []),
       `Contributed: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'nobody'}`,
       ...(s.actions.length > 0 ? [`Action items (${String(s.open)} open):`, ...s.actions.map((a) => `- ${a}`)] : ['Action items: none']),
@@ -315,7 +318,18 @@ export const en = {
       stopped: 'facilitation stopped',
     } as Record<string, string>,
     delivery: 'Delivery',
+    awaiting: 'waiting for the group to confirm',
     deliveryStatus: { pending: 'pending', delivered: 'delivered', not_delivered: 'not delivered' } as Record<string, string>,
+  },
+
+  // ── the closing procedure (spec 5.2) ─────────────────────────────────────
+  closing: {
+    confirmRequest: (hours: number): string =>
+      `Please check this summary. It counts as confirmed if no objection stands ${String(hours)} hours after this message arrived. To object, reply to this message with "objection: <your reason>".`,
+    statusPost: (words: string, objections: readonly string[]): string => `Result status: ${words}.${objections.length > 0 ? ` Standing objections: ${objections.join('; ')}` : ''}`,
+    electorateUnverified: (): string => 'The summary cannot be confirmed yet: the list of participants could not be verified. I will check again every hour, for at most a day.',
+    onlyConsent: (name: string): string => `${name}, the result is final now; only an objection to the summary or "status" and "stop" are taken here.`,
+    invitationsSent: (lines: readonly string[]): string => `Invitations already sent (they stay; cancelling them is a separate request): ${lines.join('; ')}`,
   },
 
   // ── transparency ─────────────────────────────────────────────────────────
@@ -541,12 +555,13 @@ export const en = {
     outcomeUnknown: (capability: string, detail: string): string => `${capability}: outcome unknown (${detail})`,
     freeBusy: (people: number, from: string, to: string): string => `free/busy read for ${String(people)} people, ${from} to ${to}`,
     invitation: (subject: string, start: string, people: number): string => `invitation "${subject}" for ${start} sent to ${String(people)} people`,
-    mailed: (addresses: number): string => `protocol mailed to ${String(addresses)} addresses`,
+    mailed: (addresses: number): string => `protocol mailed to ${String(addresses)} address${addresses === 1 ? '' : 'es'}`,
     grantIssued: (addresses: number): string => `grant issued for ${String(addresses)} addresses (participants and confirmed stakeholders)`,
     grantRevoked: (reason: 'followup_ended' | 'period_ended'): string => `grant revoked: ${reason === 'followup_ended' ? 'the follow-up ended' : 'the follow-up period ended'}`,
     protocolSent: (participants: number): string => `protocol sent privately to ${String(participants)} participant${participants === 1 ? '' : 's'}`,
   },
   protocolDirect: (name: string, protocol: string): string => `Hello ${name}, here is the protocol of the facilitation you took part in.\n\n${protocol}`,
+  stakeholderPartsWithheld: (): string => 'Some parts of this protocol are not shared with you (contributions and parts you may not know). Ask the initiator if you need them.',
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
   protocolSent: (channel: number, mail: number): string =>
     `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}` : ''}.`,

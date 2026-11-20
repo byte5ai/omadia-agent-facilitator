@@ -94,7 +94,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             const how = await closeOnRequest(w, ctx.callerPrincipalId === undefined ? undefined : principalKey({ id: ctx.callerPrincipalId }));
             return how === 'concluded'
               ? 'Closed, and it was the last step: the facilitation is concluded and the result was posted in the group. Do not repeat it and do not call facilitation_close.'
-              : 'Closed, and it was the last step: the closing summary was put to the group, and the facilitation concludes when nobody objects. Do not repeat it and do not call facilitation_close.';
+              : 'Closed, and it was the last step: the facilitation is concluded and its closing summary was posted in the group for confirmation; it counts as confirmed when no objection stands at the end of its window. Do not repeat it and do not call facilitation_close.';
           }
           return 'Closed. That was announced in the group and what comes next was opened there.';
         });

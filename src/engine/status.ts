@@ -9,6 +9,7 @@ import type { Ballot } from '../methods/ballot.js';
 import type { Contribution, Facilitation, Participant, Step } from '../model.js';
 import { lifecycleOf } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
+import { listClosings, markOf, resultStatusWords } from './resultStatus.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export interface Participation {
@@ -80,8 +81,11 @@ async function statusAfterClose(q: Queryable, f: Facilitation): Promise<string> 
   // Taking on an action item is a contribution as well.
   for (const item of items) if (item.status === 'confirmed' || item.status === 'done') counted.add(item.ownerPrincipal);
   const decisions = Array.isArray(f.result?.['decisions']) ? (f.result['decisions'] as unknown[]).filter((d): d is string => typeof d === 'string') : [];
+  const closing = (await listClosings(q, f.id)).find((c) => c.kind === (f.phase === 'aborted' ? 'abort' : 'result'));
+  const mark = closing ? markOf(closing) : undefined;
   return t.statusAfterClose({
     phase: t.phase[lifecycleOf(f)],
+    ...(mark ? { resultStatus: resultStatusWords(f.language, mark) } : closing?.requiresConfirmation ? { resultStatus: t.resultStatus.awaiting } : {}),
     goal: f.goal,
     ...(f.phase === 'aborted' && f.closeReason ? { reason: f.closeReason } : {}),
     decisions,
@@ -98,7 +102,8 @@ async function statusAfterClose(q: Queryable, f: Facilitation): Promise<string> 
 export type StatusAudience = 'group' | 'private';
 
 export async function statusText(q: Queryable, f: Facilitation, audience: StatusAudience = 'group'): Promise<string> {
-  if (f.phase === 'closed' || f.phase === 'aborted') return statusAfterClose(q, f);
+  // After `concluding` nothing is open any more: the result and its status.
+  if (f.phase === 'closed' || f.phase === 'aborted' || f.phase === 'concluding') return statusAfterClose(q, f);
   const t = texts(f.language);
   const participation = await participationOf(q, f);
   const dod = await store.currentDod(q, f.id);

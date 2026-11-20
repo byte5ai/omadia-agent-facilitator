@@ -11,7 +11,8 @@ import { installCapabilities } from './capabilities.js';
 import { EngineCore } from './core.js';
 import type { EngineDeps } from './core.js';
 import { installActionItems } from './actionItems.js';
-import { closeWhenResultDelivered, installDecisionMethods } from './decide.js';
+import { installDecisionMethods } from './decide.js';
+import { advanceClosings, installClosing } from './closing.js';
 import { installProcess } from './process.js';
 import { installProposals } from './proposals.js';
 import { installGovernance, purgeExpired } from './governance.js';
@@ -49,6 +50,7 @@ function installOnce(): void {
   installScheduler();
   onOpened(scheduleDeadlineJobs);
   installProposals();
+  installClosing();
   installProcess();
   installActionItems();
   installTransparency();
@@ -68,7 +70,7 @@ export class FacilitationEngine {
   constructor(deps: EngineDeps) {
     this.core = new EngineCore(deps);
     installOnce();
-    this.core.onAfterDispatch(closeWhenResultDelivered);
+    this.core.onAfterDispatch(advanceClosings);
     // After every unit of work the kernel's scopes follow the facilitation's
     // state: what is over ends, a changed deadline moves, the people are told.
     this.core.onAfterRelease((engine, facilitationId) => syncScopes(engine, facilitationId));
@@ -319,7 +321,13 @@ export class FacilitationEngine {
    *  may have been lost after the result went out, or the result may have
    *  finally failed. Either way it does not stay concluding. */
   private async finishConcluding(): Promise<void> {
-    const concluding = await this.core.db().query<{ id: string }>(`SELECT id FROM plg_omadia_agent_facilitator_facilitations WHERE phase = 'concluding' ORDER BY concluded_at LIMIT 50`);
+    // Every facilitation with a closing that has not ended: its parts have
+    // limits that pass without any delivery (spec 5.2).
+    const concluding = await this.core.db().query<{ id: string }>(
+      `SELECT f.id FROM plg_omadia_agent_facilitator_facilitations f
+        WHERE f.phase = 'concluding' OR EXISTS (SELECT 1 FROM plg_omadia_agent_facilitator_closings c WHERE c.facilitation_id = f.id AND c.ended_at IS NULL)
+        ORDER BY f.concluded_at NULLS LAST LIMIT 50`,
+    );
     for (const row of concluding.rows) {
       try {
         await this.core.flush(row.id);

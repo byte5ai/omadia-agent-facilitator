@@ -197,6 +197,8 @@ export const de: Texts = {
   silentInviteGroup: (title) => `Bevor wir "${title}" abschließen: Wer bisher noch nicht dazu gekommen ist, kann jetzt gern etwas ergänzen.`,
   parked: (topic) => `Für später geparkt, damit wir beim aktuellen Schritt bleiben: ${topic}`,
 
+  dueBeyondHorizon: (latest, days) =>
+    `Dieser Fälligkeitstermin ist zu spät: Die Nachverfolgung läuft höchstens ${String(days)} Tage nach dem Abschluss, der späteste Termin, den ich nachverfolgen kann, ist ${latest}. Nichts wurde eingetragen; vereinbart einen früheren Termin.`,
   actionPrompt: (owner, number, description, due) =>
     `${owner}, Aufgabe #${String(number)} ist für dich vorgeschlagen: ${description}, fällig ${due}. Antworte hier in der Gruppe mit "ja", um sie zu übernehmen, oder mit "nein", um abzulehnen.`,
   actionConfirmed: (owner, number, description, due) => `Aufgabe #${String(number)}: ${description}. Verantwortlich: ${owner}, fällig ${due}.`,
@@ -211,6 +213,7 @@ export const de: Texts = {
   statusAfterClose: (s) =>
     [
       `Status: ${s.phase}${s.reason ? ` (${s.reason})` : ''}. Ziel: ${s.goal}`,
+      ...(s.resultStatus ? [`Ergebnis-Status: ${s.resultStatus}`] : []),
       ...(s.decisions.length > 0 ? ['Entscheidungen:', ...s.decisions.map((d) => `- ${d}`)] : []),
       `Beigetragen: ${s.contributed.length > 0 ? s.contributed.join(', ') : 'niemand'}`,
       ...(s.actions.length > 0 ? [`Aufgaben (${String(s.open)} offen):`, ...s.actions.map((a) => `- ${a}`)] : ['Aufgaben: keine']),
@@ -273,7 +276,18 @@ export const de: Texts = {
       stopped: 'Facilitation gestoppt',
     } as Record<string, string>,
     delivery: 'Zustellung',
+    awaiting: 'wartet auf die Bestätigung der Gruppe',
     deliveryStatus: { pending: 'ausstehend', delivered: 'zugestellt', not_delivered: 'nicht zugestellt' } as Record<string, string>,
+  },
+
+  // ── Abschlussverfahren (Spec 5.2) ─────────────────────────────────────────
+  closing: {
+    confirmRequest: (hours) =>
+      `Bitte prüft diese Zusammenfassung. Sie gilt als bestätigt, wenn ${String(hours)} Stunden nach dem Eintreffen dieser Nachricht kein Einwand besteht. Für einen Einwand antwortet auf diese Nachricht mit "Einwand: <Begründung>".`,
+    statusPost: (words, objections) => `Ergebnis-Status: ${words}.${objections.length > 0 ? ` Bestehende Einwände: ${objections.join('; ')}` : ''}`,
+    electorateUnverified: () => 'Die Zusammenfassung kann noch nicht bestätigt werden: Die Liste der Teilnehmenden konnte nicht geprüft werden. Ich prüfe stündlich erneut, höchstens einen Tag lang.',
+    onlyConsent: (name) => `${name}, das Ergebnis steht fest; hier zählen nur noch ein Einwand zur Zusammenfassung oder "status" und "stop".`,
+    invitationsSent: (lines) => `Bereits versendete Einladungen (sie bleiben bestehen; eine Absage ist eine eigene Anfrage): ${lines.join('; ')}`,
   },
 
   // ── Transparenz ──────────────────────────────────────────────────────────
@@ -455,6 +469,7 @@ export const de: Texts = {
     protocolSent: (participants) => `Protokoll privat an ${String(participants)} ${participants === 1 ? 'Teilnehmer:in' : 'Teilnehmende'} gesendet`,
   },
   protocolDirect: (name, protocol) => `Hallo ${name}, hier ist das Protokoll der Moderation, an der du teilgenommen hast.\n\n${protocol}`,
+  stakeholderPartsWithheld: () => 'Einige Teile dieses Protokolls werden nicht mit dir geteilt (Beiträge und Teile, die du nicht kennen darfst). Frag bei Bedarf die Person, die die Moderation gestartet hat.',
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
   protocolSent: (channel, mail) =>
     `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}` : ''}.`,

@@ -31,7 +31,9 @@ import { askedOffsets, reminderOffsetsFor } from './reminders.js';
 import { buildRoll, effectiveCloseRule, expectedNames } from './roll.js';
 import type { Roll } from './roll.js';
 import type { CloseRule, DodCriteria, ElectorateSource, Facilitation, FormatId, MethodId, Participant, Step } from '../model.js';
-import { texts } from '../texts/index.js';
+import { formatWhen, texts } from '../texts/index.js';
+import { openClosing } from './resultStatus.js';
+import { endResultClosingForAbort } from './closing.js';
 import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { refusalText } from './refusals.js';
@@ -673,11 +675,18 @@ export async function openFacilitation(engine: EngineCore, facilitationId: strin
 }
 
 /** What ends with a facilitation, in the same transaction as the phase change. */
-export async function releaseOnEnd(w: Work, retentionDays: number): Promise<void> {
+export async function releaseOnEnd(w: Work): Promise<void> {
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_jobs SET status = 'cancelled', finished_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_acks SET status = 'cancelled', resolved_at = $2 WHERE facilitation_id = $1 AND status = 'pending'`, [w.f.id, w.now]);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE facilitation_id = $1 AND status = 'open'`, [w.f.id, w.now]);
-  await w.patch({ purgeAfter: new Date(w.now.getTime() + retentionDays * DAY_MS) });
+}
+
+/** The facilitation reached `ended` (or `aborted`): retention counts from
+ *  here, never from `closed` (spec 5.8). Idempotent. */
+export async function markEnded(w: Work): Promise<void> {
+  if (w.f.endedAt !== null) return;
+  await w.patch({ endedAt: w.now, purgeAfter: new Date(w.now.getTime() + w.config.retentionDays * DAY_MS) });
+  await w.event('ended', 'engine', {});
 }
 
 export interface AbortInput {
@@ -701,15 +710,52 @@ export async function runAbortHooks(w: Work, report: string): Promise<void> {
 }
 
 /** End without a result inside a unit of work: an honest report to the group.
- *  Idempotent. Nothing ends silently, so every way out goes through here. */
+ *  Idempotent. Nothing ends silently, so every way out goes through here.
+ *  After `concluding` a stop does not abort: the frozen result goes out as
+ *  "not confirmed (facilitation stopped)" or "published" (spec 5.2,
+ *  criterion 52); only the kernel ending the process aborts it then. */
 export async function abortInWork(w: Work, input: AbortInput): Promise<void> {
   if (w.f.phase === 'closed' || w.f.phase === 'aborted') return;
-  const text = input.groupText ?? texts(w.f.language).aborted(input.reason);
+  if (w.f.phase === 'concluding' && input.actor !== 'kernel') {
+    await stopAfterConcludingHook(w, input.actor);
+    return;
+  }
+  const t = texts(w.f.language);
+  const sent = await invitationsSent(w);
+  const base = input.groupText ?? t.aborted(input.reason);
+  const text = sent.length > 0 ? `${base}\n${t.closing.invitationsSent(sent)}` : base;
+  // The kernel ended it while its result was closing: that closing ends too.
+  if (w.f.phase === 'concluding') await endResultClosingForAbort(w);
   await w.patch({ phase: 'aborted', closedAt: w.now, closeReason: input.reason });
-  await releaseOnEnd(w, w.config.retentionDays);
-  w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text });
-  await w.event('aborted', input.actor, { reason: input.reason, ...(input.detail ?? {}) });
+  await releaseOnEnd(w);
+  await markEnded(w);
+  // The abort report is a closing document (spec 5.6): immutable, with its
+  // closing event and version, retried inside its own closing.
+  const closing = await openClosing(w.tx, { facilitationId: w.f.id, kind: 'abort', document: text, requiresConfirmation: false, now: w.now });
+  // The report says it ends without a result: that is its status `aborted`.
+  w.post({ purpose: 'abort', key: 'report', to: 'group', deliveryClass: 'essential', text, closing: { id: closing.id, version: closing.documentVersion } });
+  await w.event('aborted', input.actor, { reason: input.reason, closingId: closing.id, ...(sent.length > 0 ? { invitationsSent: sent } : {}), ...(input.detail ?? {}) });
   for (const hook of onAbort) await hook(w, text);
+}
+
+/** Invitations of the agreed follow-up meeting that already went out: they
+ *  stay, and the abort report lists them (criterion 47). */
+async function invitationsSent(w: Work): Promise<string[]> {
+  const done = await w.tx.query<{ payload: Record<string, unknown> }>(
+    `SELECT payload FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind = 'followup_meeting' AND status = 'done'`,
+    [w.f.id],
+  );
+  const subject = w.f.followupPolicy.meeting?.subject ?? '';
+  return done.rows
+    .map((r) => r.payload['result'] as Record<string, unknown> | undefined)
+    .filter((r): r is Record<string, unknown> => r?.['outcome'] === 'created')
+    .map((r) => `${subject} (${formatWhen(new Date(String(r['start'])), w.f.timezone, w.f.language)})`);
+}
+
+let stopAfterConcludingHook: (w: Work, actor: string) => Promise<void> = async () => {};
+/** decide.ts: what a stop after `concluding` does. */
+export function setStopAfterConcluding(hook: (w: Work, actor: string) => Promise<void>): void {
+  stopAfterConcludingHook = hook;
 }
 
 /** End without a result. */
