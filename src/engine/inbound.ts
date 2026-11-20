@@ -18,7 +18,7 @@ import { confirmContribution, declineContribution, mention, supersedeByMessage, 
 import type { EngineCore, Work } from './core.js';
 import { abortInWork } from './lifecycle.js';
 import { isPlaceholderName, nameOrPlaceholder } from './names.js';
-import { expectedNames, sameName } from './roll.js';
+import { expectedNames, sameName, sourceOfName } from './roll.js';
 import { namesOf, withoutMention } from './addressing.js';
 import { wantedMode } from './scopes.js';
 import { statusText } from './status.js';
@@ -241,25 +241,36 @@ async function resolveAuthor(w: Work, record: ConversationMessageRecord): Promis
   // this message says who it is.
   const stated = record.author.displayName && !isPlaceholderName(record.author.displayName, key) ? record.author.displayName : author?.displayName;
   const named = live && stated ? expectedNames(w.f).find((name) => sameName(name, stated)) : undefined;
+  const source = named !== undefined ? sourceOfName(w.f, named) : 'posted';
   if (named !== undefined) {
     const fresh = (await store.getFacilitation(w.tx, w.f.id)) ?? w.f;
-    await w.patch({ settings: { ...fresh.settings, expected: expectedNames(fresh).filter((name) => name !== named) } });
-    await w.event('participant_matched', key, { named });
+    const others = (fresh.settings.namedByOthers ?? []).filter((name) => name !== named);
+    const { namedByOthers: _old, ...rest } = fresh.settings;
+    await w.patch({ settings: { ...rest, expected: expectedNames(fresh).filter((name) => name !== named), ...(others.length > 0 ? { namedByOthers: others } : {}) } });
+    await w.event('participant_matched', key, { named, source });
   }
-  if (!author && (w.f.settings.openRoster === true || named !== undefined) && live) {
+  // A declared list (spec 5.5): whoever posts here and is not on it is added.
+  const posts = record.kind === 'created' || record.kind === 'card_answer';
+  if (!author && ((w.f.electorateSource === 'declared_list' && posts) || named !== undefined) && live) {
+    const name = nameOrPlaceholder(record.author.displayName, key, w.f.language);
     author = await store.addParticipant(w.tx, {
       facilitationId: w.f.id,
       principalId: key,
-      displayName: nameOrPlaceholder(record.author.displayName, key, w.f.language),
+      displayName: name,
       canonicalPrincipal: key,
-      source: 'joined',
+      source,
       joinedAt: w.now,
       changedAt: w.now,
       changedByEvent: record.eventId,
     });
     if (author) {
       w.bump();
-      await w.event('participant_joined', key, { by: 'first_message' });
+      await w.event('participant_joined', key, { by: 'first_message', source });
+      // On a list the initiator declared, a newcomer is welcomed. Where
+      // nobody declared one, whoever writes takes part anyway: no welcome.
+      if (source === 'posted' && w.f.settings.openRoster !== true) {
+        w.post({ purpose: 'joined', key: `${record.eventId}:${key}`, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).joined(name, w.f.goal), mentions: [{ user: key, text: name }] });
+      }
     }
   }
   if (!author) return undefined;

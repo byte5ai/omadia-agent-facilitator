@@ -98,10 +98,12 @@ test('a named participant nobody can be matched to is kept as named, asked to wr
   assert.match(handshake, /Participants: Anna, Bert, Cara\nI do not know yet who of you Anna, Bert, Cara are: please write here once\./);
   assert.equal((await h.facilitation(conv)).closeRule, 'all_contributed');
   await say(conv, 'anna', 'A');
+  // A declared list (spec 5.5): somebody who posts and is not on it is added.
   await say(conv, 'dave', 'B');
+  assert.ok(posts(conv).some((p) => /^Welcome, Dave\./.test(p)));
   await say(conv, 'bert', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'active', 'Cara is still waited for');
-  assert.deepEqual(await names(conv), ['user:anna', 'user:bert']);
+  assert.deepEqual(await names(conv), ['user:anna', 'user:bert', 'user:dave']);
   assert.match(await h.tool('facilitation_status', {}, { conversation: conv }), /Still open: 1 contribution/);
   await say(conv, 'cara', 'A');
   assert.equal((await h.facilitation(conv)).phase, 'closed');

@@ -19,6 +19,7 @@ import { abortInWork } from './lifecycle.js';
 import { recordRefusal } from './refusals.js';
 import { stoppedByOperator } from './scopes.js';
 import { participationOf } from './status.js';
+import { retryHeldDecisions } from './electorate.js';
 import { expectedNames, listKnown } from './roll.js';
 
 export const LEASE_MS = 2 * MINUTE_MS;
@@ -212,6 +213,12 @@ const reminder: JobHandler = async (w, job) => {
   if (lateMs > REMINDER_GRACE_MS || (w.f.deadline !== null && w.now.getTime() >= w.f.deadline.getTime())) {
     await w.event('reminder_skipped', 'engine', { hoursBefore: job.payload['hoursBefore'], lateMinutes: Math.round(lateMs / MINUTE_MS) });
     return;
+  }
+  // A decision held for want of a verified list is tried again first (spec
+  // 5.5): if it is taken now, nothing is waiting any more.
+  if (w.f.settings.electorateUnverifiedSince !== undefined) {
+    await retryHeldDecisions(w);
+    if (w.f.phase !== 'active') return;
   }
   const { open, people } = await waitingFor(w);
   const t = texts(w.f.language);

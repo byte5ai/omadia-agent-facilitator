@@ -37,6 +37,7 @@ import { Refusal } from './core.js';
 import { conclude, recordBallot, roundOptions, setResultAnswers, withoutTakenItems } from './decide.js';
 import type { InboundHandler, InboundResult } from './inbound.js';
 import { DONE_WHEN_ALL, rulesOf } from './lifecycle.js';
+import { onHeldDecisionRetry, verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames } from './roll.js';
 import { registerContextSection } from './turn.js';
 
@@ -649,6 +650,11 @@ async function concludeWhenAllAnswered(w: Work, card: CardRow): Promise<void> {
   if (w.f.phase !== 'active' || !everybodyKnown(w.f) || !(await endsWithQuestionnaire(w, card))) return;
   const state = await questionnaireState(w.tx, w.f);
   if (!state || state.card.cardId !== card.cardId || state.active.length === 0 || !state.active.every((p) => state.latest.has(p.principalId))) return;
+  // "Everybody answered" is decided on a verified list (spec 5.5); one that
+  // the fresh member list changes is looked at again with the next answer.
+  if (!(await verifyElectorate(w)).verified) return;
+  const fresh = await questionnaireState(w.tx, w.f);
+  if (!fresh || !fresh.active.every((p) => fresh.latest.has(p.principalId))) return;
   await w.event('questionnaire_complete', 'engine', { cardId: card.cardId, answered: state.latest.size });
   await closeCards(w, [card], 'closed', state.lines);
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
@@ -700,6 +706,12 @@ export function installCardReaders(): void {
   registerCardReader('vote', readVote);
   registerCardReader('ideas', readIdea);
   registerCardReader(QUESTIONNAIRE, readQuestionnaire);
+  // A questionnaire everybody answered while the list could not be verified
+  // is looked at again at the next reminder (nobody has anything to answer).
+  onHeldDecisionRetry(async (w) => {
+    const state = await questionnaireState(w.tx, w.f);
+    if (state && state.card.state === 'open') await concludeWhenAllAnswered(w, state.card);
+  });
   // The answers are part of the result, and of what a turn knows.
   setResultAnswers(async (w) => {
     const state = await questionnaireState(w.tx, w.f, texts(w.f.language).questionnaireNoAnswer);

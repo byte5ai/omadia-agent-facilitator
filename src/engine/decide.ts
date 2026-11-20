@@ -25,6 +25,7 @@ import { cancelJobs, scheduleJob } from './jobs.js';
 import { abortInWork, announceVote, displayNameOf, releaseConversation, releaseOnEnd, runAbortHooks } from './lifecycle.js';
 import { onMembershipChange } from './membership.js';
 import { closingSummary } from './protocol.js';
+import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { effectiveCloseRule, expectedKeys, expectedNames } from './roll.js';
 
 export const roundOptions = (step: Step): StepOption[] => step.roundOptions ?? step.options;
@@ -90,6 +91,35 @@ export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step
     deadlineReached,
     hasOpenProposal: (await store.openProposal(w.tx, w.f.id)) !== undefined,
   });
+}
+
+/** Outcomes that "everybody has contributed" decides, not a deadline. */
+const DECIDED_BY_COMPLETENESS = new Set<Evaluation['state']>(['clear', 'tie', 'consent_passed']);
+
+/**
+ * Evaluate the step; where the outcome rests on "everybody has contributed",
+ * the list of participants is verified first (spec 5.5): with the platform
+ * roster the channel is asked fresh, and a person found there is waited for.
+ * Anything but a verified list keeps the step waiting.
+ */
+export async function evaluatedWithKnownElectorate(w: Work, step: Step, closing: boolean): Promise<Evaluation | { state: 'electorate_unverified' }> {
+  const outcome = await evaluateStep(w, step, closing);
+  if (closing && outcome.state === 'consent_passed') {
+    // Consent at the deadline: "nobody objected" is said about a verified
+    // list. Nothing waits past the deadline, so an unverifiable one fails.
+    const check = await verifyElectorate(w);
+    if (windowMayPass(check)) return evaluateStep(w, step, closing);
+    await w.event('decision_held', 'engine', { stepId: step.id, reason: check.verified ? 'verified' : check.reason, atDeadline: true });
+    return { state: 'electorate_unverified' } as const;
+  }
+  if (closing || !DECIDED_BY_COMPLETENESS.has(outcome.state)) return outcome;
+  const check = await verifyElectorate(w);
+  if (!check.verified) {
+    await w.event('decision_held', 'engine', { stepId: step.id, reason: check.reason });
+    return { state: 'waiting', missing: [] };
+  }
+  // The fresh list may have brought somebody who has not contributed yet.
+  return evaluateStep(w, step, closing);
 }
 
 // ── recording ───────────────────────────────────────────────────────────────
@@ -339,7 +369,7 @@ function scoreLine(options: readonly StepOption[], scores: Record<string, number
 }
 
 /** Evaluate the open step and act on the outcome. */
-export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | undefined> {
+export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | { state: 'electorate_unverified' } | undefined> {
   if (w.f.phase !== 'active') return undefined;
   const step = await store.openStepOf(w.tx, w.f.id);
   if (!step?.method) {
@@ -354,7 +384,7 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   // What the deadline would end without a result (a tie, an objection, open
   // items) stays open instead: the deadline is still to come.
   const closing = deadlineReached || trigger === 'group';
-  const outcome = await evaluateStep(w, step, closing);
+  const outcome = await evaluatedWithKnownElectorate(w, step, closing);
   const cast = new Set((await castBallots(w, step)).map((b) => b.principal));
   const votesMissing = closing && (expectedNames(w.f).length > 0 || participants.some((p) => p.status === 'active' && !cast.has(p.principalId)));
   const name = (id: string | undefined): string => displayNameOf(participants, id ?? null, texts(w.f.language).unnamedPerson);
@@ -362,6 +392,10 @@ export async function advance(w: Work, trigger: Trigger): Promise<Evaluation | u
   switch (outcome.state) {
     case 'waiting':
     case 'blocked_by_proposal':
+      return outcome;
+
+    case 'electorate_unverified':
+      await abort(w, t.abortElectorateUnverified());
       return outcome;
 
     case 'clear': {
@@ -517,6 +551,9 @@ export function installDecisionMethods(): void {
     await advance(w, 'contribution');
   });
   onMembershipChange(async (w) => {
+    await advance(w, 'contribution');
+  });
+  onHeldDecisionRetry(async (w) => {
     await advance(w, 'contribution');
   });
 

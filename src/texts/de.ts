@@ -51,6 +51,9 @@ export const de: Texts = {
   left: (name) => `${name} hat die Unterhaltung verlassen. Die bisherigen Beiträge bleiben gezählt.`,
   initiatorLeft: (name) =>
     `${name} hat diese Moderation gestartet und die Unterhaltung verlassen. Ab jetzt erhält ${name} weder weitere Beiträge noch den Bericht.`,
+  electorateUnverified: () =>
+    'Ich kann gerade nicht prüfen, wer zu dieser Unterhaltung gehört, und entscheide deshalb vorerst nichts automatisch. Ich prüfe es beim nächsten Beitrag oder bei der nächsten Erinnerung erneut.',
+  participantNamed: (name, by) => `${by} hat ${name} als Teilnehmende:n genannt. ${name}, bitte schreib hier einmal; ab dann zählst du mit.`,
 
   words: { abstention: 'Enthaltung', consent: 'Zustimmung', objection: 'Einwand', declined: 'abgelehnt' },
 
@@ -110,6 +113,7 @@ export const de: Texts = {
       ...(r.atDeadline ? [`Die Deadline ist erreicht; ${String(r.atDeadline.contributed)} von ${String(r.atDeadline.of)} haben beigetragen, und dies ist das Ergebnis der abgegebenen Beiträge.`] : []),
       'Diese Moderation ist abgeschlossen. Danke euch.',
     ].join('\n'),
+  abortElectorateUnverified: () => 'die Teilnehmenden konnten nicht geprüft werden: der Kanal konnte nicht bestätigen, wer zu dieser Unterhaltung gehört, deshalb ließ sich keine Zustimmung feststellen',
   abortTie: (tied) => `die Deadline ist erreicht und die Abstimmung steht gleichauf zwischen ${tied}`,
   abortObjection: (objections) => `die Deadline ist erreicht und es steht ein Einwand (${objections})`,
   abortOpenItems: (items) => `die Deadline ist erreicht und Folgendes ist noch offen: ${items}`,

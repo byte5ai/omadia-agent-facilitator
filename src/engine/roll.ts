@@ -8,13 +8,17 @@
 
 import type { RosterParticipant } from '../kernel.js';
 import { principalKey } from '../kernel.js';
-import type { CloseRule, Facilitation } from '../model.js';
+import type { CloseRule, Facilitation, ParticipantSource } from '../model.js';
 import { isPlaceholderName } from './names.js';
 
 type Settings = Pick<Facilitation, 'settings'>;
 
-/** Names from the request that no person could be matched to yet. */
+/** Names (from the request, or put forward by a participant) that no person
+ *  could be matched to yet. */
 export const expectedNames = (f: Settings): readonly string[] => f.settings.expected ?? [];
+
+/** The source a person matched to a waited-for name gets. */
+export const sourceOfName = (f: Settings, name: string): ParticipantSource => ((f.settings.namedByOthers ?? []).includes(name) ? 'named' : 'declared');
 
 /** The channel listed the members, or the request named the participants. */
 export const listKnown = (f: Settings): boolean => f.settings.openRoster !== true;
@@ -52,7 +56,7 @@ export interface Person {
   /** Undefined: nobody stated a name for this person yet. */
   displayName: string | undefined;
   email: string | null;
-  source: 'roster' | 'joined';
+  source: ParticipantSource;
 }
 
 export interface Roll {
@@ -94,7 +98,9 @@ export function buildRoll(input: {
 }): Roll {
   const listed = input.members.map(personOf);
   const own = listed.find((p) => p.principalId === input.initiator.principalId);
-  const initiator: Person = own ?? { principalId: input.initiator.principalId, displayName: input.initiator.displayName, email: null, source: 'joined' };
+  // Not listed by the channel: the initiator is on the list because they
+  // wrote the request here.
+  const initiator: Person = own ?? { principalId: input.initiator.principalId, displayName: input.initiator.displayName, email: null, source: 'posted' };
   const withInitiator = (people: Person[]): Person[] => (people.some((p) => p.principalId === initiator.principalId) ? people : [initiator, ...people]);
 
   const names = [...new Set((input.named ?? []).map((n) => n.trim()).filter((n) => n !== ''))];
@@ -109,5 +115,7 @@ export function buildRoll(input: {
     if (!match) expected.push(name);
     else if (!taken.includes(match)) taken.push(match);
   }
-  return { people: withInitiator(taken), expected, open: false, named: true };
+  // The initiator named these people: the list is declared.
+  const declared = taken.map((p) => (p === initiator ? p : { ...p, source: 'declared' as const }));
+  return { people: withInitiator(declared), expected, open: false, named: true };
 }

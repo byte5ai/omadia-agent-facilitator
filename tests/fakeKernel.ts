@@ -307,7 +307,7 @@ export class FakeKernel {
   /** A kernel that asks the channel as the agent named with a roster call. */
   rosterAsAgent = false;
   /** Every roster call, with the agent it named. */
-  readonly rosterAsks: Array<{ conversationId: string; agentSlug?: string }> = [];
+  readonly rosterAsks: Array<{ conversationId: string; agentSlug?: string; fresh?: boolean }> = [];
   /** What the channel declares about question cards. Undefined: a kernel or a
    *  channel without them (no `capabilities`, no `updateCard`). */
   cardSupport: CardSupport | undefined;
@@ -487,9 +487,10 @@ export class FakeKernel {
     return this.emit(conversationId, userId, { kind: 'card_answer', messageId, revision: 0, cardAnswer: { cardId, value } });
   }
 
-  join(conversationId: string, user: FakeUser): void {
+  join(conversationId: string, user: FakeUser, opts: { missed?: boolean } = {}): void {
     this.members.set(conversationId, [...(this.members.get(conversationId) ?? []), user]);
-    this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-aad', ...user }] });
+    // `missed`: the channel's membership event never reached the kernel.
+    if (opts.missed !== true) this.emitMembership({ kind: 'members_added', conversationId, members: [{ kind: 'teams-aad', ...user }] });
   }
 
   /** Another bot is added to the conversation (a second facilitator, an assistant). */
@@ -1235,8 +1236,27 @@ export class FakeKernel {
   };
 
   private readonly rostersService: ConversationRostersService = {
-    getRoster: async (_channelType: string, conversationId: string, opts?: { agentSlug?: string }): Promise<ConversationRoster | undefined> => {
-      this.rosterAsks.push({ conversationId, ...(opts?.agentSlug ? { agentSlug: opts.agentSlug } : {}) });
+    getRoster: async (_channelType: string, conversationId: string, opts?: { agentSlug?: string; fresh?: boolean }): Promise<ConversationRoster | undefined> => {
+      this.rosterAsks.push({ conversationId, ...(opts?.agentSlug ? { agentSlug: opts.agentSlug } : {}), ...(opts?.fresh ? { fresh: true } : {}) });
+      // The channel's cache (Teams: five minutes): an answer younger than
+      // `rosterCacheMs` is given again unless the caller asks for a fresh one.
+      const cached = this.rosterCache.get(conversationId);
+      if (cached && opts?.fresh !== true && this.clock.now().getTime() - cached.at < this.rosterCacheMs) return cached.roster;
+      const roster = this.readRoster(conversationId, opts);
+      this.rosterCache.set(conversationId, { at: this.clock.now().getTime(), roster });
+      return roster;
+    },
+  };
+
+  /** How long the channel caches a member list; 0 = no cache. */
+  rosterCacheMs = 0;
+  /** What the channel's cache holds per conversation. */
+  private readonly rosterCache = new Map<string, { at: number; roster: ConversationRoster | undefined }>();
+  /** A status the channel states for a conversation's member list (#2091). */
+  readonly rosterStatus = new Map<string, 'complete' | 'partial' | 'unknown'>();
+
+  private readRoster(conversationId: string, opts?: { agentSlug?: string }): ConversationRoster | undefined {
+    {
       const members = this.members.get(conversationId);
       if (!members || this.noRosters.has(conversationId)) return undefined;
       // Only the facilitator's own bot is in this conversation: the kernel
@@ -1245,16 +1265,18 @@ export class FakeKernel {
         const asked = this.rosterAsAgent ? opts?.agentSlug : undefined;
         if (!asked || this.noIdentity.has(asked)) return undefined;
       }
+      const stated = this.rosterStatus.get(conversationId);
       return {
         conversationType: 'group',
-        partial: this.partialRosters.has(conversationId),
+        partial: stated !== undefined ? stated !== 'complete' : this.partialRosters.has(conversationId),
+        ...(stated !== undefined ? { status: stated } : {}),
         participants: [
           ...members.map((m) => ({ userRef: { kind: 'teams-aad', id: m.id, displayName: m.displayName, ...(m.email ? { email: m.email } : {}) } })),
           { userRef: { kind: 'teams-bot', id: 'bot', displayName: 'Bot' }, isBot: true },
         ],
       };
-    },
-  };
+    }
+  }
 
   /** What the kernel answers for the bare name `conversationMessages` instead
    *  of the first major (a kernel on which the name means something else). */

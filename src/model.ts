@@ -168,6 +168,12 @@ export interface FacilitationSettings {
   /** Named participants nobody was matched to yet. They are waited for and
    *  matched by the name on their first message. */
   expected?: string[];
+  /** Of `expected`: the names a participant (not the initiator's request)
+   *  put forward. Matched like the others; the row's source is `named`. */
+  namedByOthers?: string[];
+  /** ISO time since which the fresh member list is not `complete`: no
+   *  automatic decision is taken, and the group was told so once. */
+  electorateUnverifiedSince?: string;
   /** The group was told that not everybody can be reached privately. */
   directNoticeSent?: boolean;
   /** People a private message could not reach; not tried again. */
@@ -210,6 +216,8 @@ export interface Facilitation {
   deadline: Date | null;
   timezone: string;
   closeRule: CloseRule;
+  /** Fixed at start (spec 5.5). */
+  electorateSource: ElectorateSource;
   reminderPolicy: ReminderPolicy;
   followupPolicy: FollowupPolicy;
   settings: FacilitationSettings;
@@ -280,13 +288,19 @@ export interface Step {
   closedAt: Date | null;
 }
 
+/** Where the list of participants comes from (spec 5.5), fixed at start. */
+export type ElectorateSource = 'platform_roster' | 'declared_list';
+
+/** How a person came on the list of participants (spec 5.1). */
+export type ParticipantSource = 'roster' | 'declared' | 'named' | 'posted' | 'joined';
+
 export interface Participant {
   facilitationId: string;
   principalId: string;
   canonicalPrincipal: string | null;
   displayName: string;
   email: string | null;
-  source: 'roster' | 'joined';
+  source: ParticipantSource;
   status: 'active' | 'left';
   joinedAt: Date;
   leftAt: Date | null;

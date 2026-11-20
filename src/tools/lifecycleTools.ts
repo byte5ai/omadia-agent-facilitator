@@ -11,6 +11,7 @@ import type { FacilitationEngine } from '../engine/engine.js';
 import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
 import type { AgendaStepInput } from '../engine/lifecycle.js';
+import { nameMissingPerson } from '../engine/electorate.js';
 import { statusText } from '../engine/status.js';
 import { formatWhen } from '../texts/index.js';
 import { asObject, defineTool, liveFacilitation, requireReadable, numberList, oneOf, optionalNumber, optionalString, requiredString, stringList } from './toolkit.js';
@@ -290,6 +291,29 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           return outcome === 'asked'
             ? `Asked ${author.displayName}. Do not ask again; answer [silent].`
             : `${author.displayName} was already asked about this message. Nothing was posted.`;
+        });
+      },
+    ),
+
+    defineTool(
+      engine,
+      {
+        name: 'facilitation_name_participant',
+        description:
+          'Only where the channel could not list every member: a participant names a person who is missing from the list of participants. The engine asks that person to write here once; they count from their own message on. Nobody is ever removed this way.',
+        properties: { name: { type: 'string', description: 'The name of the missing person, as the participant wrote it.' } },
+        required: ['name'],
+      },
+      async (args, ctx) => {
+        const f = await liveFacilitation(engine, ctx);
+        const name = requiredString(args, 'name');
+        return engine.core.work(f.id, async (w) => {
+          const by = ctx.callerPrincipalId ? await store.getParticipant(w.tx, w.f.id, ctx.callerPrincipalId) : undefined;
+          if (!by || by.status !== 'active') throw new Refusal('not_participant', 'Only a participant can name somebody who is missing.');
+          const outcome = await nameMissingPerson(w, by, name);
+          if (outcome === 'already_listed') return `${name} is already on the list of participants. Nothing changed.`;
+          if (outcome === 'already_named') return `${name} was already named and is waited for. Nothing changed.`;
+          return `${name} was named; the group was asked that ${name} writes here once. Do not repeat it.`;
         });
       },
     ),

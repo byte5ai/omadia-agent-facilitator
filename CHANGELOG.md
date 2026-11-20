@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Known electorate (spec 5.5, #2061 criteria 35 and 44).** The source of
+  the list of participants is fixed at start (`platform_roster` or
+  `declared_list`, migration 0008). With the platform roster the engine asks
+  the channel fresh before every automatic completeness or consent decision;
+  a list that is not `complete` holds the decision, the group is told once,
+  and the engine tries again with the next contribution or reminder. A
+  declared list grows by the initiator's names, by people a participant names
+  (`facilitation_name_participant`) once they write, and by whoever posts.
+  The final consent of a closing gets `finalConsentElectorate`: fresh at the
+  window's end, hourly for at most 24 hours, then "participants could not be
+  verified".
+
 ## 1.5.7
 
 ### Changed

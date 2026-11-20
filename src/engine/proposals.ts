@@ -9,7 +9,7 @@
 // What a proposal does when it is accepted is registered per kind: closing a
 // step, confirming clusters, a rule change.
 
-import { MINUTE_MS } from '../clock.js';
+import { HOUR_MS, MINUTE_MS } from '../clock.js';
 import { insert } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Participant, Proposal, ProposalObjection } from '../model.js';
@@ -17,10 +17,11 @@ import { formatWhen, texts } from '../texts/index.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
 import { advance } from './decide.js';
-import { PRIORITY, isPositiveReaction, isYes, registerInboundHandler } from './inbound.js';
+import { PRIORITY, isPositiveReaction, isYes, registerAfterInbound, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { onBeforeDeadline, registerJobHandler } from './scheduler.js';
+import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
 import { everybodyKnown } from './roll.js';
 
 export interface ProposalKind {
@@ -131,24 +132,70 @@ export async function decideProposal(w: Work, proposal: Proposal, accepted: bool
   else await definition.reject?.(w, proposal);
 }
 
-/** Accept when the window is over without a standing objection, or when
- *  every active participant agreed. */
-async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean): Promise<boolean> {
-  const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
-  const standing = proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
-  // "Everybody agreed" is said only about a list that is known to be complete.
-  const everybody = everybodyKnown(w.f) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
+/** How long a proposal whose electorate could not be verified at the end of
+ *  its window waits before it asks again (besides the next contribution or
+ *  reminder). */
+const ELECTORATE_RETRY_MS = HOUR_MS;
+
+/**
+ * The window is over and nothing stands against the proposal: it passes only
+ * on a verified list of participants (spec 5.5). Otherwise it stays open and
+ * is looked at again with the next contribution or reminder, and an hour
+ * later; at the deadline it fails, since nothing is decided past it.
+ */
+async function electorateAllows(w: Work, proposal: Proposal, atDeadline: boolean): Promise<boolean> {
+  const check = await verifyElectorate(w);
+  if (windowMayPass(check)) return true;
+  await w.event('decision_held', 'engine', { proposalId: proposal.id, reason: check.verified ? 'verified' : check.reason });
+  if (atDeadline) return false;
+  // One retry waits at a time: every message also looks again, and must not
+  // start another hourly chain.
+  const waiting = await w.tx.query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_jobs
+      WHERE facilitation_id = $1 AND kind = 'proposal_window' AND status = 'pending' AND payload ->> 'proposalId' = $2 AND due_at > $3 LIMIT 1`,
+    [w.f.id, proposal.id, w.now],
+  );
+  if (waiting.rows.length > 0) return false;
+  const retry = new Date(w.now.getTime() + ELECTORATE_RETRY_MS);
+  const at = w.f.deadline && w.f.deadline < retry ? w.f.deadline : retry;
+  await scheduleJob(w, 'proposal_window', `${proposal.id}:${at.toISOString()}`, at, { proposalId: proposal.id });
+  return false;
+}
+
+const standingOf = (proposal: Proposal, active: readonly Participant[]): ProposalObjection[] =>
+  proposal.objections.filter((o) => active.some((p) => p.principalId === o.principal));
+const activeOf = async (w: Work): Promise<Participant[]> => (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
+
+/** Accept when the window is over without a standing objection (on a
+ *  verified list of participants), or when every active participant agreed. */
+async function settleIfDue(w: Work, proposal: Proposal, windowOver: boolean, atDeadline = false): Promise<boolean> {
   if (windowOver) {
+    // A standing objection rejects whoever else belongs to the list.
+    if (standingOf(proposal, await activeOf(w)).length === 0 && !(await electorateAllows(w, proposal, atDeadline))) {
+      if (!atDeadline) return false;
+      await decideProposal(w, { ...proposal, objections: [] }, false);
+      return true;
+    }
+    // Read after the check: the fresh list may have brought or taken somebody.
+    const active = await activeOf(w);
+    const standing = standingOf(proposal, active);
+    const everybody = everybodyKnown(w.f) && active.length > 0 && active.every((p) => proposal.consents.includes(p.principalId));
     const needsAll = kindOf(proposal).unanimous?.(w, proposal) === true;
     await decideProposal(w, { ...proposal, objections: standing }, standing.length === 0 && (!needsAll || everybody));
     return true;
   }
-  if (everybody && standing.length === 0) {
-    await decideProposal(w, proposal, true);
-    return true;
-  }
-  return false;
+  // "Everybody agreed" is said only about a list that is known to be
+  // complete, and read after the fresh check: it may have brought somebody.
+  const everybodyAgreed = async (): Promise<boolean> => {
+    const active = await activeOf(w);
+    return everybodyKnown(w.f) && active.length > 0 && standingOf(proposal, active).length === 0 && active.every((p) => proposal.consents.includes(p.principalId));
+  };
+  if (!(await everybodyAgreed()) || !(await verifyElectorate(w)).verified || !(await everybodyAgreed())) return false;
+  await decideProposal(w, proposal, true);
+  return true;
 }
+
+const deadlinePassed = (w: Work): boolean => w.f.deadline !== null && w.now.getTime() >= w.f.deadline.getTime();
 
 const OBJECTION = /^(?:objection|i object|einwand|veto|widerspruch|ich widerspreche)(?:\s*[:,-]\s*(.*))?$/is;
 const AGREED = /^(?:agreed|agree|i agree|consent|no objection|einverstanden|zustimmung|ich stimme zu|kein einwand|passt|\+1)$/;
@@ -227,7 +274,7 @@ export function installProposals(): void {
   registerJobHandler('proposal_window', async (w, job) => {
     const proposal = await store.openProposal(w.tx, w.f.id);
     if (!proposal || proposal.id !== job.payload['proposalId']) return;
-    await settleIfDue(w, proposal, true);
+    await settleIfDue(w, proposal, true, deadlinePassed(w));
     // The proposal was in the way of an evaluation: look again now.
     await advance(w, 'contribution');
   });
@@ -235,6 +282,17 @@ export function installProposals(): void {
   // and never past the deadline.
   onBeforeDeadline(async (w) => {
     const proposal = await store.openProposal(w.tx, w.f.id);
-    if (proposal) await settleIfDue(w, proposal, true);
+    if (proposal) await settleIfDue(w, proposal, true, true);
   });
+  // A proposal held at the end of its window for want of a verified list is
+  // looked at again with the next message and the next reminder.
+  const retryHeld = async (w: Work): Promise<void> => {
+    if (w.f.phase !== 'active' && w.f.phase !== 'configuring') return;
+    const proposal = await store.openProposal(w.tx, w.f.id);
+    if (!proposal || proposal.windowEndsAt.getTime() > w.now.getTime()) return;
+    await settleIfDue(w, proposal, true, deadlinePassed(w));
+    await advance(w, 'contribution');
+  };
+  registerAfterInbound(retryHeld);
+  onHeldDecisionRetry(retryHeld);
 }
