@@ -87,6 +87,8 @@ export interface Outgoing {
   card?: OutboxPayload['card'];
   cardFallbackText?: string;
   cardUpdate?: OutboxPayload['cardUpdate'];
+  /** A reaction instead of a message; `text` is empty then. */
+  reaction?: OutboxPayload['reaction'];
   /** `prose`: a model wrote this text (an agent turn). Absent: a template
    *  the engine filled. The kernel records it with the send. */
   emission?: 'prose';
@@ -367,7 +369,7 @@ export class EngineCore {
     // People are named by their name: an id the facilitation knows goes out
     // as that name.
     // A card without a text is a whole message: the card says it all.
-    const verdict = m.card && m.text === '' ? ({ ok: true, text: '' } as const) : guardOutgoing(await namePrincipals(tx, f, m.text));
+    const verdict = (m.card || m.reaction) && m.text === '' ? ({ ok: true, text: '' } as const) : guardOutgoing(await namePrincipals(tx, f, m.text));
     if (!verdict.ok) {
       await store.appendEvent(tx, { facilitationId, kind: 'text_refused', actor: 'engine', occurredAt: now, payload: { purpose: m.purpose, reason: verdict.reason } });
       this.log(`facilitation ${facilitationId}: outgoing ${m.purpose} refused by the text guard (${verdict.reason})`);
@@ -384,6 +386,7 @@ export class EngineCore {
       ...(m.card ? { card: m.card } : {}),
       ...(m.cardFallbackText ? { cardFallbackText: m.cardFallbackText } : {}),
       ...(m.cardUpdate ? { cardUpdate: m.cardUpdate } : {}),
+      ...(m.reaction ? { reaction: m.reaction } : {}),
       ...(m.link ? { link: m.link } : {}),
       ...(fallback ? { fallback } : {}),
     };

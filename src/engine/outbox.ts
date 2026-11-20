@@ -87,6 +87,15 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
   // A linked session conversation, or the home conversation (5.3).
   const to = { agentSlug: f.facilitatorAgent, channelType: f.channelType, conversationId: payload.conversationId ?? f.conversationId };
 
+  if (payload.reaction) {
+    // A reaction instead of an echo (spec 5.14). Queued only where the
+    // channel declared reactions; a kernel or channel that lost them since
+    // answers 'unreachable', and nothing else is said.
+    if (!service.react) return { ok: false, code: 'no_reactions', message: 'this kernel cannot set reactions' };
+    const outcome = await service.react({ ...to, messageEventId: payload.reaction.messageEventId, reaction: 'acknowledge', authorization });
+    return outcome.outcome === 'reacted' ? { ok: true } : unreachable(outcome);
+  }
+
   if (payload.cardUpdate) {
     const card = await store.getCard(q, payload.cardUpdate.cardId);
     // A card that never reached the channel has nothing to bring up to date.
@@ -301,8 +310,8 @@ async function deliver(engine: EngineCore, client: Db, f: Facilitation, row: Out
 
   if (result.ok) {
     await update(client, 'plg_omadia_agent_facilitator_outbox', { id: row.id }, { status: 'sent', sentAt: engine.now(), channelMessageId: result.messageId ?? null });
-    // An update of a card is no new message in the conversation.
-    if (!(row.payload as StoredPayload).cardUpdate) await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
+    // An update of a card, or a reaction, is no new message in the conversation.
+    if (!(row.payload as StoredPayload).cardUpdate && !(row.payload as StoredPayload).reaction) await client.query('UPDATE plg_omadia_agent_facilitator_facilitations SET messages_sent = messages_sent + 1 WHERE id = $1', [f.id]);
     await stampLink(client, f.id, row.payload as StoredPayload, result.messageId, result.cardMessageId);
     await store.appendEvent(client, {
       facilitationId: f.id,
