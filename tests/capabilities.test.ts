@@ -101,6 +101,37 @@ test('a stakeholder counts only when the group confirmed; one the group refused 
   await tool(conv, 'facilitation_stop', { reason: 'test over' });
 });
 
+test('stakeholders named in the start request are put to the group in the same call, once (live finding 2026-11-21)', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-start-stakeholders', [ANNA, BERT, CARA]);
+  const answer = await tool(conv, 'facilitation_start', {
+    goal: 'g',
+    definitionOfDone: 'd',
+    agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }],
+    stakeholders: [
+      { name: 'Maria Boss', address: 'Maria@Example.com' },
+      { name: 'Tom IT', role: 'invited_to_followups' },
+      { name: 'Cara' },
+    ],
+  });
+  // One proposal for everybody it can propose; the one without an address is asked for.
+  assert.match(answer, /Stakeholders put to the group as one proposal: Maria Boss, Cara\./);
+  assert.match(answer, /no mail address given: Tom IT\. Ask for the address/);
+  assert.match(posts(conv).at(-1) ?? '', /^Proposal: add Maria Boss as a stakeholder who receives the protocol; add Cara as a stakeholder who receives the protocol/);
+  const f = await h.facilitation(conv);
+  assert.equal((await store.listStakeholders(h.db.pool, f.id)).length, 2);
+
+  // Adjusting the setup does not put the same people to the group again.
+  const again = await tool(conv, 'facilitation_start', { goal: 'g2', stakeholders: [{ name: 'maria boss', address: 'maria@example.com' }] });
+  assert.doesNotMatch(again, /Stakeholders put to the group/);
+  assert.equal((await store.listProposals(h.db.pool, f.id)).filter((p) => p.kind === 'stakeholder').length, 1);
+
+  await tool(conv, 'facilitation_open');
+  await all(conv, 'agreed');
+  const confirmed = (await store.listStakeholders(h.db.pool, f.id)).filter((s) => s.confirmed);
+  assert.deepEqual(confirmed.map((s) => s.address).sort(), ['cara@example.com', 'maria@example.com']);
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
 test('at the close the protocol goes to participants and confirmed stakeholders, and the agreed follow-up meeting is created from free/busy', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('ca-close', [ANNA, BERT, CARA]);
   followup.calendars.set('anna@example.com', [{ start: '2026-11-19T08:00:00Z', end: '2026-11-19T10:00:00Z' }]);

@@ -11,6 +11,7 @@ import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { FORMAT_IDS, STEP_KINDS } from '../engine/formats.js';
 import { abortFacilitation, configureFacilitation, openFacilitation } from '../engine/lifecycle.js';
+import { proposeNamedStakeholders, stakeholderList, STAKEHOLDER_ROLES } from './startStakeholders.js';
 import type { AgendaStepInput } from '../engine/lifecycle.js';
 import { nameMissingPerson } from '../engine/electorate.js';
 import { personNamed, recordImport } from '../engine/imports.js';
@@ -126,6 +127,19 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           },
           reminderMinutesBefore: { type: 'array', items: { type: 'number' }, description: 'When the request asks for reminders of its own: minutes before the deadline, e.g. [5] or [1440, 120]; an empty list when it wants none. Leave it out otherwise: reminders then follow from the time to the deadline, and the opening message says which.' },
           participants: { type: 'array', items: { type: 'string' }, description: 'The names of the participants, when the request names them ("only Anna and Bert", "just me"). They are the list then: it closes when all of them have contributed, and nobody else is counted. The person who asked always takes part and need not be listed. Leave it out when the request names nobody: then the members of the conversation take part. Where the channel cannot list the members, a vote needs either this list or a deadline.' },
+          stakeholders: {
+            type: 'array',
+            description: 'People the request names who should get the result or the protocol, or be invited to follow-up meetings, without taking part ("send the protocol to our boss Maria", "invite Tom from IT to the follow-up"). Pass every one of them here: the engine puts them to the group as one proposal right away; only a stakeholder the group confirmed is ever written to. Somebody who is not in this conversation needs a mail address; leave the address out if the request gives none and ask for it.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                address: { type: 'string', description: 'Mail address, when the request gives one.' },
+                role: { type: 'string', enum: [...STAKEHOLDER_ROLES], description: 'receives_protocol (default) or invited_to_followups.' },
+              },
+              required: ['name'],
+            },
+          },
           protocolByMail: { type: 'boolean', description: 'The request asks that the protocol also goes to the participants by mail after the close. It is mailed to the addresses the channel knows; nobody is asked for one. Only set it when somebody asked for it.' },
           followUp: { type: 'boolean', description: 'The group agreed that owners are reminded of their action items before the due date.' },
           followUpStatusAt: { type: 'string', description: 'ISO 8601 with offset: when the status of the action items is posted to the group.' },
@@ -150,6 +164,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
         const statusAt = optionalString(args, 'followUpStatusAt');
         const definitionOfDone = optionalString(args, 'definitionOfDone');
         const participants = stringList(args, 'participants');
+        const stakeholders = stakeholderList(args);
         const agenda = Array.isArray(args['agenda'])
           ? args['agenda'].map((raw): AgendaStepInput => {
               const o = asObject(raw);
@@ -189,8 +204,10 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           ...(!method && (stringList(args, 'options') ?? []).length > 0 ? { undecidedOptions: stringList(args, 'options') ?? [] } : {}),
         });
         engine.ensureAttached(ctx.agentSlug);
+        const named = await proposeNamedStakeholders(engine, result.facilitation.id, stakeholders, ctx.callerPrincipalId);
         const people = [...result.participants.map((p) => p.displayName), ...result.expected].join(', ') || 'not known yet';
         const notes = [
+          ...named.notes,
           ...(result.expected.length > 0 ? [`Not matched to a person yet: ${result.expected.join(', ')}. The opening message asks them to write once; each counts from then on and is waited for until then.`] : []),
           ...result.notes.map((n) => `Tell the group: ${n}`),
           ...(result.defaultedDod !== undefined ? [`No definition of done was given, so this one is used: "${result.defaultedDod}". Say it to the group; if they want another wording, call facilitation_start again with it.`] : []),
@@ -203,7 +220,9 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           return [opened.posted ? `${what} and opened.` : `${what}.`, `Participants: ${people}.`, ...notes, opened.text].join('\n');
         }
         return [
-          `${what}, phase: configuring. It is NOT open: nothing was posted in the group and nothing is recorded yet.`,
+          named.posted
+            ? `${what}, phase: configuring. It is NOT open: only the stakeholder proposal was posted in the group, and nothing is recorded yet.`
+            : `${what}, phase: configuring. It is NOT open: nothing was posted in the group and nothing is recorded yet.`,
           `Participants: ${people}.`,
           ...notes,
           'Do not tell the group that it started or is running. Either ask the group to confirm the setup and call facilitation_open once they did, or, if the request already fixed everything, call facilitation_open now.',

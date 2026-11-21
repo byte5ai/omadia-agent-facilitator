@@ -127,6 +127,14 @@ byte5ai/omadia `docs/adr/`.
   steps, open points), `talk` (summaries, clusters, participants), `contribution` (never to a
   stakeholder). `full` knows `protocol` + `talk`; `existence` and `none` only `protocol`; the
   note about withheld parts from `existence` up.
+- Stakeholders named in the start request (spec 5.2 Prepare, 5.7 group consent; live finding
+  2026-11-21: they were lost because the model keeps no memory between messages):
+  `facilitation_start` takes `stakeholders` and puts every new one to the group in the same
+  call as ONE proposal (`proposeStakeholders`, payload `stakeholderIds` + `names`; older
+  proposals with a single `stakeholderId` are still accepted). A name or address that was
+  already proposed, confirmed or refused is not proposed again on a re-call
+  (`newStakeholders`). Somebody outside the conversation without an address is not proposed;
+  the tool result asks the facilitator to get the address. The start never fails on this.
 - `markEnded(w)` sets `ended_at` and `purge_after` (retention from `ended`/`aborted`). Follow-up
   ends at min(last due + `followup_grace_days`, close + `followup_horizon_days`); a later due
   date is refused (`due_beyond_horizon`). Purge waits for every open closing and scope;
