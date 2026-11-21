@@ -34,7 +34,7 @@ import * as store from '../db/store.js';
 import type { Db } from '../db/pool.js';
 import { principalKey } from '../kernel.js';
 import type { Closing, OutboxRow, ResultMark, Session } from '../model.js';
-import { formatWhen } from '../texts/index.js';
+import { formatWhen, texts } from '../texts/index.js';
 import { sessionTexts } from '../texts/sessions.js';
 import type { EngineCore, Work } from './core.js';
 import { onClosed, onConcluding } from './decide.js';
@@ -43,8 +43,11 @@ import { PRIORITY, isPositiveReaction, normaliseCommand, registerInboundHandler 
 import { scheduleJob } from './jobs.js';
 import { abortInWork, onAborted } from './lifecycle.js';
 import { isAgreement } from './proposals.js';
-import { closingEventId, confirmationWindowMs, finalPatch, getClosingByEvent, markDocument, openClosing, patchClosing, resultStatusWords, stoppedMark, undeliveredMark } from './resultStatus.js';
+import { CLOSING_LIMITS, closingEventId, confirmationWindowMs, finalPatch, getClosingByEvent, markDocument, openClosing, patchClosing, resultStatusWords, stoppedMark, undeliveredMark } from './resultStatus.js';
+import { FINAL_ELECTORATE_MAX_MS, FINAL_ELECTORATE_RETRY_MS, finalConsentElectorate } from './electorate.js';
+import type { FinalConsentElectorate } from './electorate.js';
 import { onDeadlineWait, registerJobHandler } from './scheduler.js';
+import { verifySessionElectorate } from './sessionElectorate.js';
 import { onConfirmingAnswer, sessionTitleOf } from './sessionLinks.js';
 
 const SESSIONS = 'plg_omadia_agent_facilitator_sessions';
@@ -154,7 +157,7 @@ function postDocument(w: Work, session: Session, closing: Closing, text: string,
 }
 
 /** Set the result status of a session closing; the session is closed. */
-async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resend?: boolean } = {}): Promise<void> {
+async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resend?: boolean; undelivered?: boolean } = {}): Promise<void> {
   if (closing.endedAt) return;
   const session = closing.sessionId ? await getSession(w.tx, closing.sessionId) : undefined;
   await patchClosing(w.tx, closing.id, { ...finalPatch(mark, w.now), part: 'done', endedAt: w.now });
@@ -178,6 +181,9 @@ async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resen
     await patchClosing(w.tx, closing.id, { documentVersion: closing.documentVersion + 1 });
     return;
   }
+  // A summary that never reached its conversation gets no status post there
+  // either: nothing of its closing is sent after its delivery limit.
+  if (opts.undelivered === true) return;
   postDocument(w, session, closing, mark.status === 'confirmed' ? t.summaryConfirmed(title) : t.summaryNotConfirmed(title, resultStatusWords(w.f.language, mark)), 'session_summary_status');
 }
 
@@ -187,19 +193,42 @@ async function finish(w: Work, closing: Closing, mark: ResultMark, opts: { resen
  *  needs confirmation opens its window; one that needs none is done; one
  *  that could not be delivered gets its status. */
 export async function sessionSummariesDelivered(engine: EngineCore, client: Db, facilitationId: string): Promise<void> {
-  const open = await rows<Closing>(client, `SELECT * FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND kind = 'session' AND ended_at IS NULL AND delivery_status = 'pending'`, [facilitationId]);
+  const open = await rows<Closing>(client, `SELECT * FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND kind = 'session' AND delivery_status = 'pending'`, [facilitationId]);
   if (open.length === 0) return;
   for (const closing of open) {
-    const sent = await rows<OutboxRow>(client, `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND closing_id = $2 AND purpose = 'session_summary'`, [facilitationId, closing.id]);
+    // The sends of the document's current version: a stop replaces the
+    // version that asked for consent (criterion 43).
+    const sent = await rows<OutboxRow>(
+      client,
+      `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND closing_id = $2 AND purpose IN ('session_summary', 'session_summary_final') AND document_version = $3`,
+      [facilitationId, closing.id, closing.documentVersion],
+    );
     const delivered = sent.find((r) => r.status === 'sent');
     const gaveUp = sent.find((r) => r.status === 'failed' || r.status === 'dropped');
-    if (!delivered && !gaveUp) continue;
+    if (closing.endedAt) {
+      // Ended already (stop or abort): only its delivery status follows.
+      if (delivered || gaveUp) await engine.workOn(client, facilitationId, async (w) => recordDelivery(w, closing.id, delivered));
+      continue;
+    }
+    // The delivery part has its own limit (spec 5.2: at most 7 days), like
+    // every closing; a summary that never got through is `not delivered`.
+    const overdue = engine.now().getTime() >= Math.min(closing.partStartedAt.getTime() + CLOSING_LIMITS.deliveryMs, closing.absoluteUntil.getTime());
+    if (!delivered && !gaveUp && !overdue) continue;
     await engine.workOn(client, facilitationId, async (w) => {
       const current = (await rows<Closing>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_closings WHERE id = $1 FOR UPDATE', [closing.id]))[0];
       if (!current || current.endedAt || current.deliveryStatus !== 'pending') return;
+      if (!delivered && !gaveUp) {
+        const dropped = await w.tx.query(
+          `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'the delivery limit of its closing passed'
+            WHERE facilitation_id = $1 AND closing_id = $2 AND status IN ('pending', 'sending') RETURNING purpose`,
+          [w.f.id, current.id],
+        );
+        await w.event('closing_send_dropped', 'engine', { closingId: current.id, reason: 'the delivery limit of its closing passed', sends: dropped.rows.length });
+        w.engine.log(`facilitation ${w.f.id}: session summary ${current.eventId} not delivered within the delivery limit`);
+      }
       if (!delivered) {
         await patchClosing(w.tx, current.id, { deliveryStatus: 'not_delivered' });
-        await finish(w, current, undeliveredMark(current.requiresConfirmation));
+        await finish(w, current, undeliveredMark(current.requiresConfirmation), { undelivered: true });
         return;
       }
       const deliveredAt = delivered.sentAt ?? w.now;
@@ -214,6 +243,14 @@ export async function sessionSummariesDelivered(engine: EngineCore, client: Db, 
       await w.event('session_confirmation_open', 'engine', { closingId: current.id, until: windowEndsAt.toISOString() });
     });
   }
+}
+
+/** The delivery status of a session closing that has ended already. */
+async function recordDelivery(w: Work, closingId: string, delivered: OutboxRow | undefined): Promise<void> {
+  const current = (await rows<Closing>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_closings WHERE id = $1 FOR UPDATE', [closingId]))[0];
+  if (!current || current.deliveryStatus !== 'pending') return;
+  await patchClosing(w.tx, current.id, delivered ? { deliveryStatus: 'delivered', deliveredAt: delivered.sentAt ?? w.now } : { deliveryStatus: 'not_delivered' });
+  await w.event(delivered ? 'closing_delivered' : 'result_undelivered', 'engine', { closingId: current.id, version: current.documentVersion });
 }
 
 /** A consent answer to a session summary: agreement lifts one's own
@@ -282,7 +319,42 @@ async function windowEnded(w: Work, closingId: string): Promise<void> {
   if (!closing || closing.endedAt || closing.resultStatus !== null) return;
   const standing: typeof closing.objections = [];
   for (const o of closing.objections) if (await eligible(w, closing, o.principal)) standing.push(o);
-  await finish(w, closing, standing.length > 0 ? { status: 'not_confirmed', reason: 'objection' } : { status: 'confirmed' });
+  if (standing.length > 0) return finish(w, closing, { status: 'not_confirmed', reason: 'objection' });
+  // "Nobody objected" needs a verified electorate, as the final consent
+  // does (spec 5.2 part 3, 5.5; criterion 59): asked fresh now, then hourly
+  // for at most a day, else "participants could not be verified".
+  const electorate = await sessionConsentElectorate(w, closing);
+  if (electorate.state === 'verified') return finish(w, closing, { status: 'confirmed' });
+  if (electorate.state === 'unverifiable') return finish(w, closing, { status: 'not_confirmed', reason: 'electorate_unverified' });
+  await scheduleJob(w, 'session_confirmation', `${closing.id}:${electorate.at.toISOString()}`, electorate.at, { closingId: closing.id });
+  const said = (await store.listEvents(w.tx, w.f.id, ['electorate_unverified'])).some((e) => e.payload['closingId'] === closing.id);
+  if (said) return;
+  await w.event('electorate_unverified', 'engine', { closingId: closing.id });
+  const session = closing.sessionId ? await getSession(w.tx, closing.sessionId) : undefined;
+  w.post({
+    purpose: 'session_consent_hint',
+    key: `${closing.id}:unverified`,
+    to: 'group',
+    ...(session?.conversationId ? { conversationId: session.conversationId } : {}),
+    deliveryClass: 'droppable',
+    versionBound: false,
+    closingEvent: closing.eventId,
+    text: texts(w.f.language).closing.electorateUnverified(),
+  });
+}
+
+/** May a session summary's window pass now? The home electorate, and a
+ *  session's own platform roster, must be verified. */
+async function sessionConsentElectorate(w: Work, closing: Closing): Promise<FinalConsentElectorate> {
+  const windowEndedAt = closing.windowEndsAt ?? w.now;
+  const home = await finalConsentElectorate(w, windowEndedAt);
+  if (home.state !== 'verified') return home;
+  const session = closing.sessionId ? await getSession(w.tx, closing.sessionId) : undefined;
+  if (!session || session.electorateSource !== 'platform_roster') return home;
+  if ((await verifySessionElectorate(w, session)).verified) return home;
+  const giveUpAt = windowEndedAt.getTime() + FINAL_ELECTORATE_MAX_MS;
+  if (w.now.getTime() >= giveUpAt) return { state: 'unverifiable' };
+  return { state: 'retry', at: new Date(Math.min(w.now.getTime() + FINAL_ELECTORATE_RETRY_MS, giveUpAt)) };
 }
 
 // ── sessions at the end of the facilitation (criterion 49) ─────────────────
