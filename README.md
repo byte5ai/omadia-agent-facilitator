@@ -330,7 +330,7 @@ the kernel's pool. From 1.3.0 the plugin has its own schema.
 
 | | |
 |---|---|
-| Verified by tests against Postgres | everything in this repository, on a fake kernel with a simulated channel and a fake clock (`tests/acceptance.test.ts` for spec 9, criteria 1 to 20 except 13) |
+| Verified by tests against Postgres | everything in this repository, on a fake kernel with a simulated channel and a fake clock (spec 9, criteria 1 to 64: `docs/acceptance-matrix.md`) |
 | Verified in a browser | the facilitations view, in Chrome, through `scripts/ui-preview.mjs` with a mock API |
 | Not verified here | the kernel's implementation of the services, a real Teams tenant (criterion 13), the facilitations view inside the web UI's frame, a real `facilitation.followup` integration |
 
