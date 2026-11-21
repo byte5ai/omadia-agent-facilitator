@@ -433,32 +433,94 @@ const followupMeeting: ExternalJob = async (engine, job) => {
   });
 };
 
+export interface StakeholderInput {
+  displayName: string;
+  address?: string;
+  role: StakeholderRole;
+  disclosure?: Disclosure;
+}
+
 /** Add a stakeholder: only after the group confirmed. */
-export async function proposeStakeholder(w: Work, input: { displayName: string; address?: string; role: StakeholderRole; disclosure?: Disclosure; addedBy: string }): Promise<Stakeholder> {
+export async function proposeStakeholder(w: Work, input: StakeholderInput & { addedBy: string }): Promise<Stakeholder> {
+  const [stakeholder] = await proposeStakeholders(w, [input], input.addedBy);
+  return stakeholder as Stakeholder;
+}
+
+/**
+ * Several stakeholders in ONE proposal: only one proposal is open at a time,
+ * and a start request that names two people must not lose the second (spec
+ * 5.7: stakeholders are agreed by group consent, §5.2 Prepare). The group
+ * confirms or refuses them together; nobody is written to before.
+ */
+export async function proposeStakeholders(w: Work, inputs: readonly StakeholderInput[], addedBy: string): Promise<Stakeholder[]> {
   if (w.f.phase !== 'active' && w.f.phase !== 'configuring') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
-  if (input.address !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.address)) throw new Refusal('bad_input', 'That is not a mail address.');
-  const t = texts(w.f.language);
+  if (inputs.length === 0) throw new Refusal('bad_input', 'Name at least one stakeholder.');
   const participants = await store.listParticipants(w.tx, w.f.id);
-  const known = participants.find((p) => p.displayName.toLowerCase() === input.displayName.toLowerCase());
-  if (!known && input.address === undefined) throw new Refusal('bad_input', 'A stakeholder who is not in this conversation needs a mail address.');
-  const stakeholder = await insert<Stakeholder>(w.tx, 'plg_omadia_agent_facilitator_stakeholders', {
-    facilitationId: w.f.id,
-    principal: known?.principalId ?? null,
-    address: input.address ? lower(input.address) : (known?.email ?? null),
-    displayName: input.displayName,
-    role: input.role,
-    disclosure: input.disclosure ?? 'existence',
-    addedBy: input.addedBy,
-    createdAt: w.now,
+  const resolved = inputs.map((input) => {
+    if (input.address !== undefined && !MAIL_ADDRESS.test(input.address)) throw new Refusal('bad_input', `That is not a mail address: ${input.address}.`);
+    const known = participants.find((p) => p.displayName.toLowerCase() === input.displayName.toLowerCase());
+    if (!known && input.address === undefined) throw new Refusal('bad_input', `A stakeholder who is not in this conversation needs a mail address: ${input.displayName}.`);
+    return { input, known };
   });
+  const t = texts(w.f.language);
+  const stakeholders: Stakeholder[] = [];
+  for (const { input, known } of resolved) {
+    stakeholders.push(
+      await insert<Stakeholder>(w.tx, 'plg_omadia_agent_facilitator_stakeholders', {
+        facilitationId: w.f.id,
+        principal: known?.principalId ?? null,
+        address: input.address ? lower(input.address) : (known?.email ?? null),
+        displayName: input.displayName,
+        role: input.role,
+        disclosure: input.disclosure ?? 'existence',
+        addedBy,
+        createdAt: w.now,
+      }),
+    );
+  }
   await openProposal(w, {
     kind: 'stakeholder',
-    summary: t.proposeStakeholder(input.displayName, t.stakeholderRoles[input.role]),
-    payload: { stakeholderId: stakeholder.id },
-    proposedBy: input.addedBy,
+    summary: inputs.map((i) => t.proposeStakeholder(i.displayName, t.stakeholderRoles[i.role])).join('; '),
+    payload: { stakeholderIds: stakeholders.map((s) => s.id), names: inputs.map((i) => i.displayName) },
+    proposedBy: addedBy,
     windowMinutes: w.f.settings.confirmWindowMinutes,
   });
-  return stakeholder;
+  return stakeholders;
+}
+
+const MAIL_ADDRESS = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/**
+ * Stakeholders named in a start request that were not put to the group yet.
+ * A name the group already confirmed, refused or is deciding on is not
+ * proposed again when the setup is adjusted (facilitation_start re-called).
+ */
+export async function newStakeholders(q: Queryable, facilitationId: string, inputs: readonly StakeholderInput[]): Promise<StakeholderInput[]> {
+  const seen = new Set<string>();
+  for (const s of await store.listStakeholders(q, facilitationId)) {
+    if (s.displayName) seen.add(s.displayName.toLowerCase());
+    if (s.address) seen.add(s.address.toLowerCase());
+  }
+  for (const p of await store.listProposals(q, facilitationId)) {
+    if (p.kind !== 'stakeholder') continue;
+    const names = p.payload['names'];
+    if (Array.isArray(names)) for (const n of names) seen.add(String(n).toLowerCase());
+  }
+  const fresh: StakeholderInput[] = [];
+  for (const input of inputs) {
+    const keys = [input.displayName.toLowerCase(), ...(input.address ? [input.address.toLowerCase()] : [])];
+    if (keys.some((k) => seen.has(k))) continue;
+    keys.forEach((k) => seen.add(k));
+    fresh.push(input);
+  }
+  return fresh;
+}
+
+/** The stakeholder rows a proposal covers: one id (older proposals) or several. */
+function proposedStakeholderIds(payload: Record<string, unknown>): string[] {
+  const many = payload['stakeholderIds'];
+  if (Array.isArray(many)) return many.map(String);
+  return payload['stakeholderId'] !== undefined ? [String(payload['stakeholderId'])] : [];
 }
 
 /** Agree a follow-up meeting: the group consents before anything is read. */
@@ -520,12 +582,14 @@ export function installCapabilities(): void {
   registerProposalKind('stakeholder', {
     describe: (_w, p) => p.summary,
     accept: async (w, p) => {
-      await update(w.tx, 'plg_omadia_agent_facilitator_stakeholders', { id: String(p.payload['stakeholderId']) }, { confirmed: true, confirmedAt: w.now });
-      await w.event('stakeholder_confirmed', 'group', { stakeholderId: p.payload['stakeholderId'] });
+      for (const stakeholderId of proposedStakeholderIds(p.payload)) {
+        await update(w.tx, 'plg_omadia_agent_facilitator_stakeholders', { id: stakeholderId }, { confirmed: true, confirmedAt: w.now });
+        await w.event('stakeholder_confirmed', 'group', { stakeholderId });
+      }
     },
     // Somebody the group did not confirm is not a stakeholder.
     reject: async (w, p) => {
-      await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_stakeholders WHERE id = $1 AND confirmed = false', [String(p.payload['stakeholderId'])]);
+      await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_stakeholders WHERE id = ANY($1::uuid[]) AND confirmed = false', [proposedStakeholderIds(p.payload)]);
     },
   });
 
