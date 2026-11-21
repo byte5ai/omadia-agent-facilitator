@@ -4,7 +4,7 @@
  *
  * The matrix maps every acceptance criterion of spec B §9 (1 to 64) to the
  * automated tests that prove it. This check fails when
- *   - a criterion has no row, or more than one;
+ *   - a criterion has no row, or more than one, or its row is marked TODO;
  *   - a row names no test of this repository;
  *   - a referenced test file does not exist, or does not contain the quoted
  *     title fragment (a renamed or deleted test breaks the matrix);
@@ -72,6 +72,7 @@ for (const [n, row] of rows) {
     }
   }
   if (files.size === 0) problems.push(`criterion ${n}: the row names no test of this repository`);
+  if (/\bTODO\b/.test(row)) problems.push(`criterion ${n}: the row is marked TODO`);
   referenced.set(n, files);
 }
 

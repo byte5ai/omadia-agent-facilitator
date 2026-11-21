@@ -42,14 +42,14 @@ tests; **A+M** automated plus a recorded manual check.
 | 19 | Adaptation (audio mid-session) | `acceptance.test.ts` › "19. adaptation"; `sessions.test.ts` › "adaptation mid-session"; "explicit consent per participant" | | A |
 | 20 | Scoped capabilities and revocation | `acceptance.test.ts` › "20. scoped capabilities"; `dispatch.test.ts` › "20. the dispatch grant ends 7 days after"; "20. without action items: the dispatch grant is revoked"; `capabilities.test.ts` › "the facilitator cannot reach anybody the group did not confirm"; "the grant is revoked when the follow-up ends" | `omadia:middleware/test/executionScopes.pg.test.ts` "#2078 kernel-issued grants" | A+K |
 | 21 | Multi-step and follow-up | TODO | | |
-| 22 | Meeting chat | `sessionConversations.test.ts` › "criterion 22 and 46"; "a turn there knows nothing of the home conversation" | `omadia:middleware/test/processConversationMessages.test.ts` | A+K |
+| 22 | Meeting chat | `acceptanceSessionPaths.test.ts` › "22. preparation in A, live session in B"; `sessionConversations.test.ts` › "criterion 22 and 46"; "a turn there knows nothing of the home conversation" | `omadia:middleware/test/processConversationMessages.test.ts` | A+K |
 | 23 | Content authenticity | `parts.test.ts` › "criterion 23: a tool-call ballot that differs from the message is refused" | `omadia:middleware/test/scopedAgentTurnInboundEvent.test.ts`; `omadia:middleware/test/processConversationMessages.test.ts` "an edited message: the latest revision is plain" | A+K |
 | 24 | Group consent | `consentWindow.test.ts` › "criterion 24: no claim of agreement counts"; "criterion 24: one objection within the window blocks the proposal" | `omadia:middleware/test/executionScopes.pg.test.ts` (grants only from the owning plugin under closing, scheduling or follow-up scopes) | A+K |
 | 25 | Execution scopes | TODO | `omadia:middleware/test/executionScopes.pg.test.ts`; `omadia:middleware/test/scopedSendService.test.ts` | |
 | 26 | Follow-up horizon | `closing.test.ts` › "26. follow-up horizon"; `process.test.ts` › "follow-up ends by itself 7 days"; `acceptanceStaysPersonal.test.ts` › "37. with only unaccepted nominations the facilitation goes from" | `omadia:middleware/test/processConversationMessages.test.ts` "events of a running process are not purged by age" | A+K |
 | 27 | Closing and session confirmation | TODO | `omadia:middleware/test/executionScopes.pg.test.ts` "the session state follows the table" | |
 | 28 | Follow-up replies | TODO | `omadia:middleware/test/privateMessageRouter.test.ts`; `omadia:middleware/test/addressedMessageRouter.test.ts` | |
-| 29 | Session paths, process correlation | `correlation.test.ts` › "criterion 29: two follow-ups and an active facilitation"; TODO | | |
+| 29 | Session paths, process correlation | `acceptanceSessionPaths.test.ts` › "29. ${channel}: the link is confirmed in the session chat" (Teams, Slack, Discord, Telegram); `correlation.test.ts` › "criterion 29: two follow-ups and an active facilitation"; "as a reply to its message ends only that follow-up"; `sessionConversations.test.ts` › "criterion 48: only a home participant links" | | A |
 | 30 | Stakeholder filter, completion mapping | `dispatch.test.ts` › "30. a mixed protocol to stakeholders"; `smallTexts.test.ts` › "without a number closes the only open item of its owner, and asks which one" | | A |
 | 31 | Consent step, closing scopes | `consentWindow.test.ts` › "criterion 31: all agree early to a consent step"; "criterion 31: a consent may be withdrawn"; TODO | | |
 | 32 | Result at the deadline | TODO | | |
@@ -66,7 +66,7 @@ tests; **A+M** automated plus a recorded manual check.
 | 43 | Stop during closing | `sessionClose.test.ts` › "criterion 49 (stop)"; TODO | | |
 | 44 | Unverifiable electorate, failed delivery | `closing.test.ts` › "44. a roster that stays partial"; "44. a result that never gets delivered"; `electorate.test.ts` › "criterion 44: the final consent asks the roster fresh" | | A |
 | 45 | Linked session in preparation | `sessionConversations.test.ts` › "criterion 45: linked during configuring" | `omadia:middleware/test/executionScopes.pg.test.ts` | A+K |
-| 46 | Session guest status | `sessionConversations.test.ts` › "criterion 22 and 46"; "gives the session status only"; TODO | | |
+| 46 | Session guest status | `sessionConversations.test.ts` › "criterion 22 and 46"; "gives the session status only"; `acceptanceSessionPaths.test.ts` › "46. a person with both memberships asks privately" | | A |
 | 47 | Stop before invitations | `dispatch.test.ts` › "47. a follow-up meeting is agreed" | | A |
 | 48 | Link authorization | `sessionConversations.test.ts` › "criterion 48: only a home participant links a meeting chat" | | A |
 | 49 | Sessions at the end | `sessionClose.test.ts` › "criterion 49 (stop)"; "criterion 51 and 49 (regular close)"; `executionScopes.test.ts` › "when the configuring scope runs out"; `meetingEvents.test.ts` › "no session stays open when its facilitation has ended" | | A |
@@ -74,13 +74,13 @@ tests; **A+M** automated plus a recorded manual check.
 | 51 | Session confirmation across the close | `sessionClose.test.ts` › "criterion 51 and 49 (regular close)" | | A |
 | 52 | Stop during the final closing | `closing.test.ts` › "52. stop during the final consent window"; "52. stop before the final summary is delivered"; `dispatch.test.ts` › "52. a pending follow-up invitation survives" | | A |
 | 53 | No reading across processes | `release.test.ts` › "does not replay the earlier chat"; `processBound.test.ts` › "a new facilitation next to a follow-up: each reads for itself"; TODO | `omadia:middleware/test/processConversationMessages.test.ts` "two facilitations one after another", "overlap: a reply or card answer bound to the older process reaches it alone" | |
-| 54 | Session electorate | `sessionElectorate.test.ts` › "a step run inside a live session declares its participants"; TODO | | |
+| 54 | Session electorate | `acceptanceSessionPaths.test.ts` › "54. a session with an unknown roster is linked during"; `sessionElectorate.test.ts` › "a step run inside a live session declares its participants"; "by default a step counts the home participants" | | A |
 | 55 | Stakeholders | `capabilities.test.ts` › "a stakeholder counts only when the group confirmed"; TODO | | |
 | 56 | Stop with action items | `closing.test.ts` › "56. stop with confirmed action items" | | A |
 | 57 | Change after a closed vote | `repeats.test.ts` › "criterion 57: a changed method repeats the closed vote"; "criterion 57: a different outcome replaces the old decision" | | A |
 | 58 | Agent disabled or deleted | `endOfService.test.ts` › "a disabled facilitator ends every running facilitation"; "the reason is said in words"; TODO | | |
 | 59 | Definition of done waits for last session | `sessionClose.test.ts` › "criterion 59: at the deadline the last session closes"; TODO | | |
-| 60 | Session readiness | `sessionConversations.test.ts` › "criterion 60: a meeting chat without permission"; TODO | `omadia:middleware/test/executionScopes.pg.test.ts` (live needs readiness) | |
+| 60 | Session readiness | `acceptanceSessionPaths.test.ts` › "60. ${channel}: a meeting chat that gets mentions but not every message" (Teams, Slack, Discord, Telegram); `sessionConversations.test.ts` › "criterion 60: a meeting chat without permission" | `omadia:middleware/test/executionScopes.pg.test.ts` (live needs readiness) | A+K |
 | 61 | Retention and open scopes | `closing.test.ts` › "61. retention of one day"; `governance.test.ts` › "retention: records are deleted 90 days after the close" | `omadia:middleware/test/conversationMessagesLifecycle.test.ts` | A+K |
 | 62 | Spoken contributions | `transcript.test.ts` › "criterion 62, personal microphone"; "criterion 62, shared room microphone"; "a segment revision that a later one replaced" | | A |
 | 63 | Session vs facilitation protocol | `acceptanceProtocols.test.ts` › "63. a first session closes while the facilitation continues"; `sessionConversations.test.ts` › "a meeting in the linked chat starts and ends its session" | | A |
