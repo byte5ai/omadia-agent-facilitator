@@ -211,9 +211,13 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
     // Without a number it can only mean the author's own open item: the one
     // whose reminder it replies to, else the only one. Otherwise the engine
     // asks which, and closes nothing.
-    const own = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.status === 'confirmed' && a.ownerPrincipal === author.principalId);
+    const items = await store.listActionItems(w.tx, w.f.id);
+    const own = items.filter((a) => a.status === 'confirmed' && a.ownerPrincipal === author.principalId);
     // A reply to the reminder of one item is about that item (criterion 28).
-    const reminded = record.replyToMessageId !== undefined ? await remindedItemOf(w, record.replyToMessageId) : undefined;
+    // A reminder posted before its key carried the item names a job or an
+    // outbox row instead: it is about no item, and the old rule holds.
+    const keyed = record.replyToMessageId !== undefined ? await remindedItemOf(w, record.replyToMessageId) : undefined;
+    const reminded = keyed !== undefined && items.some((a) => a.id === keyed) ? keyed : undefined;
     // A reply to the reminder of an item that is no longer open closes no other one.
     const only = reminded !== undefined ? own.find((a) => a.id === reminded) : own.length === 1 ? own[0] : undefined;
     if (own.length === 0) return (await meantForFollowup(w, record, author.principalId)) ? { outcome: 'left_to_followup' } : undefined;

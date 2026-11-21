@@ -362,3 +362,26 @@ test('28. one facilitator follows up three facilitations for the same person: ea
     h.kernel.dmBlocked.delete('user:anna');
   }
 });
+
+test('28. a reminder posted before its key carried the item: a bare "done" in reply still closes the only open item of its owner', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('af-28-old', [ANNA, BERT]);
+  const f = await annasFollowUp(conv, 'Kiosk', ['Order the sign']);
+  h.kernel.dmBlocked.set('user:anna', 'blocked');
+  try {
+    h.clock.set(inDays(2));
+    await h.tick();
+    const reminder = h.kernel.groupPosts(conv).find((p) => p.processId === f.id && p.text.includes('is due'));
+    assert.ok(reminder, 'a group reminder');
+    // The key of an older reminder names its job, not its item.
+    const changed = await h.db.pool.query(
+      `UPDATE plg_omadia_agent_facilitator_outbox SET idempotency_key = split_part(idempotency_key, ':', 1) || ':action_reminder:' || gen_random_uuid()
+        WHERE facilitation_id = $1 AND purpose = 'action_reminder'`,
+      [f.id],
+    );
+    assert.ok((changed.rowCount ?? 0) > 0);
+    await say(conv, 'anna', 'done', { replyTo: reminder.messageId });
+    assert.deepEqual(await items(f.id), ['done'], JSON.stringify(posts(conv).slice(-2)));
+  } finally {
+    h.kernel.dmBlocked.delete('user:anna');
+  }
+});

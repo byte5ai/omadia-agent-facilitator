@@ -31,7 +31,7 @@ import type { ConversationMessageRecord } from '@omadia/plugin-api';
 
 import { one, rows, update } from '../db/sql.js';
 import * as store from '../db/store.js';
-import type { Db } from '../db/pool.js';
+import type { Db, Queryable } from '../db/pool.js';
 import { principalKey } from '../kernel.js';
 import type { Closing, OutboxRow, ResultMark, Session } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
@@ -196,27 +196,20 @@ export async function sessionSummariesDelivered(engine: EngineCore, client: Db, 
   const open = await rows<Closing>(client, `SELECT * FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND kind = 'session' AND delivery_status = 'pending'`, [facilitationId]);
   if (open.length === 0) return;
   for (const closing of open) {
-    // The sends of the document's current version: a stop replaces the
-    // version that asked for consent (criterion 43).
-    const sent = await rows<OutboxRow>(
-      client,
-      `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND closing_id = $2 AND purpose IN ('session_summary', 'session_summary_final') AND document_version = $3`,
-      [facilitationId, closing.id, closing.documentVersion],
-    );
-    const delivered = sent.find((r) => r.status === 'sent');
-    const gaveUp = sent.find((r) => r.status === 'failed' || r.status === 'dropped');
+    // A first look without the lock decides only whether to take it; what is
+    // done is decided again under the lock, on the sends as they are then.
+    const seen = await summarySends(client, closing);
     if (closing.endedAt) {
       // Ended already (stop or abort): only its delivery status follows.
-      if (delivered || gaveUp) await engine.workOn(client, facilitationId, async (w) => recordDelivery(w, closing.id, delivered));
+      if (seen.delivered || seen.gaveUp) await engine.workOn(client, facilitationId, async (w) => recordDelivery(w, closing.id));
       continue;
     }
-    // The delivery part has its own limit (spec 5.2: at most 7 days), like
-    // every closing; a summary that never got through is `not delivered`.
-    const overdue = engine.now().getTime() >= Math.min(closing.partStartedAt.getTime() + CLOSING_LIMITS.deliveryMs, closing.absoluteUntil.getTime());
-    if (!delivered && !gaveUp && !overdue) continue;
+    if (!seen.delivered && !seen.gaveUp && !deliveryOverdue(engine.now(), closing)) continue;
     await engine.workOn(client, facilitationId, async (w) => {
       const current = (await rows<Closing>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_closings WHERE id = $1 FOR UPDATE', [closing.id]))[0];
       if (!current || current.endedAt || current.deliveryStatus !== 'pending') return;
+      const { delivered, gaveUp } = await summarySends(w.tx, current);
+      if (!delivered && !gaveUp && !deliveryOverdue(w.now, current)) return;
       if (!delivered && !gaveUp) {
         const dropped = await w.tx.query(
           `UPDATE plg_omadia_agent_facilitator_outbox SET status = 'dropped', drop_reason = 'the delivery limit of its closing passed'
@@ -245,10 +238,27 @@ export async function sessionSummariesDelivered(engine: EngineCore, client: Db, 
   }
 }
 
+/** The sends of a session closing's current document version: a stop
+ *  replaces the version that asked for consent (criterion 43). */
+async function summarySends(q: Queryable, closing: Closing): Promise<{ delivered: OutboxRow | undefined; gaveUp: OutboxRow | undefined }> {
+  const sent = await rows<OutboxRow>(
+    q,
+    `SELECT * FROM plg_omadia_agent_facilitator_outbox WHERE facilitation_id = $1 AND closing_id = $2 AND purpose IN ('session_summary', 'session_summary_final') AND document_version = $3`,
+    [closing.facilitationId, closing.id, closing.documentVersion],
+  );
+  return { delivered: sent.find((r) => r.status === 'sent'), gaveUp: sent.find((r) => r.status === 'failed' || r.status === 'dropped') };
+}
+
+/** The delivery part has its own limit (spec 5.2: at most 7 days), like
+ *  every closing; a summary that never got through is `not delivered`. */
+const deliveryOverdue = (now: Date, closing: Closing): boolean => now.getTime() >= Math.min(closing.partStartedAt.getTime() + CLOSING_LIMITS.deliveryMs, closing.absoluteUntil.getTime());
+
 /** The delivery status of a session closing that has ended already. */
-async function recordDelivery(w: Work, closingId: string, delivered: OutboxRow | undefined): Promise<void> {
+async function recordDelivery(w: Work, closingId: string): Promise<void> {
   const current = (await rows<Closing>(w.tx, 'SELECT * FROM plg_omadia_agent_facilitator_closings WHERE id = $1 FOR UPDATE', [closingId]))[0];
   if (!current || current.deliveryStatus !== 'pending') return;
+  const { delivered, gaveUp } = await summarySends(w.tx, current);
+  if (!delivered && !gaveUp) return;
   await patchClosing(w.tx, current.id, delivered ? { deliveryStatus: 'delivered', deliveredAt: delivered.sentAt ?? w.now } : { deliveryStatus: 'not_delivered' });
   await w.event(delivered ? 'closing_delivered' : 'result_undelivered', 'engine', { closingId: current.id, version: current.documentVersion });
 }

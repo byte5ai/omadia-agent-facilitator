@@ -303,10 +303,12 @@ const protocolMail: ExternalJob = async (engine, job) => {
       const filtered = await stakeholderProtocol(w.tx, w.f, s.disclosure);
       mails.push({ recipients: [address], subject, body: filtered.text, stakeholder: { id: s.id, disclosure: s.disclosure, withheld: filtered.withheld } });
     }
-    // A retry sends only the mails the provider refused before.
+    // A retry sends only the mails the provider refused before, by which
+    // mail it was (the participants' protocol, or one stakeholder's), never by
+    // address: an address that got its mail is not mailed again.
     const only = Array.isArray(job.payload['only']) ? (job.payload['only'] as string[]) : undefined;
     if (only) {
-      const again = mails.filter((m) => m.recipients.some((r) => only.includes(r)));
+      const again = mails.filter((m) => only.includes(mailIdentity(m)));
       if (again.length === 0) return undefined;
       return again;
     }
@@ -369,14 +371,19 @@ const protocolMail: ExternalJob = async (engine, job) => {
   });
 };
 
-/** How often a refused protocol mail is tried again, and how far apart. */
+/** Which mail of a protocol dispatch this is: the participants' protocol,
+ *  or the filtered protocol of one stakeholder. */
+const mailIdentity = (m: Pick<Mail, 'stakeholder'>): string => (m.stakeholder ? `stakeholder:${m.stakeholder.id}` : 'participants');
+
+/** How often a refused protocol mail is sent in all (the first attempt
+ *  and its retries), and how far apart. */
 const MAIL_RETRIES = 6;
 const mailRetryDelayMs = (attempt: number): number => Math.min(HOUR_MS * 2 ** (attempt - 1), DAY_MS);
 
 /** Schedule the next attempt of the mails the provider refused with an
  *  error, inside the dispatch of their closing. True when one is scheduled. */
-async function retryRefusedMails(w: Work, job: Job, outcomes: ReadonlyArray<{ mail: Pick<Mail, 'recipients'>; outcome: { ok: boolean; code?: string } }>): Promise<boolean> {
-  const refused = outcomes.filter((o) => !o.outcome.ok && o.outcome.code === 'provider_error').flatMap((o) => o.mail.recipients);
+async function retryRefusedMails(w: Work, job: Job, outcomes: ReadonlyArray<{ mail: Pick<Mail, 'recipients' | 'stakeholder'>; outcome: { ok: boolean; code?: string } }>): Promise<boolean> {
+  const refused = [...new Set(outcomes.filter((o) => !o.outcome.ok && o.outcome.code === 'provider_error').map((o) => mailIdentity(o.mail)))];
   const closingId = typeof job.payload['closingId'] === 'string' ? job.payload['closingId'] : undefined;
   const attempt = Number(job.payload['attempt'] ?? 1);
   if (refused.length === 0 || !closingId || attempt >= MAIL_RETRIES) return false;
@@ -385,7 +392,7 @@ async function retryRefusedMails(w: Work, job: Job, outcomes: ReadonlyArray<{ ma
   const until = Math.min(closing?.dispatchUntil?.getTime() ?? 0, closing?.absoluteUntil.getTime() ?? 0);
   if (!closing || closing.endedAt !== null || due.getTime() >= until) return false;
   await scheduleJob(w, 'protocol_mail', `retry:${closingId}:${String(attempt)}`, due, { channel: 0, participants: job.payload['participants'] ?? true, closingId, only: refused, attempt: attempt + 1 });
-  await w.event('protocol_mail_retry', 'engine', { closingId, attempt: attempt + 1, recipients: refused.length, at: due.toISOString() });
+  await w.event('protocol_mail_retry', 'engine', { closingId, attempt: attempt + 1, mails: refused.length, at: due.toISOString() });
   return true;
 }
 
