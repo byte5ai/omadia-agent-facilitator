@@ -27,6 +27,7 @@ import type {
   ExecutionScope,
   ExecutionScopeKind,
   ExecutionTarget,
+  OpenExecutionScopeRequest,
   SendAuthorization,
 } from '@omadia/plugin-api';
 
@@ -146,13 +147,16 @@ async function wantedDeadline(engine: EngineCore, f: Facilitation, kind: Executi
   // active, in its bounded deadline wait (5.6): until the waiting session
   // closings have ended, bounded by their own limits.
   if (f.settings.deadlineWait === true) {
+    // The kernel ends the wait with the absolute limit of the closings it
+    // waits for (ADR 0028): the margin after a window never passes it.
     const waiting = await engine.db().query<{ until: Date | null }>(
-      `SELECT max(coalesce(window_ends_at, absolute_until)) AS until FROM plg_omadia_agent_facilitator_closings
+      `SELECT max(least(coalesce(window_ends_at + make_interval(secs => $2::double precision / 1000), absolute_until), absolute_until)) AS until
+         FROM plg_omadia_agent_facilitator_closings
         WHERE facilitation_id = $1 AND kind = 'session' AND requires_confirmation AND ended_at IS NULL`,
-      [f.id],
+      [f.id, SCOPE_MARGIN_MS],
     );
     const until = waiting.rows[0]?.until;
-    if (until) return bounded(until.getTime() + SCOPE_MARGIN_MS);
+    if (until) return bounded(until.getTime());
   }
   // active: the facilitation's deadline, or a runoff that runs beyond it;
   // without a deadline the facilitation's maximum duration.
@@ -162,6 +166,17 @@ async function wantedDeadline(engine: EngineCore, f: Facilitation, kind: Executi
   );
   const agreed = Math.max(f.deadline?.getTime() ?? 0, runoff.rows[0]?.round_deadline?.getTime() ?? 0);
   return bounded(agreed > 0 ? agreed + SCOPE_MARGIN_MS : lifetimeEnd(f.createdAt, null, engine.config.maxLifetimeDays).getTime());
+}
+
+/** When the closing event of a `closing` scope happened, and its absolute
+ *  limit (spec 5.2: 30 days from the event). A closing from before 1.6 has
+ *  no row: its event is the opening of the scope. */
+async function closingEventOf(engine: EngineCore, f: Facilitation, eventId: string): Promise<{ startedAt: Date; absoluteUntil: Date } | undefined> {
+  return one<{ startedAt: Date; absoluteUntil: Date }>(
+    engine.db(),
+    'SELECT started_at, absolute_until FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND event_id = $2',
+    [f.id, eventId],
+  );
 }
 
 const unavailable = (): ScopeRefusal => ({ ok: false, code: 'no_service', message: "kernel service 'executionAuthorization' is not available" });
@@ -182,16 +197,21 @@ export async function ensureScope(engine: EngineCore, f: Facilitation, kind: Exe
 async function openAtKernel(engine: EngineCore, f: Facilitation, kind: ExecutionScopeKind, eventId: string, mayPrepare: boolean): Promise<ScopeResult> {
   const execution = engine.deps.kernel.execution();
   if (!execution) return unavailable();
-  const deadline = await wantedDeadline(engine, f, kind);
-  const opened = await execution.openScope({
+  const event = kind === 'closing' ? await closingEventOf(engine, f, eventId) : undefined;
+  const deadline = event ? event.absoluteUntil : await wantedDeadline(engine, f, kind);
+  // `eventAt` (plugin-api 1.84.0, ADR 0028): the kernel counts the closing's
+  // 30 days from its event, not from this call. An older kernel ignores it.
+  const request: OpenExecutionScopeRequest & { eventAt?: string } = {
     agentSlug: f.facilitatorAgent,
     processId: f.id,
     kind,
     ...(eventId !== '' ? { eventId } : {}),
+    ...(event ? { eventAt: event.startedAt.toISOString() } : {}),
     ...(deadline ? { deadline: deadline.toISOString() } : {}),
     budget: SCOPE_BUDGETS[kind],
     ...(kind === 'configuring' ? { home: { channelType: f.channelType, conversationId: f.conversationId } } : { targets: [homeOf(f), ...(await sessionConversationsOf(engine, f))] }),
-  });
+  };
+  const opened = await execution.openScope(request);
   if (opened.outcome === 'opened') {
     engine.log(`facilitation ${f.id}: execution scope '${kind}'${eventId ? ` (${eventId})` : ''} opened until ${opened.scope.deadline}`);
     return { ok: true, scope: await record(engine, f, opened.scope) };
@@ -279,13 +299,46 @@ const PURPOSES: Readonly<Record<string, ExecutionPurpose>> = {
   protocol: 'protocol_dispatch',
   protocol_in_group: 'protocol_dispatch',
   followup_meeting: 'invitation',
+  // Answers to a consent answer of a session summary or a final summary.
+  session_consent_hint: 'consent',
+  session_objection: 'consent',
+  which_confirmation: 'consent',
+  // Tells somebody where things stand, nothing else.
+  late_acceptance: 'status',
+  which_process: 'status',
   // Essential in the outbox (it is retried), but for the kernel it stays the
   // moderation it always was.
   card_update: 'moderation',
 };
 
-/** What an outgoing message is for, in the kernel's terms. */
-export const purposeFor = (purpose: string, essential: boolean): ExecutionPurpose => PURPOSES[purpose] ?? (essential ? 'essential_message' : 'moderation');
+/** Under a `closing` scope only consent answers and the essential messages
+ *  run (spec 5.2, ADR 0028): the card of a confirmation and the replies to
+ *  an answer on it belong to the consent, not to the moderation. */
+const CLOSING_OVERRIDES: Readonly<Record<string, ExecutionPurpose>> = {
+  card_update: 'consent',
+  card_answer_hint: 'consent',
+  echo: 'consent',
+  // Written in the unit of work that concludes, sent once the closing runs:
+  // they say where things stand, they do not moderate.
+  step_closed: 'status',
+  nomination_accepted: 'status',
+  nomination_declined: 'status',
+  item_taken: 'status',
+  echo_declined: 'status',
+  joined: 'status',
+  left: 'status',
+  initiator_left: 'status',
+  direct_notice: 'status',
+  session_readiness: 'status',
+  // A quiet acknowledgement of a consent answer to a summary (spec 5.14).
+  reaction: 'consent',
+};
+
+/** What an outgoing message is for, in the kernel's terms. Under a closing
+ *  scope anything else that is not essential stays `moderation`, which the
+ *  kernel refuses there: a closing never re-opens the moderation. */
+export const purposeFor = (purpose: string, essential: boolean, kind?: ExecutionScopeKind): ExecutionPurpose =>
+  (kind === 'closing' ? CLOSING_OVERRIDES[purpose] : undefined) ?? PURPOSES[purpose] ?? (essential ? 'essential_message' : 'moderation');
 
 /** The `closing` scope of one closing event (a session close: `session:<id>`)
  *  and the authorization fields of an action drawn from it. */
@@ -415,6 +468,15 @@ async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow, o
   return (await settled(engine, f.id, ['protocol_mail', 'followup_meeting'])) ? 'the closing is delivered' : undefined;
 }
 
+/** The event ids of the closings of a facilitation that have not ended. */
+async function openClosingEvents(engine: EngineCore, facilitationId: string): Promise<string[]> {
+  const open = await engine.db().query<{ event_id: string }>(
+    'SELECT event_id FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND ended_at IS NULL ORDER BY started_at, event_id',
+    [facilitationId],
+  );
+  return open.rows.map((r) => r.event_id);
+}
+
 /** Give the home conversation back and set how it is read from now on. */
 async function syncReading(engine: EngineCore, f: Facilitation): Promise<void> {
   const { kernel } = engine.deps;
@@ -455,6 +517,10 @@ export async function syncScopes(engine: EngineCore, facilitationId: string, onP
   // until it was taken over (subscription.ts).
   if (!f || f.settings.scoped !== true) return;
 
+  // The closings that run are opened first: a deadline wait stands only
+  // while the session closings it waits for have their scope (spec 5.6,
+  // ADR 0028: close the sessions and open their closing, then wait).
+  for (const closing of await openClosingEvents(engine, f.id)) await ensureScope(engine, f, 'closing', closing);
   if (f.followupState === 'active') await ensureScope(engine, f, 'follow_up');
   if (f.followupPolicy.meeting && f.phase !== 'aborted' && f.phase !== 'configuring') await ensureScope(engine, f, 'scheduling', SCHEDULING_MEETING);
 
