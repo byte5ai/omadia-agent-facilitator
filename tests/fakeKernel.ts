@@ -204,6 +204,8 @@ export class FakeFollowup implements FacilitationFollowupService {
   onCall: (method: string) => void | Promise<void> = () => undefined;
   /** Methods that do their work and then fail to answer: 'throw' or 'hang'. */
   readonly afterEffects = new Map<string, 'throw' | 'hang'>();
+  /** Mails the provider refuses next, in order, without sending them. */
+  readonly mailRefusals: Array<'provider_error'> = [];
 
   private async finish<T>(method: string, value: T): Promise<T> {
     const effect = this.afterEffects.get(method);
@@ -255,6 +257,8 @@ export class FakeFollowup implements FacilitationFollowupService {
     this.operation = 'send_mail';
     const refused = this.refuse(grant, request.recipients);
     if (refused) return refused;
+    const provider = this.mailRefusals.shift();
+    if (provider) return { outcome: 'refused' as const, code: provider, message: 'the mail provider reported an error' };
     this.mails.push(request);
     return this.finish('sendMail', { outcome: 'sent' as const });
   }
@@ -290,6 +294,9 @@ export class FakeKernel {
    *  ('lost' delivers but reports failure: a lost confirmation; 'hang' never
    *  answers). */
   readonly sendFaults: Array<'throw' | 'lost' | 'hang' | { code: string; message: string }> = [];
+  /** Conversations a group send cannot reach right now, with the channel's
+   *  code (a fault that lasts, unlike `sendFaults`). */
+  readonly blockedConversations = new Map<string, string>();
   /** Answers the facilitator's turn; default: says nothing. */
   onTurn: (request: ScopedAgentTurnRequest) => string | TurnAnswer | Promise<string | TurnAnswer> = () => '[silent]';
   private followupService: FacilitationFollowupService | undefined;
@@ -1220,6 +1227,8 @@ export class FakeKernel {
   /** The channel's part of a post: faults, cards, the message itself. */
   private async post(agentSlug: string, conversationId: string, message: ScopedConversationSendRequest['message'], processId: string): Promise<{ outcome: 'delivered'; messageId: string; cardMessageId?: string } | { outcome: 'unreachable'; code: string; message: string }> {
     if (!this.hasIdentity(agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
+    const blocked = this.blockedConversations.get(conversationId);
+    if (blocked !== undefined) return { outcome: 'unreachable', code: blocked, message: 'the conversation cannot be reached right now' };
     const fault = this.sendFaults.shift();
     if (fault === 'throw') throw new Error('channel connection reset');
     // A channel call that never answers.
