@@ -388,6 +388,17 @@ const settled = async (engine: EngineCore, facilitationId: string, jobKinds: rea
   return waiting.rows.length === 0;
 };
 
+/** Nothing of one session closing is waiting to be sent. */
+const sessionClosingSettled = async (engine: EngineCore, facilitationId: string, closingId: string, eventId: string): Promise<boolean> => {
+  const waiting = await engine.db().query(
+    `SELECT 1 FROM plg_omadia_agent_facilitator_outbox
+      WHERE facilitation_id = $1 AND status IN ('pending', 'sending') AND (closing_id = $2 OR payload->>'closingEvent' = $3)
+      LIMIT 1`,
+    [facilitationId, closingId, eventId],
+  );
+  return waiting.rows.length === 0;
+};
+
 /** Why a scope of this kind is over, or undefined while it is still needed. */
 async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow, onPass: boolean): Promise<string | undefined> {
   const ended = f.phase === 'closed' || f.phase === 'aborted';
@@ -409,7 +420,12 @@ async function overBecause(engine: EngineCore, f: Facilitation, row: ScopeRow, o
   // closing: as long as its closing event runs (spec 5.2): its parts and
   // limits are kept in the closings table. A closing from before 1.6 has no
   // row: until its documents are out.
-  const closing = await one<{ endedAt: Date | null }>(engine.db(), 'SELECT ended_at FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND event_id = $2', [f.id, row.eventId]);
+  const closing = await one<{ id: string; kind: string; endedAt: Date | null }>(engine.db(), 'SELECT id, kind, ended_at FROM plg_omadia_agent_facilitator_closings WHERE facilitation_id = $1 AND event_id = $2', [f.id, row.eventId]);
+  if (closing?.kind === 'session') {
+    // A session's closing runs independently of every other closing (spec
+    // 5.2, criterion 31): its scope waits only for its own sends.
+    return closing.endedAt !== null && (await sessionClosingSettled(engine, f.id, closing.id, row.eventId)) ? 'the closing has ended' : undefined;
+  }
   if (closing) return closing.endedAt !== null && (await settled(engine, f.id, ['protocol_mail', 'followup_meeting'])) ? 'the closing has ended' : undefined;
   if (!ended) return undefined;
   return (await settled(engine, f.id, ['protocol_mail', 'followup_meeting'])) ? 'the closing is delivered' : undefined;
