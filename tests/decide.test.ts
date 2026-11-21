@@ -70,9 +70,14 @@ test('a ballot can be changed until the conclusion: by a new message and by edit
   const conv = h.kernel.conversation('de-change', FOUR);
   await startActive(h, conv, VENUES);
   const first = await say(conv, 'anna', 'A > B');
-  await say(conv, 'anna', 'C > B');
+  const second = await say(conv, 'anna', 'C > B');
   assert.deepEqual(await validSummaries(h, conv, 'anna'), ['C (Castle Hill) > B (Old Town)']);
-  await h.kernel.edit(conv, 'anna', first.messageId, 'B');
+  // Spec 5.3: an edit only changes its own ballot while that ballot is the
+  // effective one, and never displaces a newer ballot (criterion 64).
+  await h.kernel.edit(conv, 'anna', first.messageId, 'A');
+  await h.settle();
+  assert.deepEqual(await validSummaries(h, conv, 'anna'), ['C (Castle Hill) > B (Old Town)'], 'the edit of a replaced ballot changes nothing');
+  await h.kernel.edit(conv, 'anna', second.messageId, 'B');
   await h.settle();
   assert.deepEqual(await validSummaries(h, conv, 'anna'), ['B (Old Town)']);
   const all = await contributions(conv);

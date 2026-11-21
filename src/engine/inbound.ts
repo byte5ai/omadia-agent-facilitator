@@ -227,8 +227,14 @@ const revisions: InboundHandler = async (ctx) => {
   const carried = await ownLiveParts(w, record.messageId);
   for (const part of carried) {
     const step = await store.getStep(w.tx, part.stepId);
-    if (step?.status === 'closed') {
-      await w.event('late_change', principalKey(record.author), { kind: record.kind, messageId: record.messageId, revision: record.revision, contributionId: part.id, reason: 'step_closed' });
+    // A round that ended (a runoff began) keeps its ballots the same way:
+    // only ballots of the running round count there (spec 9, criterion 64).
+    // Other contributions of an earlier round (an objection's reason, a
+    // point) are edited as before.
+    const isBallot = part.payload['ballot'] !== undefined;
+    const roundEnded = isBallot && step !== undefined && step !== null && part.round < step.round;
+    if (step?.status === 'closed' || roundEnded) {
+      await w.event('late_change', principalKey(record.author), { kind: record.kind, messageId: record.messageId, revision: record.revision, contributionId: part.id, reason: roundEnded ? 'round_ended' : 'step_closed' });
       return { outcome: `late_${record.kind}` };
     }
   }

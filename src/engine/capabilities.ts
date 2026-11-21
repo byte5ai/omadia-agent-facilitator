@@ -14,7 +14,7 @@
 
 import type { ExecutionGrantKind, FacilitationFollowupService, FollowupGrant, FollowupRefusal } from '@omadia/plugin-api';
 
-import { DAY_MS } from '../clock.js';
+import { DAY_MS, HOUR_MS } from '../clock.js';
 import { principalKey } from '../kernel.js';
 import { insert, one, update } from '../db/sql.js';
 import type { Queryable } from '../db/pool.js';
@@ -303,6 +303,15 @@ const protocolMail: ExternalJob = async (engine, job) => {
       const filtered = await stakeholderProtocol(w.tx, w.f, s.disclosure);
       mails.push({ recipients: [address], subject, body: filtered.text, stakeholder: { id: s.id, disclosure: s.disclosure, withheld: filtered.withheld } });
     }
+    // A retry sends only the mails the provider refused before, by which
+    // mail it was (the participants' protocol, or one stakeholder's), never by
+    // address: an address that got its mail is not mailed again.
+    const only = Array.isArray(job.payload['only']) ? (job.payload['only'] as string[]) : undefined;
+    if (only) {
+      const again = mails.filter((m) => only.includes(mailIdentity(m)));
+      if (again.length === 0) return undefined;
+      return again;
+    }
     if (mails.length === 0) {
       // Nobody to mail to is not silence: the group reads why, and has the
       // protocol where it is (once, if it is not there already).
@@ -343,9 +352,13 @@ const protocolMail: ExternalJob = async (engine, job) => {
     // An unknown outcome is said before any other failure: it may have arrived.
     const failed = failures.find((o) => !o.outcome.ok && o.outcome.code === 'unknown_outcome') ?? failures[0];
     const sentTo = outcomes.filter((o) => o.outcome.ok).reduce((n, o) => n + o.mail.recipients.length, 0);
-    if (sentTo > 0 || !failed) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
+    // A mail the provider refused with an error was not sent: it is tried
+    // again while its closing's dispatch runs (spec 5.2 part 4, criterion
+    // 34). An unknown outcome is never sent again.
+    const retried = await retryRefusedMails(w, job, outcomes);
+    if (sentTo > 0 || (!failed && !retried)) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
     if (failed && !failed.outcome.ok && failed.outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
-    else if (failed && !failed.outcome.ok) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
+    else if (failed && !failed.outcome.ok && !retried) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
     // What became of the mail, per recipient. "Sent" is said of nobody the
     // integration did not confirm.
     const each = (o: ScopedOutcome<unknown>): string => (o.ok ? 'sent' : o.code === 'unknown_outcome' ? 'unknown' : 'not_sent');
@@ -357,6 +370,31 @@ const protocolMail: ExternalJob = async (engine, job) => {
     await finishJob(w, job, { outcome: code });
   });
 };
+
+/** Which mail of a protocol dispatch this is: the participants' protocol,
+ *  or the filtered protocol of one stakeholder. */
+const mailIdentity = (m: Pick<Mail, 'stakeholder'>): string => (m.stakeholder ? `stakeholder:${m.stakeholder.id}` : 'participants');
+
+/** How often a refused protocol mail is sent in all (the first attempt
+ *  and its retries), and how far apart. */
+const MAIL_RETRIES = 6;
+const mailRetryDelayMs = (attempt: number): number => Math.min(HOUR_MS * 2 ** (attempt - 1), DAY_MS);
+
+/** Schedule the next attempt of the mails the provider refused with an
+ *  error, inside the dispatch of their closing. True when one is scheduled. */
+async function retryRefusedMails(w: Work, job: Job, outcomes: ReadonlyArray<{ mail: Pick<Mail, 'recipients' | 'stakeholder'>; outcome: { ok: boolean; code?: string } }>): Promise<boolean> {
+  const refused = [...new Set(outcomes.filter((o) => !o.outcome.ok && o.outcome.code === 'provider_error').map((o) => mailIdentity(o.mail)))];
+  const closingId = typeof job.payload['closingId'] === 'string' ? job.payload['closingId'] : undefined;
+  const attempt = Number(job.payload['attempt'] ?? 1);
+  if (refused.length === 0 || !closingId || attempt >= MAIL_RETRIES) return false;
+  const closing = await getClosing(w.tx, closingId);
+  const due = new Date(w.now.getTime() + mailRetryDelayMs(attempt));
+  const until = Math.min(closing?.dispatchUntil?.getTime() ?? 0, closing?.absoluteUntil.getTime() ?? 0);
+  if (!closing || closing.endedAt !== null || due.getTime() >= until) return false;
+  await scheduleJob(w, 'protocol_mail', `retry:${closingId}:${String(attempt)}`, due, { channel: 0, participants: job.payload['participants'] ?? true, closingId, only: refused, attempt: attempt + 1 });
+  await w.event('protocol_mail_retry', 'engine', { closingId, attempt: attempt + 1, mails: refused.length, at: due.toISOString() });
+  return true;
+}
 
 interface MeetingPlan {
   plan: FollowupMeetingPlan;
