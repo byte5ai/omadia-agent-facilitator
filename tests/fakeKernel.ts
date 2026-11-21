@@ -441,10 +441,12 @@ export class FakeKernel {
     // reads everything and, when it addresses the agent, to those that read
     // what is addressed to them.
     const reference = partial.kind === 'card_answer' ? (this.bound.get(partial.cardAnswer?.cardId ?? '') ?? this.bound.get(partial.messageId)) : partial.kind === 'reaction' ? this.bound.get(partial.messageId) : partial.replyToMessageId ? this.bound.get(partial.replyToMessageId) : undefined;
+    // Decided once, before any process sees the message: a process that
+    // ends its reading while handling it does not hand it on to the others.
+    const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
     for (const sub of [...this.processSubscriptions]) {
       if (sub.ended || sub.mode === 'none' || sub.channelType !== this.channelType || sub.conversationId !== conversationId) continue;
       const addressedToBot = partial.addressedToBot === true || this.addressed(partial.text, sub.agentSlug);
-      const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
       if (boundHere ? sub.processId !== reference : !(sub.mode === 'all' || addressedToBot)) continue;
       const record: ProcessConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${sub.agentSlug}`, processId: sub.processId, ...(addressedToBot ? { addressedToBot: true } : {}) };
       this.events.push(record);
