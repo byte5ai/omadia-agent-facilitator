@@ -180,6 +180,19 @@ async function meantForFollowup(w: Work, record: ConversationMessageRecord, prin
   return theirs.rows.length > 0;
 }
 
+/** The reminder posts in the group carry their item in their key (see the
+ *  `action_reminder` job): the item a message replying to one of them is
+ *  about. Undefined when the message it replies to is no such reminder. */
+async function remindedItemOf(w: Work, messageId: string): Promise<string | undefined> {
+  const hit = await one<{ itemId: string }>(
+    w.tx,
+    `SELECT split_part(idempotency_key, ':', 3) AS item_id FROM plg_omadia_agent_facilitator_outbox
+      WHERE facilitation_id = $1 AND channel_message_id = $2 AND purpose = 'action_reminder' LIMIT 1`,
+    [w.f.id, messageId],
+  );
+  return hit?.itemId;
+}
+
 /** "done 2" from the owner, during the facilitation or its follow-up. */
 const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (!author || record.kind !== 'created') return undefined;
@@ -195,12 +208,16 @@ const doneMessages: InboundHandler = async ({ w, record, author, command }) => {
   if (match) {
     number = Number(match[1] ?? match[2]);
   } else if (DONE_BARE.test(command)) {
-    // Without a number it can only mean the author's own open item. One: that
-    // is the one. Several: the engine asks which, and closes nothing.
+    // Without a number it can only mean the author's own open item: the one
+    // whose reminder it replies to, else the only one. Otherwise the engine
+    // asks which, and closes nothing.
     const own = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.status === 'confirmed' && a.ownerPrincipal === author.principalId);
-    const only = own[0];
-    if (!only) return (await meantForFollowup(w, record, author.principalId)) ? { outcome: 'left_to_followup' } : undefined;
-    if (own.length > 1) {
+    // A reply to the reminder of one item is about that item (criterion 28).
+    const reminded = record.replyToMessageId !== undefined ? await remindedItemOf(w, record.replyToMessageId) : undefined;
+    // A reply to the reminder of an item that is no longer open closes no other one.
+    const only = reminded !== undefined ? own.find((a) => a.id === reminded) : own.length === 1 ? own[0] : undefined;
+    if (own.length === 0) return (await meantForFollowup(w, record, author.principalId)) ? { outcome: 'left_to_followup' } : undefined;
+    if (!only) {
       w.post({ purpose: 'action_done_which', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: t.actionDoneWhich(author.displayName, own.map((a) => a.number)) });
       return { outcome: 'action_done_which' };
     }
@@ -302,9 +319,11 @@ export function installActionItems(): void {
     if (!owner) return;
     const t = texts(w.f.language);
     await update(w.tx, 'plg_omadia_agent_facilitator_action_items', { id: item.id }, { remindersSent: item.remindersSent + 1 });
-    const inGroup = { purpose: 'action_reminder', text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] };
+    // The group's reminder names its item in its key, so that a reply to it
+    // is bound to that item (remindedItemOf).
+    const inGroup = { purpose: 'action_reminder', key: `${item.id}:${job.id}`, text: t.actionReminderGroup(owner.displayName, item.number, item.description, due(w, item)), mentions: [mention(owner)] };
     if (w.engine.deps.kernel.conversationSend() === undefined) {
-      w.post({ ...inGroup, key: job.id, to: 'group', deliveryClass: 'droppable', versionBound: false });
+      w.post({ ...inGroup, to: 'group', deliveryClass: 'droppable', versionBound: false });
     } else {
       w.post({
         purpose: 'action_reminder_direct',
