@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased (#2090, ADR-0028 in byte5ai/omadia)
+
+### Compatibility
+
+- Runs on kernels from plugin-api 1.82.0 (unchanged). **Must be rolled out before a kernel
+  with plugin-api 1.84.0**: that kernel refuses moderation under a `closing` scope and a
+  deadline wait without an open closing, which 1.6.0 relies on. Reply binding in private
+  chats needs kernel 1.84.0 and channel adapters that state `replyToMessageId`.
+
+### Changed
+
+- Closing scopes are opened with `eventAt` (the closing's `started_at`) and the closing's
+  `absolute_until` as deadline; `syncScopes` opens the scopes of all open closings first, then
+  the deadline wait.
+- What is sent under a closing maps to the kernel's closing purposes (consent replies and the
+  confirmation card as `consent`, state reports as `status`).
+- Private messages: a reply to a reminder completes that reminder's item; "stop" in reply to a
+  reminder ends only that facilitation's follow-up; without a reference the "which one?"
+  question offers `1a`/`1b`. Private answers are drawn with purpose `status`.
+
+## Unreleased (#2090, ADR-0028 in byte5ai/omadia)
+
+### Compatibility
+
+- Runs on kernels from plugin-api 1.82.0 (unchanged). **Must be rolled out before a kernel
+  with plugin-api 1.84.0**: that kernel refuses moderation under a `closing` scope and a
+  deadline wait without an open closing, which 1.6.0 relies on. Reply binding in private
+  chats needs kernel 1.84.0 and channel adapters that state `replyToMessageId`.
+
+### Changed
+
+- Closing scopes are opened with `eventAt` (the closing's `started_at`) and the closing's
+  `absolute_until` as deadline; `syncScopes` opens the scopes of all open closings first, then
+  the deadline wait.
+- What is sent under a closing maps to the kernel's closing purposes (consent replies and the
+  confirmation card as `consent`, state reports as `status`).
+- Private messages: a reply to a reminder completes that reminder's item; "stop" in reply to a
+  reminder ends only that facilitation's follow-up; without a reference the "which one?"
+  question offers `1a`/`1b`. Private answers are drawn with purpose `status`.
+
 ## 1.6.0
 
 ### Compatibility
