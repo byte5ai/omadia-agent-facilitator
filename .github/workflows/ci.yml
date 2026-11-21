@@ -1,0 +1,84 @@
+name: CI
+
+# Gates of AGENTS.md on every push and pull request: typecheck, build, the
+# whole test suite against a real Postgres (skipped is not passed), and the
+# acceptance matrix of spec B §9 (docs/acceptance-matrix.md) being complete.
+#
+# @omadia/plugin-api is never published to npm; the dev dependency points at
+# `../odoo-bot/middleware/packages/plugin-api`. The job lays out the same two
+# directories side by side: this repository in `facilitator/`, byte5ai/omadia
+# (the kernel) in `odoo-bot/`, and builds the contract package there.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'byte5ai/omadia ref to build @omadia/plugin-api from'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the facilitator
+        uses: actions/checkout@v4
+        with:
+          path: facilitator
+
+      - name: Checkout the kernel contract (byte5ai/omadia)
+        uses: actions/checkout@v4
+        with:
+          repository: byte5ai/omadia
+          ref: ${{ inputs.kernel_ref || 'main' }}
+          path: odoo-bot
+          sparse-checkout: |
+            middleware/packages/plugin-api
+            middleware/src/plugins/zipExtractor.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: facilitator/.nvmrc
+          cache: npm
+          cache-dependency-path: facilitator/package-lock.json
+
+      - name: Install
+        working-directory: facilitator
+        run: npm ci
+
+      - name: Build @omadia/plugin-api
+        working-directory: odoo-bot/middleware/packages/plugin-api
+        run: ../../../../facilitator/node_modules/.bin/tsc -p tsconfig.json --typeRoots ../../../../facilitator/node_modules/@types
+
+      - name: Put the Postgres binaries on the PATH (initdb, pg_ctl)
+        run: echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
+
+      - name: Typecheck
+        working-directory: facilitator
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: facilitator
+        run: npm run build
+
+      - name: Acceptance matrix complete (spec B §9, criteria 1-64)
+        working-directory: facilitator
+        run: node scripts/check-acceptance-matrix.mjs
+
+      - name: Test (real Postgres; skipped is not passed)
+        working-directory: facilitator
+        env:
+          FACILITATOR_TEST_REQUIRE_PG: '1'
+        run: npm test

@@ -13,7 +13,8 @@
  *   2. otherwise, `initdb` + `pg_ctl` on the PATH -> a throwaway cluster is
  *      started in a temp directory and removed afterwards.
  *   3. neither -> the Postgres-backed tests are SKIPPED and this script says
- *      so in its last line. Skipped is not passed.
+ *      so in its last line. Skipped is not passed; with
+ *      FACILITATOR_TEST_REQUIRE_PG=1 (CI) the run fails instead.
  * Each test file works in its own schema, so files run in parallel.
  */
 
@@ -106,6 +107,13 @@ if (!databaseUrl && has('initdb') && has('pg_ctl')) {
   } catch (err) {
     console.error(`▶ could not start a throwaway Postgres: ${err.message}`);
   }
+}
+
+// CI sets FACILITATOR_TEST_REQUIRE_PG=1: without a database the run fails
+// instead of passing with the Postgres-backed tests skipped.
+if (!databaseUrl && process.env.FACILITATOR_TEST_REQUIRE_PG === '1') {
+  console.error('▶ FACILITATOR_TEST_REQUIRE_PG=1 but no Postgres: set FACILITATOR_TEST_DATABASE_URL or put initdb and pg_ctl on the PATH');
+  process.exit(1);
 }
 
 console.log('▶ node --test');
