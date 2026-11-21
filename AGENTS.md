@@ -37,6 +37,21 @@ byte5ai/omadia `docs/adr/`.
   simulated transport in omadia-channel-teams, the real-instance checklist is
   `docs/facilitator-live-verification.md` there, its recorded run belongs in
   omadia-channel-teams#43.
+- Behaviour the suite found missing and that is now fixed (#2068):
+  - A reply to the group reminder of one action item completes that item (the reminder's
+    outbox key carries the item); a bare "done" in a private chat with several open items
+    still asks which, because private messages carry no reply reference (criterion 28).
+  - A person who is a home participant of one facilitation and a session guest of another
+    gets, asked privately, the home status of the one and only the session status of the
+    other (criterion 46).
+  - A session closing has its own 7-day delivery limit (then `not delivered`, nothing of it
+    sent afterwards), its `closing` scope waits only for its own sends (criterion 31), its
+    window passes only on a verified electorate (hourly for at most 24 h, else "not
+    confirmed (participants could not be verified)", criterion 59), and a summary re-sent
+    after a stop records its delivery status (criterion 43).
+  - A protocol mail the provider refused (`provider_error`) is tried again, at most 6 times
+    with growing gaps, inside its closing's dispatch limit; an unknown outcome is never sent
+    again (criterion 34).
 
 ## Result status and delivery status (spec 5.2, 5.11; ADR "Facilitation closing procedure")
 
