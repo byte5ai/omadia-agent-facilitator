@@ -629,6 +629,7 @@ export const en = {
     doneWhich: (items: readonly string[]): string => `Which of your action items is done? Answer with "done" and its number:\n${items.join('\n')}`,
     done: (number: number, description: string): string => `Noted: action item ${String(number)} ("${description}") is done. I tell the group.`,
     nothingOpen: (): string => 'You have no open action item in a facilitation of mine.',
+    followupStopped: (goal: string): string => `Done: I no longer follow up the action items of "${goal}". Your other facilitations are not affected.`,
   },
 };
 

@@ -308,3 +308,22 @@ byte5ai/omadia `docs/adr/`.
   use it. Session-only participants never count for home steps.
 - The media consent of a linked session uses the proposal hooks `electorate`,
   `verifyElectorate` and `answerer`: the session's members answer, guests included.
+
+## Execution scopes against the kernel (spec 0, 5.2, 5.6; #2090; ADR-0030 in byte5ai/omadia)
+
+- A `closing` scope is opened with `eventAt` = the closing's `started_at` (never before the
+  facilitation's first scope); the kernel counts its 30 days from there, also after a restart.
+  Its deadline is the closing's `absolute_until`.
+- Under a `closing` scope the kernel refuses `moderation`, `handshake`, `link` and `reminder`.
+  `purposeFor(purpose, essential, kind)` maps what is sent there: consent replies and the card
+  of a confirmation to `consent`, state reports written in the concluding unit of work
+  (`step_closed`, `nomination_accepted`, `joined`, `left`) to `status`. A new non-essential
+  purpose that may go out under a closing needs an entry in `CLOSING_OVERRIDES` or `PURPOSES`,
+  otherwise it is dropped as `purpose_not_allowed`.
+- `syncScopes` opens the scopes of all open closings first; only then may the `active` scope go
+  into its deadline wait (the kernel refuses a wait without an open closing and bounds it by
+  the closings' absolute limits).
+- Private messages: a reply (`PrivateMessageRequest.replyToMessageId`) to a private message of
+  the facilitator binds to that facilitation, and to the action item of a reminder; private
+  "stop" only as such a reply, ending only that follow-up. Without a reference, one question
+  with lettered choices (`1a`, `1b`, facilitations in start order).

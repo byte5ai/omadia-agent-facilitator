@@ -166,9 +166,9 @@ test('criterion 49 (stop): scheduled sessions are cancelled, a live one closes w
   assert.ok(closings.filter((c) => c.kind === 'session' && c.sessionId !== null).every((c) => c.resultStatus !== null));
 });
 
-test('criterion 59: at the deadline the last session closes and the evaluation waits for its confirmation; an objection ends it with an abort report naming it, also across a restart', { skip: PG_SKIP }, async () => {
-  for (const outcome of ['objection', 'consent'] as const) {
-    const name = `sc59-${outcome}`;
+test('criterion 59: at the deadline the last session closes and the evaluation waits for its confirmation; an objection ends it with an abort report naming it, also across a restart; both orders of the two jobs due at the deadline', { skip: PG_SKIP }, async () => {
+  for (const [outcome, order] of [['objection', 'deadline first'], ['consent', 'deadline first'], ['objection', 'session end first'], ['consent', 'session end first']] as const) {
+    const name = `sc59-${outcome}-${order.split(' ')[0] ?? ''}`;
     const home = h.kernel.conversation(`${name}-home`, [ANNA, BERT, CARA]);
     const chat = h.kernel.conversation(`${name}-chat`, [ANNA, BERT, CARA]);
     const goal = `Charter ${name}`;
@@ -182,6 +182,16 @@ test('criterion 59: at the deadline the last session closes and the evaluation w
     h.clock.advance(61 * MINUTE_MS);
     await h.tick();
     assert.equal((await sessionNamed(f.id, 'Last call'))?.status, 'live');
+    // Both jobs are due at the same moment; the scheduler takes them by their
+    // sequence. Put the session's end in front of the deadline, or behind it.
+    const seqs = await h.db.pool.query<{ kind: string; seq: string }>(
+      `SELECT kind, seq FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND status = 'pending' AND kind IN ('deadline', 'session_end')`,
+      [f.id],
+    );
+    const seqOf = (kind: string): number => Number(seqs.rows.find((r) => r.kind === kind)?.seq);
+    const [first, second] = order === 'deadline first' ? ['deadline', 'session_end'] : ['session_end', 'deadline'];
+    await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_jobs SET seq = $3 WHERE facilitation_id = $1 AND kind = $2 AND status = 'pending'`, [f.id, first, Math.min(seqOf('deadline'), seqOf('session_end'))]);
+    await h.db.pool.query(`UPDATE plg_omadia_agent_facilitator_jobs SET seq = $3 WHERE facilitation_id = $1 AND kind = $2 AND status = 'pending'`, [f.id, second, Math.max(seqOf('deadline'), seqOf('session_end'))]);
     // The deadline: the session closes, its summary needs confirmation, the evaluation waits.
     h.clock.advance(120 * MINUTE_MS);
     await h.tick();
@@ -189,6 +199,16 @@ test('criterion 59: at the deadline the last session closes and the evaluation w
     assert.equal((await sessionNamed(f.id, 'Last call'))?.status, 'confirming');
     assert.equal((await h.facilitation(home)).phase, 'active', 'waiting, not evaluated');
     assert.equal((await h.facilitation(home)).settings.deadlineWait, true);
+    // Across the kernel boundary (ADR 0030): the session's closing scope is
+    // open before the kernel holds the active scope in its wait, and the wait
+    // ends at the latest with that closing's limit.
+    const closingScope = h.kernel.scopes.find((s) => s.processId === f.id && s.kind === 'closing' && s.eventId.startsWith('session:'));
+    const activeScope = h.kernel.scopes.find((s) => s.processId === f.id && s.kind === 'active');
+    assert.equal(closingScope?.state, 'open');
+    assert.equal(activeScope?.deadlineWait, true, 'the kernel holds the moderation in its deadline wait');
+    assert.ok(Date.parse(activeScope?.deadline ?? '') <= Date.parse(closingScope?.absoluteLimit ?? ''));
+    assert.ok(h.kernel.waitRequests.filter((r) => r.processId === f.id).every((r) => r.openClosings > 0), 'the wait is never asked for before its closing is open');
+    assert.ok(h.kernel.openedWithEventAt.some((o) => o.kind === 'closing' && o.eventId === closingScope?.eventId && o.eventAt !== undefined), 'the closing names its event');
     // Meanwhile nothing else changes.
     const before = (await store.listContributions(h.db.pool, f.id)).length;
     await say(home, 'cara', 'One more value');
