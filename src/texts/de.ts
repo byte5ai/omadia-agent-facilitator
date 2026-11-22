@@ -530,5 +530,6 @@ export const de: Texts = {
     doneWhich: (items) => `Welche deiner Aufgaben ist erledigt? Antworte mit "erledigt" und der Nummer:\n${items.join('\n')}`,
     done: (number, description) => `Notiert: Aufgabe ${String(number)} ("${description}") ist erledigt. Ich sage es der Gruppe.`,
     nothingOpen: () => 'Du hast in keiner meiner Moderationen eine offene Aufgabe.',
+    followupStopped: (goal) => `Erledigt: Ich verfolge die Aufgaben von "${goal}" nicht mehr nach. Deine anderen Moderationen sind davon nicht betroffen.`,
   },
 };

@@ -7,7 +7,9 @@ import { after, before, test } from 'node:test';
 
 import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { lifecycleOf } from '../src/model.js';
-import { SCOPE_MARGIN_MS, TURN_MODEL_CALLS } from '../src/engine/scopes.js';
+import { CLOSING_SCOPE_PURPOSES } from '@omadia/plugin-api';
+
+import { SCOPE_MARGIN_MS, TURN_MODEL_CALLS, purposeFor } from '../src/engine/scopes.js';
 import { ANNA, BERT, CARA, FOUR, createHarness, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
@@ -275,4 +277,25 @@ test('a stop ends without a result under a closing scope of its own, and the rep
   assert.ok(report.some((a) => a.action === 'post' && a.phase === 'aborted'));
   assert.match(posts(conv).at(-1) ?? '', /asked to stop/);
   assert.deepEqual(h.kernel.openScopesOf(f.id), []);
+});
+
+test('ADR 0030: under a closing scope every message the engine sends there maps to a purpose the kernel allows, and moderation stays moderation', () => {
+  const allowed = new Set<string>(CLOSING_SCOPE_PURPOSES);
+  // Sent under a closing: essential documents, consent answers on a summary, status that was
+  // written in the unit of work that concluded.
+  for (const [purpose, essential] of [
+    ['result', true], ['abort', true], ['session_protocol', true], ['protocol', true], ['protocol_in_group', true], ['closing_status', true],
+    ['session_consent_hint', false], ['session_objection', false], ['card_update', true], ['card_answer_hint', false], ['echo', false],
+    ['late_acceptance', false], ['status', false], ['step_closed', false], ['nomination_accepted', false], ['left', false], ['joined', false],
+    ['nomination_declined', false], ['item_taken', false], ['echo_declined', false], ['initiator_left', false], ['direct_notice', false],
+    ['session_readiness', false], ['reaction', false],
+  ] as const) {
+    assert.ok(allowed.has(purposeFor(purpose, essential, 'closing')), `${purpose} under a closing`);
+  }
+  // A moderation post is refused there: a closing never re-opens the moderation.
+  assert.equal(purposeFor('moderation', false, 'closing'), 'moderation');
+  assert.equal(purposeFor('speaking_order', false, 'closing'), 'moderation');
+  // Outside a closing nothing changed.
+  assert.equal(purposeFor('card_update', true, 'active'), 'moderation');
+  assert.equal(purposeFor('step_closed', false, 'active'), 'moderation');
 });

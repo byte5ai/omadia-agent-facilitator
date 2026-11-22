@@ -81,7 +81,7 @@ async function send(engine: EngineCore, q: Queryable, f: Facilitation, row: Outb
   if (!found.ok) return failed(`not_authorized:${found.code}`, found.message);
   const authorization: SendAuthorization = {
     ...found.value.authorization,
-    purpose: purposeFor(row.purpose, row.deliveryClass === 'essential'),
+    purpose: purposeFor(row.purpose, row.deliveryClass === 'essential', found.value.scope.kind),
     emission: payload.emission === 'prose' ? 'prose' : 'template',
   };
   // A linked session conversation, or the home conversation (5.3).

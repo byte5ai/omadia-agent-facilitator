@@ -65,6 +65,9 @@ import type {
   Kernel,
 } from '../src/kernel.js';
 
+/** Mirrors the kernel's `CLOSING_SCOPE_PURPOSES` (plugin-api 1.85.0). */
+const CLOSING_PURPOSES: ReadonlySet<string> = new Set(['essential_message', 'protocol_dispatch', 'consent', 'status', 'stop', 'invitation', 'readiness_check', 'roster_check', 'other']);
+
 export interface FakeUser {
   id: string;
   displayName: string;
@@ -109,6 +112,8 @@ export interface DirectMessage {
   text: string;
   /** The facilitation the message was authorized for. */
   processId?: string;
+  /** The platform id the channel reported for it. */
+  messageId?: string;
 }
 
 /** An execution scope as the kernel keeps it. */
@@ -705,7 +710,12 @@ export class FakeKernel {
     if (!scope) return this.refuse('unknown_scope', 'no such scope');
     if (!EXECUTION_SCOPE_PHASES[scope.kind].includes(request.phase)) return this.refuse('phase_mismatch', `phase '${request.phase}' does not fit a '${scope.kind}' scope`);
     if (this.disabled.has(scope.agentSlug)) return this.refuse('not_permitted', `agent '${scope.agentSlug}' is disabled`);
+    // ADR 0030 (plugin-api 1.85.0): a closing never re-opens moderation.
+    if (scope.kind === 'closing' && (!CLOSING_PURPOSES.has(request.purpose) || (request.purpose === 'other' && request.action !== 'check'))) {
+      return this.refuse('purpose_not_allowed', 'a closing scope only allows its essential messages, their dispatch, consent answers, status, stop and checks');
+    }
     if (scope.deadlineWait && !['consent', 'status', 'stop'].includes(request.purpose)) return this.refuse('purpose_not_allowed', 'past its deadline this scope only allows consent answers, status and stop');
+    if (scope.deadlineWait && !this.scopes.some((s) => s.processId === scope.processId && s.kind === 'closing' && s.state === 'open' && Date.parse(s.deadline) > this.clock.now().getTime())) return this.refuse('deadline_passed', 'the deadline wait is over: the closings it waited for have ended');
     const needsTarget = ['post', 'direct_message', 'card_update', 'delivery'].includes(request.action);
     if (request.target) {
       const wanted = request.target;
@@ -730,6 +740,11 @@ export class FakeKernel {
     return { outcome: 'authorized', authorizationId, scopeId: scope.id, remaining: { actions: scope.budget.actions - scope.used.actions, modelCalls: scope.budget.modelCalls - scope.used.modelCalls } };
   }
 
+  /** Every scope opened, with the closing event time it named (ADR 0030). */
+  readonly openedWithEventAt: { kind: ExecutionScopeKind; eventId: string; eventAt?: string }[] = [];
+  /** Every deadline-wait request, with how many closing scopes were open then. */
+  readonly waitRequests: { processId: string; openClosings: number }[] = [];
+
   /** Agents an operator disabled. */
   readonly disabled = new Set<string>();
 
@@ -751,7 +766,18 @@ export class FakeKernel {
               : had('active') ? undefined : `'${request.kind}' needs a process that was active`;
       if (order) return this.refuse('scope_order', order);
       const now = this.clock.now().getTime();
-      const absoluteLimit = now + (request.kind === 'configuring' ? this.configuringMaxMs : request.kind === 'closing' ? 30 * 86_400_000 : 365 * 86_400_000);
+      // ADR 0030: a closing's 30 days count from its event.
+      const eventAtRaw = (request as OpenExecutionScopeRequest & { eventAt?: string }).eventAt;
+      let base = now;
+      if (eventAtRaw !== undefined) {
+        if (request.kind !== 'closing') return this.refuse('invalid_request', "only a 'closing' scope names when its event happened");
+        const eventAt = Date.parse(eventAtRaw);
+        if (!Number.isFinite(eventAt) || eventAt > now + 60_000) return this.refuse('invalid_request', 'a closing event cannot lie in the future');
+        base = eventAt;
+      }
+      const absoluteLimit = base + (request.kind === 'configuring' ? this.configuringMaxMs : request.kind === 'closing' ? 30 * 86_400_000 : 365 * 86_400_000);
+      if (absoluteLimit <= now) return this.refuse('limit_exceeded', 'the absolute limit of this closing event passed');
+      this.openedWithEventAt.push({ kind: request.kind, eventId, ...(eventAtRaw !== undefined ? { eventAt: eventAtRaw } : {}) });
       let deadline = absoluteLimit;
       if (request.deadline === undefined) {
         if (request.kind !== 'configuring') return this.refuse('invalid_request', `a '${request.kind}' scope needs a deadline`);
@@ -822,6 +848,13 @@ export class FakeKernel {
       const wait = change.deadlineWait === true;
       if (wait && scope.kind !== 'active') return this.refuse('invalid_request', "only an 'active' scope has a deadline wait");
       if ((passed || scope.deadlineWait) && !wait) return this.refuse('deadline_passed', 'the deadline has passed; only a deadline wait can extend this scope');
+      if (wait) {
+        // ADR 0030: the wait needs the closings it waits for, and ends with them.
+        const limits = this.scopes.filter((s) => s.processId === scope.processId && s.kind === 'closing' && s.state === 'open' && Date.parse(s.deadline) > now).map((s) => Date.parse(s.absoluteLimit));
+        this.waitRequests.push({ processId: scope.processId, openClosings: limits.length });
+        if (limits.length === 0) return this.refuse('scope_order', 'a deadline wait needs an open closing scope of this process');
+        if (deadline > Math.max(...limits)) return this.refuse('limit_exceeded', 'a deadline wait ends at the latest with its closings');
+      }
       if (deadline > Date.parse(scope.absoluteLimit)) return this.refuse('limit_exceeded', `this scope ends at the latest ${scope.absoluteLimit}`);
       scope.deadline = new Date(deadline).toISOString();
       scope.deadlineWait = wait;
@@ -1194,12 +1227,12 @@ export class FakeKernel {
    * given only when it is authorized as a private message to that person.
    * `undefined`: the facilitator's fixed answer to private requests.
    */
-  async privateMessage(agentSlug: string, userId: string, text: string): Promise<string | undefined> {
+  async privateMessage(agentSlug: string, userId: string, text: string, options: { replyToMessageId?: string } = {}): Promise<string | undefined> {
     const listed = [...new Set(this.scopes.filter((s) => s.agentSlug === agentSlug && s.state === 'open' && s.targets.some((t) => t.kind === 'person' && t.principalId.toLowerCase() === userId.toLowerCase())).map((s) => s.processId))];
     let answer: string | undefined;
     if (listed.length > 0) {
       for (const handler of [...(this.privateHandlers.get(agentSlug) ?? [])]) {
-        const reply = await handler({ agentSlug, channelType: this.channelType, principalId: userId, text, processIds: listed });
+        const reply = await handler({ agentSlug, channelType: this.channelType, principalId: userId, text, processIds: listed, ...(options.replyToMessageId ? { replyToMessageId: options.replyToMessageId } : {}) });
         if (reply.handled !== true || reply.text.trim() === '' || !listed.includes(reply.authorization.processId)) continue;
         const scope = this.scopes.find((s) => s.id === reply.authorization.scopeId && s.processId === reply.authorization.processId);
         if (!scope) continue;
@@ -1304,8 +1337,9 @@ export class FakeKernel {
       if (!this.hasIdentity(request.agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity', authorizationId: granted.authorizationId };
       const blocked = this.dmBlocked.get(request.principal);
       if (blocked) return { outcome: 'unreachable', code: blocked, message: `cannot reach ${request.principal}: ${blocked}`, authorizationId: granted.authorizationId };
-      this.dms.push({ as: request.agentSlug, principal: request.principal, text: request.message.text, processId: request.authorization.processId });
-      return { outcome: 'delivered', authorizationId: granted.authorizationId, messageId: this.nextId('dm') };
+      const messageId = this.nextId('dm');
+      this.dms.push({ as: request.agentSlug, principal: request.principal, text: request.message.text, processId: request.authorization.processId, messageId });
+      return { outcome: 'delivered', authorizationId: granted.authorizationId, messageId };
     },
     updateCard: async (request) => {
       const granted = this.authorizeSend(request.agentSlug, request.authorization, 'card_update', { kind: 'conversation', channelType: request.channelType, conversationId: request.conversationId });
