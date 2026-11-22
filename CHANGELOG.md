@@ -14,6 +14,9 @@
 - **A stakeholder proposal never holds up the engine:** a step close, the binding close or a
   media consent is no longer refused while it is open. It is set aside, said so in the group,
   and put to the group again once nothing else is open.
+- **Approval polls allow several answers:** the poll of an approval vote carries
+  `multipleAnswers: true` (plugin-api 1.84.0, omadia#2155; older kernels drop it), and its
+  `{ optionIds }` answer is one approval ballot.
 
 ## 1.6.0
 
