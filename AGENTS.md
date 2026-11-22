@@ -16,7 +16,7 @@ byte5ai/omadia `docs/adr/`.
 - Shared types (`src/model.ts`) and migration numbers land as small PRs first, because
   several streams change this repository in parallel.
 
-## Acceptance matrix and CI (spec B §9; #2068; ADR-0028 in byte5ai/omadia)
+## Acceptance matrix and CI (spec B §9; #2068; ADR-0029 in byte5ai/omadia)
 
 - `docs/acceptance-matrix.md` maps every criterion 1 to 64 of spec B §9 to the tests that
   fail when it regresses: plugin tests here, the kernel's contract tests (`omadia:`) and
