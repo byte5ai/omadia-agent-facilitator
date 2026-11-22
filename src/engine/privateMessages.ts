@@ -222,7 +222,10 @@ export async function answerPrivateMessage(engine: EngineCore, request: PrivateM
 
     // A direct reply to one of the facilitator's private messages is about
     // that facilitation, and a reply to a reminder about its action item.
-    const bound = request.replyToMessageId ? await repliedTo(engine, taking, request.replyToMessageId) : undefined;
+    // `replyToMessageId` since plugin-api 1.85.0 (omadia#2157); typed locally
+    // so the plugin still builds against an older contract, which never sets it.
+    const replyTo = (request as PrivateMessageRequest & { readonly replyToMessageId?: string }).replyToMessageId;
+    const bound = replyTo ? await repliedTo(engine, taking, replyTo) : undefined;
     // Stop only as a reply to a reminder (spec 5.3), never to another message.
     if (stop) return bound?.item && bound.taking.f.followupState === 'active' ? await stopFollowup(engine, bound.taking) : DECLINED;
     // A reply bound to one facilitation answers for that one only; otherwise

@@ -66,7 +66,7 @@ import type {
 } from '../src/kernel.js';
 
 /** Mirrors the kernel's `CLOSING_SCOPE_PURPOSES` (plugin-api 1.85.0). */
-const CLOSING_PURPOSES: ReadonlySet<string> = new Set(['essential_message', 'protocol_dispatch', 'consent', 'status', 'stop', 'invitation', 'readiness_check', 'roster_check', 'other']);
+export const CLOSING_PURPOSES: ReadonlySet<string> = new Set(['essential_message', 'protocol_dispatch', 'consent', 'status', 'stop', 'invitation', 'readiness_check', 'roster_check', 'other']);
 
 export interface FakeUser {
   id: string;

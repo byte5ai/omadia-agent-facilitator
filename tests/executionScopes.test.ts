@@ -7,12 +7,17 @@ import { after, before, test } from 'node:test';
 
 import { DAY_MS, HOUR_MS, MINUTE_MS } from '../src/clock.js';
 import { lifecycleOf } from '../src/model.js';
-import { CLOSING_SCOPE_PURPOSES } from '@omadia/plugin-api';
+import * as pluginApi from '@omadia/plugin-api';
 
 import { SCOPE_MARGIN_MS, TURN_MODEL_CALLS, purposeFor } from '../src/engine/scopes.js';
 import { ANNA, BERT, CARA, FOUR, createHarness, startActive } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
+import { CLOSING_PURPOSES } from './fakeKernel.js';
+
+/** The kernel's list from plugin-api 1.85.0 (omadia#2157); against an older
+ *  contract the fake kernel's mirror, which the test below holds equal to it. */
+const KERNEL_CLOSING_PURPOSES: readonly string[] | undefined = (pluginApi as { readonly CLOSING_SCOPE_PURPOSES?: readonly string[] }).CLOSING_SCOPE_PURPOSES;
 
 const VOTE = { method: 'single', options: ['Harbour', 'Garden'] };
 const THREE = [ANNA, BERT, CARA];
@@ -280,7 +285,7 @@ test('a stop ends without a result under a closing scope of its own, and the rep
 });
 
 test('ADR 0030: under a closing scope every message the engine sends there maps to a purpose the kernel allows, and moderation stays moderation', () => {
-  const allowed = new Set<string>(CLOSING_SCOPE_PURPOSES);
+  const allowed = new Set<string>(KERNEL_CLOSING_PURPOSES ?? CLOSING_PURPOSES);
   // Sent under a closing: essential documents, consent answers on a summary, status that was
   // written in the unit of work that concluded.
   for (const [purpose, essential] of [
@@ -298,4 +303,8 @@ test('ADR 0030: under a closing scope every message the engine sends there maps 
   // Outside a closing nothing changed.
   assert.equal(purposeFor('card_update', true, 'active'), 'moderation');
   assert.equal(purposeFor('step_closed', false, 'active'), 'moderation');
+});
+
+test('the fake kernel mirrors the kernel\'s closing purposes exactly (plugin-api 1.85.0)', { skip: KERNEL_CLOSING_PURPOSES === undefined ? 'contract older than plugin-api 1.85.0' : false }, () => {
+  assert.deepEqual([...CLOSING_PURPOSES].sort(), [...(KERNEL_CLOSING_PURPOSES ?? [])].sort());
 });
