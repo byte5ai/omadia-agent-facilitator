@@ -204,6 +204,8 @@ export class FakeFollowup implements FacilitationFollowupService {
   onCall: (method: string) => void | Promise<void> = () => undefined;
   /** Methods that do their work and then fail to answer: 'throw' or 'hang'. */
   readonly afterEffects = new Map<string, 'throw' | 'hang'>();
+  /** Mails the provider refuses next, in order, without sending them. */
+  readonly mailRefusals: Array<'provider_error'> = [];
 
   private async finish<T>(method: string, value: T): Promise<T> {
     const effect = this.afterEffects.get(method);
@@ -255,6 +257,8 @@ export class FakeFollowup implements FacilitationFollowupService {
     this.operation = 'send_mail';
     const refused = this.refuse(grant, request.recipients);
     if (refused) return refused;
+    const provider = this.mailRefusals.shift();
+    if (provider) return { outcome: 'refused' as const, code: provider, message: 'the mail provider reported an error' };
     this.mails.push(request);
     return this.finish('sendMail', { outcome: 'sent' as const });
   }
@@ -290,6 +294,9 @@ export class FakeKernel {
    *  ('lost' delivers but reports failure: a lost confirmation; 'hang' never
    *  answers). */
   readonly sendFaults: Array<'throw' | 'lost' | 'hang' | { code: string; message: string }> = [];
+  /** Conversations a group send cannot reach right now, with the channel's
+   *  code (a fault that lasts, unlike `sendFaults`). */
+  readonly blockedConversations = new Map<string, string>();
   /** Answers the facilitator's turn; default: says nothing. */
   onTurn: (request: ScopedAgentTurnRequest) => string | TurnAnswer | Promise<string | TurnAnswer> = () => '[silent]';
   private followupService: FacilitationFollowupService | undefined;
@@ -434,10 +441,12 @@ export class FakeKernel {
     // reads everything and, when it addresses the agent, to those that read
     // what is addressed to them.
     const reference = partial.kind === 'card_answer' ? (this.bound.get(partial.cardAnswer?.cardId ?? '') ?? this.bound.get(partial.messageId)) : partial.kind === 'reaction' ? this.bound.get(partial.messageId) : partial.replyToMessageId ? this.bound.get(partial.replyToMessageId) : undefined;
+    // Decided once, before any process sees the message: a process that
+    // ends its reading while handling it does not hand it on to the others.
+    const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
     for (const sub of [...this.processSubscriptions]) {
       if (sub.ended || sub.mode === 'none' || sub.channelType !== this.channelType || sub.conversationId !== conversationId) continue;
       const addressedToBot = partial.addressedToBot === true || this.addressed(partial.text, sub.agentSlug);
-      const boundHere = reference !== undefined && this.processSubscriptions.some((other) => other.processId === reference && other.conversationId === conversationId && !other.ended && other.mode !== 'none');
       if (boundHere ? sub.processId !== reference : !(sub.mode === 'all' || addressedToBot)) continue;
       const record: ProcessConversationMessageRecord = { ...base, eventId: this.nextId('evt'), receivedByChannelKey: `28:${sub.agentSlug}`, processId: sub.processId, ...(addressedToBot ? { addressedToBot: true } : {}) };
       this.events.push(record);
@@ -1220,6 +1229,8 @@ export class FakeKernel {
   /** The channel's part of a post: faults, cards, the message itself. */
   private async post(agentSlug: string, conversationId: string, message: ScopedConversationSendRequest['message'], processId: string): Promise<{ outcome: 'delivered'; messageId: string; cardMessageId?: string } | { outcome: 'unreachable'; code: string; message: string }> {
     if (!this.hasIdentity(agentSlug)) return { outcome: 'unreachable', code: 'no_identity', message: 'no own identity' };
+    const blocked = this.blockedConversations.get(conversationId);
+    if (blocked !== undefined) return { outcome: 'unreachable', code: blocked, message: 'the conversation cannot be reached right now' };
     const fault = this.sendFaults.shift();
     if (fault === 'throw') throw new Error('channel connection reset');
     // A channel call that never answers.

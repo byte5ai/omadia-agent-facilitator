@@ -3,11 +3,12 @@
 // End to end on the fake kernel with its simulated channel, a fake clock and
 // a real Postgres. One test per criterion, named by its number.
 //
-// Not covered here, and reported as skipped rather than passed:
-//   10 (first half)  refusing grants, consultation and memory for a
-//                    facilitator, and the 1:1 refusal, are enforced by the
-//                    kernel, not by this engine.
-//   13               needs a real Teams test tenant.
+// Not here: the first half of 10 (refusing a business plugin, a consultation
+// grant or a memory tool for a facilitator, and the 1:1 refusal) is enforced
+// by the kernel and tested there; 13 rests on the Teams channel's simulated
+// transport and its recorded manual checklist, with the field scenario in
+// Slack, Discord and Telegram in fieldScenarioChannels.test.ts. Where each
+// criterion is proven: docs/acceptance-matrix.md (#2068).
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -426,8 +427,6 @@ test('10. omissions (engine part): the same person in two facilitations is never
   for (const conv of [a, b]) await tool(conv, 'facilitation_stop', { reason: 'test over' });
 });
 
-test('10 (kernel part). granting a business plugin, a consultation grant or a memory tool to a facilitator is refused; a 1:1 request for help gets the refusal', { skip: 'enforced by the kernel (agent kind facilitator), not by this engine; covered by the kernel suite' }, () => {});
-
 test('11. visibility: a user outside the conversation cannot read a protocol; operator content access is audited', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('ac-11', FOUR);
   const f = await startActive(h, conv, VENUES);
@@ -471,8 +470,6 @@ test('12. no silent end: a failed step and a reached lifetime produce an abort r
     await tight.close();
   }
 });
-
-test('13. Teams contract tests against the real test tenant', { skip: 'needs a real Teams test tenant; none exists. Acceptance rests on the simulated channel.' }, () => {});
 
 test('14. retrospective: ideas without mentions, clusters confirmed by the group, two actions each with a confirmed owner and a due date, protocol, reminder before the due date', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('ac-14', FOUR);

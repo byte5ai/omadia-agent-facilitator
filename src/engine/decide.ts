@@ -558,6 +558,10 @@ const ballots: InboundHandler = async ({ w, record, author, retired, command }) 
     await w.event('consent_withdrawn', author.principalId, { stepId: step.id, round: step.round, messageId: record.messageId });
     return { outcome: 'consent_withdrawn' };
   }
+  if (record.kind === 'edited' && retired === undefined && (await replacedByLaterBallot(w, step, author.principalId, record.messageId))) {
+    await w.event('late_change', author.principalId, { kind: record.kind, messageId: record.messageId, revision: record.revision, reason: 'ballot_replaced' });
+    return { outcome: 'late_edited' };
+  }
   const participants = (await stepElectorate(w.tx, w.f, step)).people;
   // A ballot is read without the mention it starts with ("Mona (Test) A"):
   // the mention says who is spoken to, the rest is the ballot.
@@ -587,6 +591,17 @@ const ballots: InboundHandler = async ({ w, record, author, retired, command }) 
   await recordBallot(w, { record, author, step, ballot, interpreted: false, replaces: retired !== undefined });
   return { outcome: 'ballot' };
 };
+
+/** One ballot per person and round (spec 9, criterion 64): the ballot this
+ *  message carried was replaced by a later one of its author (another
+ *  message or a card), so an edit of it brings nothing back. */
+async function replacedByLaterBallot(w: Work, step: Step, principal: string, messageId: string): Promise<boolean> {
+  const own = (await store.listContributions(w.tx, w.f.id, step.id)).filter((c) => c.participantPrincipal === principal && c.round === step.round && ballotOf(c) !== undefined);
+  const fromMessage = own.filter((c) => c.sourceMessageId === messageId);
+  if (fromMessage.length === 0) return false;
+  const latest = Math.max(...fromMessage.map((c) => c.recordedAt.getTime()));
+  return own.some((c) => c.status === 'valid' && c.sourceMessageId !== messageId && c.recordedAt.getTime() > latest);
+}
 
 /** An item one person confirmed is taken: naming somebody else for it is
  *  answered, not recorded. Undefined when nothing of the ballot is left. */

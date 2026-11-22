@@ -93,10 +93,11 @@ async function answerDone(engine: EngineCore, taking: readonly Taking[], number:
   return reply(engine, after, texts(f.language).privateStatus.done(only.item.number, only.item.description), 'other');
 }
 
-/** The status of the sessions a session participant belongs to: agenda,
- *  session state and time slot; never names, tallies or anything of the
- *  home conversation. */
-async function answerGuestStatus(engine: EngineCore, request: PrivateMessageRequest, principal: string): Promise<PrivateMessageReply> {
+/** The status of the sessions a person belongs to only as a session
+ *  participant: agenda, session state and time slot; never names, tallies
+ *  or anything of the home conversation. The first facilitation with such
+ *  sessions, preferring one whose sessions are not over. */
+async function guestStatusOf(engine: EngineCore, request: PrivateMessageRequest, principal: string): Promise<{ f: Facilitation; text: string } | undefined> {
   // The sessions that are not over come first: that is what a guest asks about.
   const found: { f: Facilitation; sessions: Awaited<ReturnType<typeof guestSessionsOf>> }[] = [];
   for (const processId of request.processIds) {
@@ -107,16 +108,31 @@ async function answerGuestStatus(engine: EngineCore, request: PrivateMessageRequ
   }
   const running = (s: { status: string }): boolean => s.status === 'scheduled' || s.status === 'live' || s.status === 'confirming';
   found.sort((a, b) => Number(b.sessions.some(running)) - Number(a.sessions.some(running)));
-  for (const { f, sessions: all } of found) {
-    const sessions = all.some(running) ? all.filter(running) : all;
-    const t = sessionTexts(f.language);
-    const lines = sessions.map((s) =>
-      t.guestStatusLine(sessionTitleOf(s, f), t.sessionState[s.status] ?? s.status, s.scheduledStart ? formatWhen(s.scheduledStart, f.timezone, f.language) : undefined),
-    );
-    await engine.work(f.id, (w) => w.event('private_status', principal, { scope: 'session' }));
-    return reply(engine, f, t.guestStatus(lines), 'status');
-  }
-  return DECLINED;
+  const first = found[0];
+  if (!first) return undefined;
+  const { f, sessions: all } = first;
+  const sessions = all.some(running) ? all.filter(running) : all;
+  const t = sessionTexts(f.language);
+  const lines = sessions.map((s) =>
+    t.guestStatusLine(sessionTitleOf(s, f), t.sessionState[s.status] ?? s.status, s.scheduledStart ? formatWhen(s.scheduledStart, f.timezone, f.language) : undefined),
+  );
+  await engine.work(f.id, (w) => w.event('private_status', principal, { scope: 'session' }));
+  return { f, text: t.guestStatus(lines) };
+}
+
+/** A session participant only: the status of their sessions (criterion 46). */
+async function answerGuestStatus(engine: EngineCore, request: PrivateMessageRequest, principal: string): Promise<PrivateMessageReply> {
+  const guest = await guestStatusOf(engine, request, principal);
+  return guest ? reply(engine, guest.f, guest.text, 'status') : DECLINED;
+}
+
+/** A person with both memberships (a home participant of one facilitation,
+ *  only a session participant of another) gets each scope's part
+ *  (criterion 46): the home answer, then the session status of the other. */
+async function withGuestPart(engine: EngineCore, request: PrivateMessageRequest, principal: string, home: PrivateMessageReply): Promise<PrivateMessageReply> {
+  if (home.handled !== true) return home;
+  const guest = await guestStatusOf(engine, request, principal);
+  return guest ? { ...home, text: `${home.text}\n\n${guest.text}` } : home;
 }
 
 /**
@@ -146,7 +162,7 @@ export async function answerPrivateMessage(engine: EngineCore, request: PrivateM
       return status ? await answerGuestStatus(engine, request, principal) : DECLINED;
     }
 
-    if (status) return await answerStatus(engine, taking, status[1] !== undefined ? Number(status[1]) : undefined);
+    if (status) return await withGuestPart(engine, request, principal, await answerStatus(engine, taking, status[1] !== undefined ? Number(status[1]) : undefined));
     const number = done?.[1] ?? done?.[2];
     return await answerDone(engine, taking, number !== undefined ? Number(number) : undefined);
   } catch (err) {

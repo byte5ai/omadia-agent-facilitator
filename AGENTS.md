@@ -11,9 +11,60 @@ byte5ai/omadia `docs/adr/`.
   retention) lives here; the kernel only provides contracts (`@omadia/plugin-api`).
 - A facilitator-plugin PR does not bump the version; releases are cut separately.
 - Gates: `npm run typecheck`, `npm run build`, `npm test` (Node 22, a real Postgres via
-  `initdb`/`pg_ctl` or `FACILITATOR_TEST_DATABASE_URL`; skipped is not passed).
+  `initdb`/`pg_ctl` or `FACILITATOR_TEST_DATABASE_URL`; skipped is not passed), and
+  `node scripts/check-acceptance-matrix.mjs`. CI runs all of them.
 - Shared types (`src/model.ts`) and migration numbers land as small PRs first, because
   several streams change this repository in parallel.
+
+## Acceptance matrix and CI (spec B §9; #2068; ADR-0029 in byte5ai/omadia)
+
+- `docs/acceptance-matrix.md` maps every criterion 1 to 64 of spec B §9 to the tests that
+  fail when it regresses: plugin tests here, the kernel's contract tests (`omadia:`) and
+  the Teams channel's (`teams:`) where the criterion crosses that boundary.
+- A new acceptance test is named by its criterion (`test('21. ...')`) and listed in that
+  row; `node scripts/check-acceptance-matrix.mjs` fails on a criterion without a row, a row
+  without a plugin test, a referenced title that no longer exists, and a numbered test
+  missing from its row. Reference syntax: `` `file.test.ts` › "title fragment" ``.
+- Acceptance tests run end to end on the fake kernel (simulated channel per transport,
+  `createHarness({ channel })`), the fake clock and a real Postgres; a restart is
+  `h.restart()`. A test is only listed after it was seen red with the behaviour broken.
+- CI (`.github/workflows/ci.yml`) checks this repository out next to byte5ai/omadia
+  (`../odoo-bot`, sparse: the plugin-api package and the zip extractor), builds
+  `@omadia/plugin-api` there, then runs typecheck, build, the matrix check and `npm test`
+  with `FACILITATOR_TEST_REQUIRE_PG=1` (no Postgres fails the run instead of skipping).
+  `workflow_dispatch` takes a kernel ref for testing against an unreleased contract.
+- Criterion 13 is the one criterion with a manual part: the §6.2 contract runs on the
+  simulated transport in omadia-channel-teams, the real-instance checklist is
+  `docs/facilitator-live-verification.md` there, its recorded run belongs in
+  omadia-channel-teams#43.
+- Behaviour the suite found missing and that is now fixed (#2068):
+  - A reply to the group reminder of one action item completes that item (the reminder's
+    outbox key carries the item); a bare "done" in a private chat with several open items
+    still asks which, because private messages carry no reply reference (criterion 28).
+  - A person who is a home participant of one facilitation and a session guest of another
+    gets, asked privately, the home status of the one and only the session status of the
+    other (criterion 46).
+  - A session closing has its own 7-day delivery limit (then `not delivered`, nothing of it
+    sent afterwards), its `closing` scope waits only for its own sends (criterion 31), its
+    window passes only on a verified electorate (hourly for at most 24 h, else "not
+    confirmed (participants could not be verified)", criterion 59), and a summary re-sent
+    after a stop records its delivery status (criterion 43).
+  - A protocol mail the provider refused (`provider_error`) is tried again, at most 6 times
+    with growing gaps, inside its closing's dispatch limit; an unknown outcome is never sent
+    again (criterion 34).
+
+- **Which definition of done the engine checks (spec 5.2, 5.5, 5.7; checked for #2068).**
+  An agreed wording is stored with criteria derived from the agenda (`criteriaFor` in
+  `lifecycle.ts`): with a deciding step it is `decisions_reached`, with only a closing step
+  `all_steps_closed`; with neither it is free text (`criteria` null). Only free text, or a
+  consent decision in the session, makes a summary wait for group confirmation. This is
+  intended: §9 criterion 1 has an agreed definition of done and a ranked vote, and the
+  fourth vote concludes with no consent round, so "A venue is chosen" next to a vote is
+  machine-checkable. Making every agreed wording free text was tried and breaks
+  criteria 1 to 3, 14, 15 and 18 (221 failing tests). The open risk: a wording that asks
+  for more than the agenda decides ("chosen and booked") is closed by the vote alone. The
+  way to handle that is a separate agenda step, or showing in the handshake what is
+  checked automatically. A rewording (`proposeChange`) keeps the current criteria.
 
 ## Result status and delivery status (spec 5.2, 5.11; ADR "Facilitation closing procedure")
 
