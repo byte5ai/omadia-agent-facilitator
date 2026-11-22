@@ -564,6 +564,7 @@ export const en = {
   // ── scoped capabilities ──────────────────────────────────────────────────
   stakeholderRoles: { receives_protocol: 'receives the protocol', invited_to_followups: 'is invited to follow-up meetings' },
   proposeStakeholder: (name: string, role: string): string => `add ${name} as a stakeholder who ${role}`,
+  stakeholdersDeferred: (): string => 'I set the proposal on stakeholders aside until this is decided, and put it to you again afterwards.',
   proposeFollowupMeeting: (subject: string, minutes: number, from: string, to: string): string =>
     `after the close I look for a common free time and send the invitation for "${subject}" (${String(minutes)} minutes, between ${from} and ${to}). For that I read only when people are busy, never what their appointments are`,
   /** What the protocol says about the use of scoped capabilities. */

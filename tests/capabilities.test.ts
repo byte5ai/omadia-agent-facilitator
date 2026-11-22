@@ -12,6 +12,7 @@ import { ANNA, BERT, CARA, createHarness, passWindow } from './harness.js';
 import type { Harness } from './harness.js';
 import { FakeFollowup } from './fakeKernel.js';
 import { PG_SKIP } from './pg.js';
+import { proposeNamedStakeholders } from '../src/tools/startStakeholders.js';
 
 let h: Harness;
 let followup: FakeFollowup;
@@ -98,6 +99,100 @@ test('a stakeholder counts only when the group confirmed; one the group refused 
   h.clock.advance(31 * MINUTE_MS);
   await h.tick();
   assert.deepEqual(await store.listStakeholders(h.db.pool, f.id), []);
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
+test('stakeholders named in the start request are recorded one by one, wait for the opening, and go to the group once (live finding 2026-11-21)', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-start-stakeholders', [ANNA, BERT, CARA]);
+  const answer = await tool(conv, 'facilitation_start', {
+    goal: 'g',
+    definitionOfDone: 'd',
+    agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }],
+    stakeholders: [
+      { name: 'Maria Boss', address: 'Maria@Example.com' },
+      { name: 'Tom IT', role: 'invited_to_followups' },
+      { name: 'Paul Typo', address: 'paul(at)example' },
+      { name: 'Cara' },
+    ],
+  });
+  // One bad address does not hold up the others; each one left out has its own note.
+  assert.match(answer, /Stakeholders noted: Maria Boss, Cara\. Nothing was posted about them yet/);
+  assert.match(answer, /Not noted as a stakeholder: Tom IT\. Not in this conversation and no mail address given\. Ask for the address/);
+  assert.match(answer, /Not noted as a stakeholder: Paul Typo\. "paul\(at\)example" is not a mail address\. Ask for the correct address/);
+  assert.match(answer, /It is NOT open: nothing was posted in the group/);
+  // Nothing is posted while it is being set up (spec 5.2).
+  assert.equal(h.kernel.groupPosts(conv).length, 0);
+  const f = await h.facilitation(conv);
+  assert.equal((await store.listStakeholders(h.db.pool, f.id)).filter((s) => !s.confirmed).length, 2);
+
+  // Adjusting the setup does not record the same people again.
+  const again = await tool(conv, 'facilitation_start', { goal: 'g2', stakeholders: [{ name: 'maria boss', address: 'maria@example.com' }] });
+  assert.doesNotMatch(again, /Stakeholders noted/);
+  // Read and write in one unit of work: two calls at once record a new person once.
+  const [one, two] = await Promise.all([
+    proposeNamedStakeholders(h.engine, f.id, [{ displayName: 'Dora Dev', address: 'dora@example.com', role: 'receives_protocol' }], 'user:anna'),
+    proposeNamedStakeholders(h.engine, f.id, [{ displayName: 'Dora Dev', address: 'dora@example.com', role: 'receives_protocol' }], 'user:anna'),
+  ]);
+  assert.equal([...one.notes, ...two.notes].filter((n) => n.startsWith('Stakeholders noted: Dora Dev')).length, 1);
+  assert.equal((await store.listStakeholders(h.db.pool, f.id)).length, 3);
+  assert.equal((await store.listProposals(h.db.pool, f.id)).length, 0);
+
+  // Once open, after the handshake, all of them go to the group as one proposal.
+  await tool(conv, 'facilitation_open');
+  await h.tick();
+  const stakeholderProposals = (await store.listProposals(h.db.pool, f.id)).filter((p) => p.kind === 'stakeholder');
+  assert.equal(stakeholderProposals.length, 1);
+  const proposal = posts(conv).at(-1) ?? '';
+  assert.match(proposal, /^Proposal: add /);
+  for (const name of ['Maria Boss', 'Cara', 'Dora Dev']) assert.match(proposal, new RegExp(`add ${name} as a stakeholder who receives the protocol`));
+  assert.equal(posts(conv).filter((t) => t.startsWith('Proposal:')).length, 1);
+  await all(conv, 'agreed');
+  const confirmed = (await store.listStakeholders(h.db.pool, f.id)).filter((s) => s.confirmed);
+  assert.deepEqual(confirmed.map((s) => s.address).sort(), ['cara@example.com', 'dora@example.com', 'maria@example.com']);
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
+test('a pending stakeholder proposal never holds up a step close or the binding close; it is asked again afterwards', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-stakeholder-yields', [ANNA, BERT, CARA]);
+  await tool(conv, 'facilitation_start', { goal: 'g', definitionOfDone: 'd', agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'collect', title: 'More' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  const f = await h.facilitation(conv);
+  await tool(conv, 'facilitation_stakeholder', { name: 'Sam Sponsor', address: 'sam@example.com', role: 'receives_protocol' });
+  assert.equal((await store.openProposal(h.db.pool, f.id))?.kind, 'stakeholder');
+
+  // "move on" opens the step close: not refused, the stakeholder proposal gives way.
+  await say(conv, 'anna', 'move on');
+  assert.equal((await store.openProposal(h.db.pool, f.id))?.kind, 'step_close');
+  assert.ok(posts(conv).some((t) => t.startsWith('I set the proposal on stakeholders aside')));
+  assert.ok(!posts(conv).some((t) => t === 'One proposal at a time: the open one is decided first.'));
+  await all(conv, 'agreed');
+  assert.equal((await store.listSteps(h.db.pool, f.id)).find((s) => s.title === 'More')?.status, 'open');
+
+  // Afterwards it is put to the group again, with the same person.
+  h.clock.advance(6 * MINUTE_MS);
+  await h.tick();
+  const again = await store.openProposal(h.db.pool, f.id);
+  assert.equal(again?.kind, 'stakeholder');
+  assert.equal((await store.listStakeholders(h.db.pool, f.id)).length, 1);
+
+  // The binding close opens although the stakeholder proposal is open.
+  await say(conv, 'bert', 'A point');
+  await tool(conv, 'facilitation_step', { action: 'close' });
+  assert.match(await tool(conv, 'facilitation_step', { action: 'close' }), /^Closed/);
+  assert.equal((await store.openProposal(h.db.pool, f.id))?.kind, 'close');
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
+test('a pending stakeholder proposal never holds up the media consent of a call', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('ca-stakeholder-media', [ANNA, BERT]);
+  h.kernel.capabilities(conv, ['text'], ['text']);
+  await tool(conv, 'facilitation_start', { goal: 'g', definitionOfDone: 'd', agenda: [{ kind: 'collect', title: 'Collect' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  const f = await h.facilitation(conv);
+  await tool(conv, 'facilitation_stakeholder', { name: 'Sam Sponsor', address: 'sam@example.com', role: 'receives_protocol' });
+  await h.kernel.changeCapabilities('mira', h.kernel.capabilities(conv, ['text', 'transcribed_speech'], ['text']));
+  await h.settle();
+  assert.equal((await store.openProposal(h.db.pool, f.id))?.kind, 'media_consent');
   await tool(conv, 'facilitation_stop', { reason: 'test over' });
 });
 

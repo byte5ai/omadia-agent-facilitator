@@ -127,6 +127,26 @@ byte5ai/omadia `docs/adr/`.
   steps, open points), `talk` (summaries, clusters, participants), `contribution` (never to a
   stakeholder). `full` knows `protocol` + `talk`; `existence` and `none` only `protocol`; the
   note about withheld parts from `existence` up.
+- Stakeholders named in the start request (spec 5.2 Prepare, 5.7 group consent; live finding
+  2026-11-21: they were lost because the model keeps no memory between messages):
+  `facilitation_start` takes `stakeholders`. `proposeNamedStakeholders` reads (`newStakeholders`)
+  and writes in ONE `engine.core.work` unit, under the facilitation lock, so a re-call or a
+  concurrent call never records the same name or address twice. Each entry is checked on its
+  own (`stakeholderProblem`): a bad address or a missing one for somebody outside the
+  conversation drops only that entry, with its own note; the others are recorded. The start
+  never fails on this.
+- Decision (spec 5.2: in `configuring` nothing goes public, the facilitation goes public with
+  the handshake; 5.7: stakeholders are agreed by group consent, a proposal posted in the
+  conversation): `proposeStakeholders` only inserts unconfirmed rows in `configuring`; no
+  proposal is opened before `facilitation_open`. An `onOpened` hook queues the
+  `stakeholder_proposal` job, which puts every unconfirmed stakeholder to the group as ONE
+  proposal (payload `stakeholderIds` + `names`; older proposals with a single `stakeholderId`
+  are still accepted) once no proposal is open, and re-queues itself (5 min) while one is.
+  The `stakeholder` kind `yields` (`ProposalKind.yields`): any other proposal (step_close,
+  vote_close, close, media_consent, ...) is never refused because of it. `openProposal`
+  withdraws it (`proposal_withdrawn` event, its rows stay pending), posts
+  `stakeholdersDeferred` and queues it again. Busy checks use `blockingProposal(w)`, which
+  ignores a yielding proposal; `store.openProposal` still returns it.
 - `markEnded(w)` sets `ended_at` and `purge_after` (retention from `ended`/`aborted`). Follow-up
   ends at min(last due + `followup_grace_days`, close + `followup_horizon_days`); a later due
   date is refused (`due_beyond_horizon`). Purge waits for every open closing and scope;

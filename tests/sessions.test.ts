@@ -128,6 +128,21 @@ test('a vote goes out as a poll card where the session has polls; poll answers a
   assert.equal((await h.facilitation(conv)).phase, 'closed', 'the verified answer counted and concluded');
 });
 
+test('an approval vote goes out as a poll with several answers; its optionIds answer is one approval ballot (omadia#2155)', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('se-poll-approval', [ANNA, BERT, CARA]);
+  h.kernel.capabilities(conv, ['text', 'card_answers'], ['text', 'polls', 'private_messages']);
+  const f = await startActive(h, conv, { method: 'approval', options: ['Thai', 'Pizza', 'Sushi'] });
+  const poll = h.kernel.groupPosts(conv).find((p) => p.poll !== undefined);
+  assert.equal((poll?.poll as { multipleAnswers?: boolean } | undefined)?.multipleAnswers, true);
+  const step = (await store.listSteps(h.db.pool, f.id))[0];
+  const pollId = `${step?.id ?? ''}:1`;
+  await h.kernel.answerCard(conv, 'anna', pollId, { optionIds: ['A', 'C'] }, `${poll?.messageId ?? ''}-card`);
+  await h.settle();
+  const ballots = (await store.listContributions(h.db.pool, f.id)).filter((c) => c.status === 'valid' && c.participantPrincipal === 'user:anna');
+  assert.deepEqual(ballots.map((c) => c.payload['ballot']), [{ type: 'approval', choices: ['A', 'C'] }]);
+  await tool(conv, 'facilitation_stop', { reason: 'test over' });
+});
+
 test('without polls the same vote runs as chat ballots, with no card', { skip: PG_SKIP }, async () => {
   const conv = h.kernel.conversation('se-nopoll', [ANNA, BERT]);
   h.kernel.capabilities(conv, ['text'], ['text']);

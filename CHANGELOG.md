@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Stakeholders named in the start request** are recorded in the same call
+  (`facilitation_start` `stakeholders`) and put to the group as one proposal once the
+  facilitation is open; nothing is posted while it is being set up (spec 5.2, 5.7). Each
+  entry is checked on its own: one bad mail address no longer drops the whole list, and every
+  entry left out gets its own note (ask for the correct address). The check for people
+  already named and the insert run in one unit of work, so a repeated call never proposes
+  anyone twice.
+- **A stakeholder proposal never holds up the engine:** a step close, the binding close or a
+  media consent is no longer refused while it is open. It is set aside, said so in the group,
+  and put to the group again once nothing else is open.
+- **Approval polls allow several answers:** the poll of an approval vote carries
+  `multipleAnswers: true` (plugin-api 1.84.0, omadia#2155; older kernels drop it), and its
+  `{ optionIds }` answer is one approval ballot.
+
 ## 1.6.0
 
 ### Compatibility

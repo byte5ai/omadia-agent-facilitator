@@ -52,6 +52,10 @@ export interface ProposalKind {
   /** Who answers this message when it is no home participant (a session
    *  participant in the session's own conversation). */
   answerer?(w: Work, proposal: Proposal, record: ConversationMessageRecord): Promise<Participant | undefined>;
+  /** Gives way to any other kind of proposal: while it is open, another one
+   *  is not refused; this one is withdrawn and this hook puts it back in the
+   *  queue (stakeholders never hold up the engine's own proposals). */
+  yields?(w: Work, proposal: Proposal): Promise<void>;
 }
 
 const kinds = new Map<string, ProposalKind>();
@@ -77,9 +81,28 @@ export interface NewProposal {
   conversationId?: string;
 }
 
+/** The open proposal that holds up another one: one that yields is not. */
+export async function blockingProposal(w: Pick<Work, 'tx' | 'f'>): Promise<Proposal | undefined> {
+  const open = await store.openProposal(w.tx, w.f.id);
+  return open && kindOf(open).yields === undefined ? open : undefined;
+}
+
+/** Withdraw an open proposal that gives way to `kind`; false when it does not. */
+async function giveWay(w: Work, open: Proposal, kind: string): Promise<boolean> {
+  const definition = kindOf(open);
+  if (!definition.yields || open.kind === kind) return false;
+  await w.tx.query(`UPDATE plg_omadia_agent_facilitator_proposals SET status = 'withdrawn', decided_at = $2 WHERE id = $1`, [open.id, w.now]);
+  await cancelJobs(w, ['proposal_window']);
+  w.bump();
+  await w.event('proposal_withdrawn', 'engine', { proposalId: open.id, kind: open.kind, summary: open.summary, for: kind });
+  await definition.yields(w, open);
+  return true;
+}
+
 /** Put a proposal to the group. The window never runs past the deadline. */
 export async function openProposal(w: Work, input: NewProposal): Promise<Proposal> {
-  if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
+  const open = await store.openProposal(w.tx, w.f.id);
+  if (open && !(await giveWay(w, open, input.kind))) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
   const t = texts(w.f.language);
   const wanted = new Date(w.now.getTime() + input.windowMinutes * MINUTE_MS);
   const windowEndsAt = w.f.deadline && w.f.deadline < wanted ? w.f.deadline : wanted;

@@ -391,6 +391,11 @@ export async function applySnapshot(w: Work, reported: SessionCapabilitySnapshot
 
 export const pollIdOf = (step: Pick<Step, 'id' | 'round'>): string => `${step.id}:${String(step.round)}`;
 
+/** An approval vote lets every option be ticked. `multipleAnswers` since
+ *  plugin-api 1.84.0 (omadia#2155); older kernels drop it (typed locally: the
+ *  1.82 contract this release builds against lacks it). */
+const severalAnswers = (step: Pick<Step, 'method'>): { multipleAnswers?: boolean } => (step.method === 'approval' ? { multipleAnswers: true } : {});
+
 /** A vote as a poll card, when the session has polls and the method fits one. */
 async function postPoll(w: Work, step: Step): Promise<void> {
   // A question card is the richer form of the same vote; a poll next to it
@@ -410,7 +415,7 @@ async function postPoll(w: Work, step: Step): Promise<void> {
     deliveryClass: 'essential',
     requiredPhases: ['active'],
     text: `${step.title}\n${hint}`,
-    poll: { pollId: pollIdOf(step), question: step.title, options: options.map((o) => ({ id: o.key, label: o.label })), hint },
+    poll: { pollId: pollIdOf(step), question: step.title, options: options.map((o) => ({ id: o.key, label: o.label })), hint, ...severalAnswers(step) },
   });
   await w.event('poll_posted', 'engine', { stepId: step.id, round: step.round });
 }

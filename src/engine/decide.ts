@@ -25,6 +25,7 @@ import { abortInWork, announceVote, displayNameOf, markEnded, onOpened, releaseC
 import { openResultClosing, setResultFinal, stopResultClosing } from './closing.js';
 import { resolveImport } from './imports.js';
 import { onMembershipChange } from './membership.js';
+import { blockingProposal } from './proposals.js';
 import { registerJobHandler } from './scheduler.js';
 import { closingSummary } from './protocol.js';
 import { onHeldDecisionRetry, verifyElectorate, windowMayPass } from './electorate.js';
@@ -95,7 +96,7 @@ export async function evaluateStep(w: Pick<Work, 'tx' | 'f' | 'now'>, step: Step
     closeRule: effectiveCloseRule(w.f),
     deadlineReached,
     ...(step.method === 'consent' && step.roundDeadline ? { windowEnded: w.now.getTime() >= step.roundDeadline.getTime() } : {}),
-    hasOpenProposal: (await store.openProposal(w.tx, w.f.id)) !== undefined,
+    hasOpenProposal: (await blockingProposal(w)) !== undefined,
   });
 }
 

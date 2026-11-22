@@ -91,8 +91,11 @@ export function followupTools(engine: FacilitationEngine): ToolDefinition[] {
         const address = optionalString(args, 'address');
         const disclosure = oneOf(args, 'disclosure', DISCLOSURES) ?? 'existence';
         return engine.core.work(f.id, async (w) => {
-          await proposeStakeholder(w, { displayName: requiredString(args, 'name'), ...(address ? { address } : {}), role, disclosure, addedBy: ctx.callerPrincipalId ?? 'facilitator' });
-          return 'Put to the group. The person becomes a stakeholder only when nobody objects.';
+          const { proposed } = await proposeStakeholder(w, { displayName: requiredString(args, 'name'), ...(address ? { address } : {}), role, disclosure, addedBy: ctx.callerPrincipalId ?? 'facilitator' });
+          if (proposed) return 'Put to the group. The person becomes a stakeholder only when nobody objects.';
+          return w.f.phase === 'configuring'
+            ? 'Noted. Nothing was posted yet: it is put to the group once the facilitation is open. The person becomes a stakeholder only when nobody objects.'
+            : 'Noted. Another proposal is being decided; it is put to the group afterwards. The person becomes a stakeholder only when nobody objects.';
         });
       },
     ),

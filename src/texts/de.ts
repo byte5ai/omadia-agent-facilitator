@@ -470,6 +470,7 @@ export const de: Texts = {
   // ── zweckgebundene Fähigkeiten ───────────────────────────────────────────
   stakeholderRoles: { receives_protocol: 'das Protokoll erhält', invited_to_followups: 'zu Folgeterminen eingeladen wird' },
   proposeStakeholder: (name, role) => `${name} als Stakeholder aufnehmen, der bzw. die ${role}`,
+  stakeholdersDeferred: () => 'Den Vorschlag zu den Stakeholdern stelle ich zurück, bis das hier entschieden ist, und lege ihn euch danach erneut vor.',
   proposeFollowupMeeting: (subject, minutes, from, to) =>
     `nach dem Abschluss suche ich eine gemeinsame freie Zeit und verschicke die Einladung für "${subject}" (${String(minutes)} Minuten, zwischen ${from} und ${to}). Dafür lese ich nur, wann jemand belegt ist, nie, was die Termine sind`,
   capabilityLog: {
