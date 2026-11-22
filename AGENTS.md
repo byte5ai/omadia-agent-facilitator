@@ -53,6 +53,19 @@ byte5ai/omadia `docs/adr/`.
     with growing gaps, inside its closing's dispatch limit; an unknown outcome is never sent
     again (criterion 34).
 
+- **Which definition of done the engine checks (spec 5.2, 5.5, 5.7; checked for #2068).**
+  An agreed wording is stored with criteria derived from the agenda (`criteriaFor` in
+  `lifecycle.ts`): with a deciding step it is `decisions_reached`, with only a closing step
+  `all_steps_closed`; with neither it is free text (`criteria` null). Only free text, or a
+  consent decision in the session, makes a summary wait for group confirmation. This is
+  intended: §9 criterion 1 has an agreed definition of done and a ranked vote, and the
+  fourth vote concludes with no consent round, so "A venue is chosen" next to a vote is
+  machine-checkable. Making every agreed wording free text was tried and breaks
+  criteria 1 to 3, 14, 15 and 18 (221 failing tests). The open risk: a wording that asks
+  for more than the agenda decides ("chosen and booked") is closed by the vote alone. The
+  way to handle that is a separate agenda step, or showing in the handshake what is
+  checked automatically. A rewording (`proposeChange`) keeps the current criteria.
+
 ## Result status and delivery status (spec 5.2, 5.11; ADR "Facilitation closing procedure")
 
 - Every closing event (the result of `concluding`, an abort, the close of one session) is one

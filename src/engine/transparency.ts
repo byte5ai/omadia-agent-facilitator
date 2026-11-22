@@ -129,7 +129,8 @@ export async function proposeChange(w: Work, change: ChangeRequest, proposer: { 
       const version = await store.addDodVersion(w.tx, {
         facilitationId: w.f.id,
         text: change.text,
-        // A reworded definition is free text until the engine is told otherwise.
+        // A rewording keeps what the engine checks: the agenda decides that
+        // (AGENTS.md, "Which definition of done the engine checks").
         criteria: (await store.currentDod(w.tx, w.f.id))?.criteria ?? null,
         proposedBy: proposer.principalId,
         proposalMessageId: proposer.messageId ?? null,
