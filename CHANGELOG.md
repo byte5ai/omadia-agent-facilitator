@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0
 
 ### Compatibility (#2090, ADR-0030 in byte5ai/omadia)
 
