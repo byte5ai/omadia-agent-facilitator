@@ -19,7 +19,7 @@ import { initiatorName, isPlaceholderName } from './names.js';
 import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
 import { verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames, listKnown } from './roll.js';
-import { openProposal, registerProposalKind } from './proposals.js';
+import { blockingProposal, openProposal, registerProposalKind } from './proposals.js';
 import { voteCardFits } from './cards.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
@@ -266,7 +266,7 @@ export async function closeOnRequest(w: Work, askedBy: string | undefined): Prom
   if (dod?.criteria) throw new Refusal('machine_checkable', 'This definition of done is checked automatically. The facilitation concludes by itself when it is met; there is nothing to confirm.');
   const active = (await store.listParticipants(w.tx, w.f.id)).filter((p) => p.status === 'active');
   const asker = askedBy === undefined ? undefined : active.find((p) => p.principalId === askedBy);
-  if (asker && active.length === 1 && everybodyKnown(w.f) && !(await store.openProposal(w.tx, w.f.id)) && (await verifyElectorate(w)).verified && (await activeCount(w)) === 1) {
+  if (asker && active.length === 1 && everybodyKnown(w.f) && !(await blockingProposal(w)) && (await verifyElectorate(w)).verified && (await activeCount(w)) === 1) {
     await w.event('dod_met', asker.principalId, { by: 'the only participant' });
     await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
     w.bump();
@@ -276,7 +276,7 @@ export async function closeOnRequest(w: Work, askedBy: string | undefined): Prom
   // The final summary is put to the group for confirmation inside the
   // closing (spec 5.2): its window starts once it is delivered; only a
   // standing objection at its end keeps it from being confirmed.
-  if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
+  if (await blockingProposal(w)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
   await w.event('close_requested', asker?.principalId ?? 'facilitator', {});
   await w.tx.query(`UPDATE plg_omadia_agent_facilitator_steps SET status = 'closed', closed_at = $2 WHERE facilitation_id = $1 AND status <> 'closed'`, [w.f.id, w.now]);
   w.bump();

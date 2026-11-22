@@ -20,7 +20,7 @@ import { PRIORITY, isNo, isYes, registerInboundHandler } from './inbound.js';
 import type { InboundHandler } from './inbound.js';
 import { cancelJobs, scheduleJob } from './jobs.js';
 import { announceStepOpened, announceVote, facilitatorName, rulesOf, setStepOpener } from './lifecycle.js';
-import { agree, decideProposal, isAgreement, openProposal, registerProposalKind } from './proposals.js';
+import { agree, blockingProposal, decideProposal, isAgreement, openProposal, registerProposalKind } from './proposals.js';
 import { closingSummary } from './protocol.js';
 import { registerJobHandler } from './scheduler.js';
 import { effectiveCloseRule, expectedNames } from './roll.js';
@@ -239,7 +239,7 @@ async function timeboxEnded(w: Work, stepId: string): Promise<void> {
     w.post({ purpose: 'timebox_over', key: step.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], text: t.timeboxOverVote(step.title, active.filter((p) => !cast.has(p.principalId)).length) });
     return;
   }
-  if (await store.openProposal(w.tx, w.f.id)) {
+  if (await blockingProposal(w)) {
     // The open proposal is decided first; ask again shortly.
     const retry = new Date(w.now.getTime() + 5 * MINUTE_MS);
     await scheduleJob(w, 'timebox_end', `${step.id}:${retry.toISOString()}`, retry, { stepId: step.id });
@@ -323,7 +323,7 @@ const movingOn: InboundHandler = async ({ w, record, author, command }) => {
     // In a vote the word asks to close it now: a change of its rule, which
     // the group decides.
     if ((await castBallots(w, step)).length === 0) return voteOpenHint(w, step, record.eventId, 'no_votes');
-    if (await store.openProposal(w.tx, w.f.id)) {
+    if (await blockingProposal(w)) {
       w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).proposalBusy() });
       return { outcome: 'move_on_busy' };
     }
@@ -332,7 +332,7 @@ const movingOn: InboundHandler = async ({ w, record, author, command }) => {
     return { outcome: 'move_on' };
   }
   if (step.method !== null || !ENDED_BY_THE_GROUP.has(step.kind)) return undefined;
-  if (await store.openProposal(w.tx, w.f.id)) {
+  if (await blockingProposal(w)) {
     w.post({ purpose: 'proposal_busy', key: record.eventId, to: 'group', deliveryClass: 'droppable', versionBound: false, text: texts(w.f.language).proposalBusy() });
     return { outcome: 'move_on_busy' };
   }

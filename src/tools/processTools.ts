@@ -11,7 +11,7 @@ import type { Work } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
 import { castBallots } from '../engine/decide.js';
 import { balanceOf, closeStep, extendStep, inviteSilentVoices, isChoiceVote, numberedContributions, proposeClusters, proposeVoteClose, setDecision, voteClosesLine } from '../engine/process.js';
-import { openProposal } from '../engine/proposals.js';
+import { blockingProposal, openProposal } from '../engine/proposals.js';
 import { closeOnRequest } from '../engine/transparency.js';
 import { principalKey } from '../kernel.js';
 import { protocolFor } from '../engine/governance.js';
@@ -75,13 +75,13 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
             // Closing a vote early is the group's decision, never the facilitator's.
             const closes = voteClosesLine(w.f, step);
             if ((await castBallots(w, step)).length === 0) throw new Refusal('no_votes', `Nobody has voted yet, so there is nothing to count. ${closes} Tell the group that, in your own words. Nothing was changed.`);
-            if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
+            if (await blockingProposal(w)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
             await proposeVoteClose(w, step, ctx.callerPrincipalId ?? 'facilitator');
             return `Proposed to the group: close this vote now and count the votes cast. It is NOT closed yet: it closes when everybody agreed, or when nobody objected within ${String(w.f.settings.confirmWindowMinutes)} minutes; with an objection it stays open. ${closes} The proposal was posted in the group; do not repeat it and do not say the vote is closed.`;
           }
           if (step.method !== null && step.options.length > 0) throw new Refusal('deciding_step', `This step is decided by its method (${step.method}) and closes when its result is in: for consent when nobody objects, for an assignment when every item has an owner who confirmed. Say that to the group. Nothing was changed.`);
           if (step.kind === 'close') throw new Refusal('closing_step', 'The closing step ends when the group confirmed the summary.');
-          if (await store.openProposal(w.tx, w.f.id)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
+          if (await blockingProposal(w)) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
           const invited = await inviteSilentVoices(w, step);
           if (invited > 0) {
             return `Not closed yet: ${String(invited)} ${invited === 1 ? 'person has' : 'people have'} not contributed to this step. They were invited privately and a neutral line was posted in the group. Give them a moment, then call close again. Do not name them.`;
@@ -90,7 +90,7 @@ export function processTools(engine: FacilitationEngine): ToolDefinition[] {
           // The last step of a facilitation whose definition of done is free
           // text: nothing would close it now, so the close follows at once.
           const rest = (await store.listSteps(w.tx, w.f.id)).filter((s) => s.status !== 'closed');
-          if (w.f.phase === 'active' && rest.length === 0 && !(await store.currentDod(w.tx, w.f.id))?.criteria && !(await store.openProposal(w.tx, w.f.id))) {
+          if (w.f.phase === 'active' && rest.length === 0 && !(await store.currentDod(w.tx, w.f.id))?.criteria && !(await blockingProposal(w))) {
             const how = await closeOnRequest(w, ctx.callerPrincipalId === undefined ? undefined : principalKey({ id: ctx.callerPrincipalId }));
             return how === 'concluded'
               ? 'Closed, and it was the last step: the facilitation is concluded and the result was posted in the group. Do not repeat it and do not call facilitation_close.'

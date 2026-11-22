@@ -129,7 +129,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           participants: { type: 'array', items: { type: 'string' }, description: 'The names of the participants, when the request names them ("only Anna and Bert", "just me"). They are the list then: it closes when all of them have contributed, and nobody else is counted. The person who asked always takes part and need not be listed. Leave it out when the request names nobody: then the members of the conversation take part. Where the channel cannot list the members, a vote needs either this list or a deadline.' },
           stakeholders: {
             type: 'array',
-            description: 'People the request names who should get the result or the protocol, or be invited to follow-up meetings, without taking part ("send the protocol to our boss Maria", "invite Tom from IT to the follow-up"). Pass every one of them here: the engine puts them to the group as one proposal right away; only a stakeholder the group confirmed is ever written to. Somebody who is not in this conversation needs a mail address; leave the address out if the request gives none and ask for it.',
+            description: 'People the request names who should get the result or the protocol, or be invited to follow-up meetings, without taking part ("send the protocol to our boss Maria", "invite Tom from IT to the follow-up"). Pass every one of them here: the engine records them and puts them to the group as one proposal once the facilitation is open; only a stakeholder the group confirmed is ever written to. Somebody who is not in this conversation needs a mail address; leave the address out if the request gives none and ask for it.',
             items: {
               type: 'object',
               properties: {
@@ -220,9 +220,7 @@ export function lifecycleTools(engine: FacilitationEngine): ToolDefinition[] {
           return [opened.posted ? `${what} and opened.` : `${what}.`, `Participants: ${people}.`, ...notes, opened.text].join('\n');
         }
         return [
-          named.posted
-            ? `${what}, phase: configuring. It is NOT open: only the stakeholder proposal was posted in the group, and nothing is recorded yet.`
-            : `${what}, phase: configuring. It is NOT open: nothing was posted in the group and nothing is recorded yet.`,
+          `${what}, phase: configuring. It is NOT open: nothing was posted in the group and nothing is recorded yet.`,
           `Participants: ${people}.`,
           ...notes,
           'Do not tell the group that it started or is running. Either ask the group to confirm the setup and call facilitation_open once they did, or, if the request already fixed everything, call facilitation_open now.',

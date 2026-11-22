@@ -26,7 +26,7 @@ import type { EngineCore, Work } from './core.js';
 import { Refusal } from './core.js';
 import { onClosed } from './decide.js';
 import { onClosingEnded } from './closing.js';
-import { onAborted } from './lifecycle.js';
+import { onAborted, onOpened } from './lifecycle.js';
 import { getClosing, listClosings } from './resultStatus.js';
 import { scheduleJob } from './jobs.js';
 import { openProposal, registerProposalKind } from './proposals.js';
@@ -441,30 +441,50 @@ export interface StakeholderInput {
 }
 
 /** Add a stakeholder: only after the group confirmed. */
-export async function proposeStakeholder(w: Work, input: StakeholderInput & { addedBy: string }): Promise<Stakeholder> {
-  const [stakeholder] = await proposeStakeholders(w, [input], input.addedBy);
-  return stakeholder as Stakeholder;
+export async function proposeStakeholder(w: Work, input: StakeholderInput & { addedBy: string }): Promise<StakeholderProposal> {
+  return proposeStakeholders(w, [input], input.addedBy);
 }
+
+export interface StakeholderProposal {
+  stakeholders: Stakeholder[];
+  /** Put to the group now; false: recorded and queued (in `configuring`, or
+   *  while another proposal is decided). */
+  proposed: boolean;
+}
+
+/** Why a stakeholder cannot be recorded: a mail address that is none, or
+ *  somebody outside the conversation without one. Undefined: fine. */
+export function stakeholderProblem(input: StakeholderInput, participants: readonly Participant[]): 'bad_address' | 'needs_address' | undefined {
+  if (input.address !== undefined && !MAIL_ADDRESS.test(input.address)) return 'bad_address';
+  if (input.address === undefined && !knownParticipant(participants, input.displayName)) return 'needs_address';
+  return undefined;
+}
+
+const knownParticipant = (participants: readonly Participant[], name: string): Participant | undefined =>
+  participants.find((p) => p.displayName.toLowerCase() === name.toLowerCase());
 
 /**
  * Several stakeholders in ONE proposal: only one proposal is open at a time,
  * and a start request that names two people must not lose the second (spec
  * 5.7: stakeholders are agreed by group consent, §5.2 Prepare). The group
  * confirms or refuses them together; nobody is written to before.
+ *
+ * In `configuring` nothing is posted (spec 5.2: the facilitation goes public
+ * with its opening handshake): the rows wait, unconfirmed, and are put to the
+ * group once it is active. While another proposal is open they wait too.
  */
-export async function proposeStakeholders(w: Work, inputs: readonly StakeholderInput[], addedBy: string): Promise<Stakeholder[]> {
+export async function proposeStakeholders(w: Work, inputs: readonly StakeholderInput[], addedBy: string): Promise<StakeholderProposal> {
   if (w.f.phase !== 'active' && w.f.phase !== 'configuring') throw new Refusal('not_active', `The facilitation is ${w.f.phase}.`);
   if (inputs.length === 0) throw new Refusal('bad_input', 'Name at least one stakeholder.');
   const participants = await store.listParticipants(w.tx, w.f.id);
-  const resolved = inputs.map((input) => {
-    if (input.address !== undefined && !MAIL_ADDRESS.test(input.address)) throw new Refusal('bad_input', `That is not a mail address: ${input.address}.`);
-    const known = participants.find((p) => p.displayName.toLowerCase() === input.displayName.toLowerCase());
-    if (!known && input.address === undefined) throw new Refusal('bad_input', `A stakeholder who is not in this conversation needs a mail address: ${input.displayName}.`);
-    return { input, known };
-  });
-  const t = texts(w.f.language);
+  for (const input of inputs) {
+    const problem = stakeholderProblem(input, participants);
+    if (problem === 'bad_address') throw new Refusal('bad_input', `That is not a mail address: ${input.address ?? ''}.`);
+    if (problem === 'needs_address') throw new Refusal('bad_input', `A stakeholder who is not in this conversation needs a mail address: ${input.displayName}.`);
+  }
   const stakeholders: Stakeholder[] = [];
-  for (const { input, known } of resolved) {
+  for (const input of inputs) {
+    const known = knownParticipant(participants, input.displayName);
     stakeholders.push(
       await insert<Stakeholder>(w.tx, 'plg_omadia_agent_facilitator_stakeholders', {
         facilitationId: w.f.id,
@@ -478,15 +498,42 @@ export async function proposeStakeholders(w: Work, inputs: readonly StakeholderI
       }),
     );
   }
+  const proposed = await proposePendingStakeholders(w);
+  if (!proposed && w.f.phase === 'active') await queueStakeholderProposal(w);
+  return { stakeholders, proposed };
+}
+
+/** How long a queued stakeholder proposal waits before it asks again. */
+const STAKEHOLDER_RETRY_MS = 5 * 60 * 1000;
+
+/** Ask again later; the job only proposes when nothing else is open. */
+async function queueStakeholderProposal(w: Work, delayMs = STAKEHOLDER_RETRY_MS): Promise<void> {
+  const due = new Date(w.now.getTime() + delayMs);
+  await scheduleJob(w, 'stakeholder_proposal', String(due.getTime()), due);
+}
+
+/**
+ * Put every stakeholder the group has not decided on yet to it as one
+ * proposal, when the facilitation is active and no proposal is open. False:
+ * nothing was posted (nothing pending, not active, or another proposal open).
+ */
+export async function proposePendingStakeholders(w: Work): Promise<boolean> {
+  if (w.f.phase !== 'active' || (await store.openProposal(w.tx, w.f.id))) return false;
+  const pending = (await store.listStakeholders(w.tx, w.f.id)).filter((s) => !s.confirmed);
+  const first = pending[0];
+  if (!first) return false;
+  const t = texts(w.f.language);
   await openProposal(w, {
     kind: 'stakeholder',
-    summary: inputs.map((i) => t.proposeStakeholder(i.displayName, t.stakeholderRoles[i.role])).join('; '),
-    payload: { stakeholderIds: stakeholders.map((s) => s.id), names: inputs.map((i) => i.displayName) },
-    proposedBy: addedBy,
+    summary: pending.map((s) => t.proposeStakeholder(s.displayName ?? s.address ?? '', t.stakeholderRoles[s.role])).join('; '),
+    payload: { stakeholderIds: pending.map((s) => s.id), names: pending.map((s) => s.displayName ?? s.address ?? '') },
+    proposedBy: first.addedBy,
     windowMinutes: w.f.settings.confirmWindowMinutes,
   });
-  return stakeholders;
+  return true;
 }
+
+const hasPendingStakeholders = async (w: Work): Promise<boolean> => (await store.listStakeholders(w.tx, w.f.id)).some((s) => !s.confirmed);
 
 const MAIL_ADDRESS = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -591,6 +638,23 @@ export function installCapabilities(): void {
     reject: async (w, p) => {
       await w.tx.query('DELETE FROM plg_omadia_agent_facilitator_stakeholders WHERE id = ANY($1::uuid[]) AND confirmed = false', [proposedStakeholderIds(p.payload)]);
     },
+    // A step close, the binding close or a media consent never waits for it:
+    // it is set aside (its people stay pending) and asked again afterwards.
+    yields: async (w, p) => {
+      w.post({ purpose: 'stakeholders_deferred', key: p.id, to: 'group', deliveryClass: 'droppable', requiredPhases: ['active'], text: texts(w.f.language).stakeholdersDeferred() });
+      await queueStakeholderProposal(w);
+    },
+  });
+  registerJobHandler('stakeholder_proposal', async (w, job) => {
+    if (w.f.phase !== 'active' || (await proposePendingStakeholders(w)) || !(await hasPendingStakeholders(w))) return;
+    // Another proposal is open: ask again later, once (one waiting job is enough).
+    const waiting = await w.tx.query(`SELECT 1 FROM plg_omadia_agent_facilitator_jobs WHERE facilitation_id = $1 AND kind = 'stakeholder_proposal' AND status = 'pending' AND id <> $2`, [w.f.id, job.id]);
+    if (waiting.rows.length === 0) await queueStakeholderProposal(w);
+  });
+  // Stakeholders named while it was being set up go to the group once it is
+  // open, after the opening handshake and the first step (spec 5.2, 5.7).
+  onOpened(async (w) => {
+    if (await hasPendingStakeholders(w)) await queueStakeholderProposal(w, 0);
   });
 
   registerProposalKind('followup_meeting', {

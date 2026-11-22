@@ -1,11 +1,12 @@
 // Stakeholders named in a start request (spec 5.2 Prepare, 5.7 group consent).
 // The model keeps no memory between messages, so a stakeholder the request
-// names is put to the group in the same call that sets the facilitation up;
-// otherwise it was lost (live finding 2026-11-21).
+// names is recorded in the same call that sets the facilitation up; otherwise
+// it was lost (live finding 2026-11-21). It is put to the group once the
+// facilitation is open.
 
 import * as store from '../db/store.js';
 import type { StakeholderRole } from '../model.js';
-import { newStakeholders, proposeStakeholders } from '../engine/capabilities.js';
+import { newStakeholders, proposeStakeholders, stakeholderProblem } from '../engine/capabilities.js';
 import type { StakeholderInput } from '../engine/capabilities.js';
 import { Refusal } from '../engine/core.js';
 import type { FacilitationEngine } from '../engine/engine.js';
@@ -29,9 +30,14 @@ export function stakeholderList(args: Record<string, unknown>): StakeholderInput
 }
 
 /**
- * Put the named stakeholders the group has not seen yet to the group as one
- * proposal. Never fails the start: what could not be proposed comes back as
- * notes for the facilitator (ask for a mail address, propose later).
+ * Record the named stakeholders the group has not seen yet. In `configuring`
+ * they wait for the opening (nothing is posted before it, spec 5.2); once
+ * active they go to the group as one proposal, or wait for an open one.
+ * Read and write happen in one unit of work, under the facilitation's lock,
+ * so a repeated or concurrent call never records the same person twice.
+ * Every entry is checked on its own: one bad address does not hold up the
+ * others, and each one left out gets its own note for the facilitator.
+ * Never fails the start.
  */
 export async function proposeNamedStakeholders(
   engine: FacilitationEngine,
@@ -40,29 +46,32 @@ export async function proposeNamedStakeholders(
   addedBy: string,
 ): Promise<{ notes: string[]; posted: boolean }> {
   if (named.length === 0) return { notes: [], posted: false };
-  const fresh = await newStakeholders(engine.core.db(), facilitationId, named);
-  if (fresh.length === 0) return { notes: [], posted: false };
-  const needAddress = fresh.filter((s) => s.address === undefined);
-  const notes: string[] = [];
-  let posted = false;
   try {
-    const proposed = await engine.core.work(facilitationId, async (w) => {
-      const participants = new Set((await store.listParticipants(w.tx, facilitationId)).map((p) => p.displayName.toLowerCase()));
-      const ready = fresh.filter((s) => s.address !== undefined || participants.has(s.displayName.toLowerCase()));
-      if (ready.length > 0) await proposeStakeholders(w, ready, addedBy);
-      return ready;
+    return await engine.core.work(facilitationId, async (w) => {
+      const fresh = await newStakeholders(w.tx, facilitationId, named);
+      const participants = await store.listParticipants(w.tx, facilitationId);
+      const notes: string[] = [];
+      const ready: StakeholderInput[] = [];
+      for (const s of fresh) {
+        const problem = stakeholderProblem(s, participants);
+        if (problem === 'bad_address') notes.push(`Not noted as a stakeholder: ${s.displayName}. "${s.address ?? ''}" is not a mail address. Ask for the correct address, then call facilitation_stakeholder.`);
+        else if (problem === 'needs_address') notes.push(`Not noted as a stakeholder: ${s.displayName}. Not in this conversation and no mail address given. Ask for the address, then call facilitation_stakeholder.`);
+        else ready.push(s);
+      }
+      if (ready.length === 0) return { notes, posted: false };
+      const { proposed } = await proposeStakeholders(w, ready, addedBy);
+      const names = ready.map((s) => s.displayName).join(', ');
+      notes.unshift(
+        proposed
+          ? `Stakeholders put to the group as one proposal: ${names}. That proposal is already in the group; do not repeat it.`
+          : w.f.phase === 'configuring'
+            ? `Stakeholders noted: ${names}. Nothing was posted about them yet: they are put to the group as one proposal once the facilitation is open. Do not propose them yourself.`
+            : `Stakeholders noted: ${names}. Another proposal is being decided; they are put to the group as one proposal afterwards. Do not propose them yourself.`,
+      );
+      return { notes, posted: proposed };
     });
-    if (proposed.length > 0) {
-      posted = true;
-      notes.push(`Stakeholders put to the group as one proposal: ${proposed.map((s) => s.displayName).join(', ')}. That proposal is already in the group; do not repeat it.`);
-    }
-    const missing = needAddress.filter((s) => !proposed.includes(s));
-    if (missing.length > 0) {
-      notes.push(`Not in this conversation and no mail address given: ${missing.map((s) => s.displayName).join(', ')}. Ask for the address, then call facilitation_stakeholder.`);
-    }
   } catch (err) {
     if (!(err instanceof Refusal)) throw err;
-    notes.push(`The stakeholders ${fresh.map((s) => s.displayName).join(', ')} could not be put to the group yet (${err.message}). Call facilitation_stakeholder for them once the open proposal is decided.`);
+    return { notes: [`The stakeholders ${named.map((s) => s.displayName).join(', ')} could not be noted (${err.message}). Call facilitation_stakeholder for them later.`], posted: false };
   }
-  return { notes, posted };
 }
