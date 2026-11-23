@@ -548,6 +548,7 @@ export async function configureFacilitation(engine: EngineCore, request: Configu
           changeWindowHours: config.changeWindowHours,
           runoffWindowHours: config.runoffWindowHours,
           confirmWindowMinutes: config.confirmWindowMinutes,
+          liveConfirmWindowMinutes: config.liveConfirmWindowMinutes,
           rankedPoints: [...config.rankedPoints],
           ...(config.defaultDecisionMethod ? { defaultDecisionMethod: config.defaultDecisionMethod } : {}),
           scoped: true,

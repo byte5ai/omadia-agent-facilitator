@@ -20,6 +20,9 @@ export interface EngineConfig {
   readonly changeWindowHours: number;
   readonly runoffWindowHours: number;
   readonly confirmWindowMinutes: number;
+  /** The window of a proposal put while a live session runs (spec 5.7:
+   *  shorter for a live session, default 5 minutes). */
+  readonly liveConfirmWindowMinutes: number;
   /** Points per rank, first rank first. */
   readonly rankedPoints: readonly number[];
   readonly actionReminderLeadHours: number;
@@ -56,6 +59,7 @@ export const CONFIG_DEFAULTS: EngineConfig = {
   changeWindowHours: 12,
   runoffWindowHours: 12,
   confirmWindowMinutes: 30,
+  liveConfirmWindowMinutes: 5,
   rankedPoints: [3, 2, 1],
   actionReminderLeadHours: 24,
   retentionDays: 90,
@@ -139,6 +143,7 @@ export const CONFIG_KEYS = [
   'change_window_hours',
   'runoff_window_hours',
   'confirm_window_minutes',
+  'live_confirm_window_minutes',
   'ranked_points',
   'action_reminder_lead_hours',
   'retention_days',
@@ -217,6 +222,7 @@ export function parseConfig(read: ConfigReader, log: (msg: string) => void = () 
     changeWindowHours: positive('change_window_hours', CONFIG_DEFAULTS.changeWindowHours),
     runoffWindowHours: positive('runoff_window_hours', CONFIG_DEFAULTS.runoffWindowHours),
     confirmWindowMinutes: positive('confirm_window_minutes', CONFIG_DEFAULTS.confirmWindowMinutes),
+    liveConfirmWindowMinutes: positive('live_confirm_window_minutes', CONFIG_DEFAULTS.liveConfirmWindowMinutes),
     rankedPoints: list('ranked_points', CONFIG_DEFAULTS.rankedPoints),
     actionReminderLeadHours: positive('action_reminder_lead_hours', CONFIG_DEFAULTS.actionReminderLeadHours),
     retentionDays: positive('retention_days', CONFIG_DEFAULTS.retentionDays, { integer: true }),

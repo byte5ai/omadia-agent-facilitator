@@ -136,6 +136,7 @@ All fields are optional; defaults in brackets.
 | `change_window_hours` [12] | consent window for rule changes |
 | `runoff_window_hours` [12] | runoff after a tie |
 | `confirm_window_minutes` [30] | clusters, summaries, closing a step |
+| `live_confirm_window_minutes` [5] | the same while a meeting runs (spec 5.7) |
 | `ranked_points` [3,2,1] | points per rank |
 | `action_reminder_lead_hours` [24] | reminder before an action item is due |
 | `retention_days` [90] | records are deleted this long after the close |
