@@ -229,3 +229,21 @@ test('criterion 59: at the deadline the last session closes and the evaluation w
     assert.equal(after.settings.deadlineWait, undefined);
   }
 });
+
+test('#60: a topic parked during the session is an open point of its summary; one parked before it is not', { skip: PG_SKIP }, async () => {
+  const conv = h.kernel.conversation('sc-parked', [ANNA, BERT, CARA]);
+  h.kernel.capabilities(conv, ['text'], ['text', 'private_messages'], { sessionRef: 'meet-parked', modality: 'online' });
+  await tool(conv, 'facilitation_start', { goal: 'Tooling', definitionOfDone: 'A tool is chosen', agenda: [{ kind: 'collect', title: 'Topics' }, { kind: 'close', title: 'Close' }] });
+  await tool(conv, 'facilitation_open');
+  await tool(conv, 'facilitation_park', { topic: 'Travel budget' });
+  await tool(conv, 'facilitation_session', { action: 'schedule', title: 'Call', start: inMinutes(120), end: inMinutes(160), modality: 'online', meetingRef: 'meet-parked' });
+  h.clock.advance(120 * MINUTE_MS);
+  await h.kernel.sessionEvent('mira', conv, 'meet-parked', 'session_started');
+  await h.settle();
+  await tool(conv, 'facilitation_park', { topic: 'Single sign-on for the new tool' });
+  await h.kernel.sessionEvent('mira', conv, 'meet-parked', 'session_ended');
+  await h.settle();
+  const summary = posts(conv).find((p) => p.includes('Summary of the session "Call"')) ?? '';
+  assert.match(summary, /Open points:\n(- .*\n)*- Single sign-on for the new tool\n/, summary);
+  assert.doesNotMatch(summary, /Travel budget/, 'parked before the session');
+});
