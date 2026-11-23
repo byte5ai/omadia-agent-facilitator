@@ -8,7 +8,7 @@ import { after, before, test } from 'node:test';
 
 import { ENGINE_SERVICE_NAME, NO_DATABASE_REASON, OLD_KERNEL_REASON, activate } from '../src/plugin.js';
 import type { FacilitationEngineInfo } from '../src/plugin.js';
-import { FOUR, createHarness, startActive } from './harness.js';
+import { FOUR, createHarness, startActive, textOf } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 import { kernelContext } from './pluginContext.js';
@@ -91,13 +91,13 @@ test('migrations that failed at activation are tried again: the next pass of the
     const { buildTools } = await import('../src/tools/index.js');
     const start = buildTools(handle.engine).find((t) => t.spec.name === 'facilitation_start');
     const args = { goal: 'Pick a venue', definitionOfDone: 'A venue is chosen' };
-    assert.match((await start?.handler(args, h.kernel.context('mira', conv, 'anna'))) ?? '', /^Not available/);
+    assert.match(textOf(await start?.handler(args, h.kernel.context('mira', conv, 'anna'))), /^Not available/);
     await jobs.get('facilitation-tick')?.();
     assert.equal(handle.info.available, false, 'still failing');
     migrations.failing = false;
     await jobs.get('facilitation-tick')?.();
     assert.equal(handle.info.available, true);
-    assert.doesNotMatch((await start?.handler(args, h.kernel.context('mira', conv, 'anna'))) ?? '', /^Not available/);
+    assert.doesNotMatch(textOf(await start?.handler(args, h.kernel.context('mira', conv, 'anna'))), /^Not available/);
   } finally {
     await handle.close();
   }

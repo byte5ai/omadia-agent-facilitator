@@ -20,6 +20,10 @@ export const DAVE: FakeUser = { id: 'dave', displayName: 'Dave', email: 'dave@ex
 export const FOUR = [ANNA, BERT, CARA, DAVE];
 
 /** Words of the machinery that no tool result may contain. */
+/** A tool handler's answer as text: a string, or the `output` of a
+ *  structured result (plugin-api 1.86.0, native tool results). */
+export const textOf = (answer: unknown): string => (typeof answer === 'string' ? answer : answer && typeof answer === 'object' && typeof (answer as { output?: unknown }).output === 'string' ? (answer as { output: string }).output : '');
+
 export const INTERNALS = /\b(engine|kernel|outbox|plugin)\b/i;
 
 export interface Harness {
@@ -66,7 +70,7 @@ export async function createHarness(opts: { config?: Partial<EngineConfig>; star
       const def = buildTools(h.engine).find((t) => t.spec.name === name);
       if (!def) throw new Error(`no tool ${name}`);
       clock.advance(kernel.tickMs);
-      const answer = await def.handler(args, kernel.context(at.agent ?? 'mira', at.conversation, at.caller ?? 'anna'));
+      const answer = textOf(await def.handler(args, kernel.context(at.agent ?? 'mira', at.conversation, at.caller ?? 'anna')));
       await h.settle();
       // A model may repeat a tool result to the group word for word: no
       // result speaks of the machinery.

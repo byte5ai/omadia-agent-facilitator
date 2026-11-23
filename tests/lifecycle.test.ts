@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
 import * as store from '../src/db/store.js';
-import { ANNA, BERT, CARA, DAVE, FOUR, createHarness, startActive } from './harness.js';
+import { ANNA, BERT, CARA, DAVE, FOUR, createHarness, startActive, textOf } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -67,8 +67,8 @@ test('a tool call without kernel context is refused; there is no "latest facilit
   await startActive(h, conv);
   const { buildTools } = await import('../src/tools/index.js');
   const status = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_status');
-  assert.match((await status?.handler({})) ?? '', /a facilitation is never guessed/);
-  assert.match((await status?.handler({ conversationId: conv }, { agentSlug: 'mira', channelType: 'teams' })) ?? '', /never guessed/, 'a conversation id as a tool argument is ignored');
+  assert.match(textOf(await status?.handler({})), /a facilitation is never guessed/);
+  assert.match(textOf(await status?.handler({ conversationId: conv }, { agentSlug: 'mira', channelType: 'teams' })), /never guessed/, 'a conversation id as a tool argument is ignored');
   const other = h.kernel.conversation('lc-ctx-other', FOUR);
   assert.match(await h.tool('facilitation_status', {}, { conversation: other }), /^Refused \(no_facilitation\)/);
 });

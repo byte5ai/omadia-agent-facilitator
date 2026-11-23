@@ -584,7 +584,7 @@ test('17. timebox: when it ends the facilitator summarises and the group decides
   await h.tick();
   await everybody(conv, 'agreed');
   const tail = posts(conv).slice(-3);
-  assert.equal(tail[0], 'Accepted, nobody objected: close "Collect ideas" and move on');
+  assert.equal(tail[0], 'Accepted (agreed: 4, no objection): close "Collect ideas" and move on');
   assert.equal(tail[1], '"Collect ideas" is closed.');
   assert.match(tail[2] ?? '', /^Step 2 of 2: Discuss\./);
   const steps = await store.listSteps(h.db.pool, f.id);
@@ -673,6 +673,10 @@ test('18. online meeting with chat and cards only', { skip: PG_SKIP }, async () 
   const mailed = followup.mails.filter((m) => m.subject === subject).flatMap((m) => [...m.recipients]);
   assert.deepEqual(mailed.sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'dave@example.com', 'pia@example.com', 'sam@example.com']);
   assert.deepEqual(followup.mails.filter((m) => m.subject === subject && m.recipients.length === 1).map((m) => m.recipients[0]).sort(), ['pia@example.com', 'sam@example.com'], 'each stakeholder their own protocol');
+  // One dispatch grant for all of these mails, revoked after the last one.
+  const dispatch = h.kernel.grants.filter((g) => g.processId === f.id && g.kind === 'protocol_dispatch');
+  assert.equal(dispatch.length, 1, 'one grant for the whole dispatch');
+  assert.ok(dispatch[0]?.revokedAt, 'revoked once the sends are confirmed');
   const invitation = followup.invitations.at(-1);
   assert.equal(invitation?.subject, 'Tooling follow-up');
   assert.deepEqual([...(invitation?.attendees ?? [])].sort(), ['anna@example.com', 'bert@example.com', 'cara@example.com', 'dave@example.com']);
@@ -726,7 +730,7 @@ test('20. scoped capabilities: no calendar contents or mailboxes, nobody the gro
   const calls = followup.calls.length;
   const api = await scoped(h.engine.core, f.id);
   // The whole reach: busy intervals, one invitation, one mail. Nothing that reads a mailbox or an appointment.
-  assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'freeBusy', 'grant', 'sendMail']);
+  assert.deepEqual(Object.keys(api).sort(), ['createInvitation', 'dispatchDone', 'freeBusy', 'grant', 'sendMail']);
   assert.ok(!api.grant.allowed.includes('uwe@example.com'), 'a stakeholder the group refused is not in the grant');
   const uninvited = await api.createInvitation({ attendees: ['anna@example.com', 'uwe@example.com'], subject: 's', start: new Date('2026-12-01T09:00:00Z'), end: new Date('2026-12-01T10:00:00Z'), body: '', online: true });
   assert.deepEqual(uninvited, { ok: false, code: 'recipient_not_allowed', detail: 'uwe@example.com' });

@@ -78,8 +78,11 @@ export const SCOPE_BUDGETS: Readonly<Record<ExecutionScopeKind, ExecutionBudget>
 };
 
 /** Model calls reserved for one facilitator turn (main model, helpers and
- *  guards). The reservation is a hard cap of the kernel. */
-export const TURN_MODEL_CALLS = 8;
+ *  guards). The reservation is a hard cap of the kernel; what a turn does
+ *  not use goes back to the scope. Seen live (criterion 18, 2026-11-23): one
+ *  tool call with its answer, three verifier calls and the helpers needed
+ *  nine calls, so eight cut off an ordinary turn. */
+export const TURN_MODEL_CALLS = 16;
 
 /** How long after the agreed time a scope stays open, so that the engine's
  *  own evaluation at that time (the result, a runoff) is still inside it. */

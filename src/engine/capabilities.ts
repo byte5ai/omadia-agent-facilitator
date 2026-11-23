@@ -152,6 +152,16 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     return { ok: false, code: 'grant_refused', detail: issued.message };
   };
 
+  /** The kernel's grants this API used, by kind: what `done` revokes. */
+  const issued = new Map<ExecutionGrantKind, string>();
+  const revoke = async (grantId: string, capability: string): Promise<void> => {
+    try {
+      await engine.deps.kernel.grants()?.revokeGrant(grantId, `${capability} done`);
+    } catch (err) {
+      engine.log(`facilitation ${f.id}: the grant for ${capability} could not be revoked: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const call = async <T extends { outcome: string }>(
     capability: string,
     kind: ExecutionGrantKind,
@@ -167,6 +177,7 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     if (!service) return refuse(capability, 'no_service');
     const granted = await kernelGrant(kind);
     if (!granted.ok) return refuse(capability, granted.code, granted.detail);
+    issued.set(kind, granted.grantId);
     let result: T | FollowupRefusal;
     try {
       result = await withTimeout(run(service, { ...grant, grantId: granted.grantId }), followupLimits.timeoutMs, `the integration (${capability})`);
@@ -184,13 +195,7 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
     await recordEvent(engine, f.id, 'capability_used', 'engine', { capability, summary });
     // The sends are confirmed, or the invitations are out: the grant has
     // done what it was issued for.
-    if (last) {
-      try {
-        await engine.deps.kernel.grants()?.revokeGrant(granted.grantId, `${capability} done`);
-      } catch (err) {
-        engine.log(`facilitation ${f.id}: the grant for ${capability} could not be revoked: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    if (last) await revoke(granted.grantId, capability);
     return { ok: true, value: result as T };
   };
 
@@ -210,8 +215,16 @@ export async function scoped(engine: EngineCore, facilitationId: string) {
         (svc, grant) => svc.createInvitation(grant, { ...request, attendees: request.attendees.map(lower), start: request.start.toISOString(), end: request.end.toISOString() }),
         true,
       ),
+    /** One mail of a dispatch. The dispatch grant covers all its mails: the
+     *  kernel never issues it twice, so it is revoked by `dispatchDone`. */
     sendMail: (recipients: readonly string[], subject: string, body: string) =>
-      call('protocol mail', 'protocol_dispatch', recipients, log.mailed(recipients.length), (svc, grant) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body }), true),
+      call('protocol mail', 'protocol_dispatch', recipients, log.mailed(recipients.length), (svc, grant) => svc.sendMail(grant, { recipients: recipients.map(lower), subject, body })),
+    /** The dispatch is over (every mail sent, or nothing left to retry): its
+     *  grant has done what it was issued for. */
+    dispatchDone: async (): Promise<void> => {
+      const grantId = issued.get('protocol_dispatch');
+      if (grantId) await revoke(grantId, 'protocol mail');
+    },
   };
 }
 
@@ -333,8 +346,10 @@ const protocolMail: ExternalJob = async (engine, job) => {
     const known = (current?.payload['outcomes'] ?? {}) as Record<string, string>;
     for (const [i, mail] of planned.entries()) outcomes.push({ mail, outcome: known[String(i)] === 'sent' ? { ok: true, value: { outcome: 'sent' } } : { ok: false, code: 'unknown_outcome' } });
     if (planned.length === 0) outcomes.push({ mail: { recipients: [] }, outcome: { ok: false, code: 'unknown_outcome' } });
-  } else {
-    const api = await scoped(engine, job.facilitationId);
+  }
+  let api: Awaited<ReturnType<typeof scoped>> | undefined;
+  if (claim.state === 'go') {
+    api = await scoped(engine, job.facilitationId);
     for (const [i, mail] of claim.plan.entries()) {
       const outcome = await api.sendMail(mail.recipients, mail.subject, mail.body);
       outcomes.push({ mail, outcome });
@@ -346,6 +361,7 @@ const protocolMail: ExternalJob = async (engine, job) => {
       ]);
     }
   }
+  let retrying = false;
   await engine.work(job.facilitationId, async (w) => {
     const t = texts(w.f.language);
     const failures = outcomes.filter((o) => !o.outcome.ok);
@@ -356,9 +372,10 @@ const protocolMail: ExternalJob = async (engine, job) => {
     // again while its closing's dispatch runs (spec 5.2 part 4, criterion
     // 34). An unknown outcome is never sent again.
     const retried = await retryRefusedMails(w, job, outcomes);
+    retrying = retried;
     if (sentTo > 0 || (!failed && !retried)) say(w, 'protocol_sent', t.protocolSent(Number(job.payload['channel'] ?? 0), sentTo));
     if (failed && !failed.outcome.ok && failed.outcome.code === 'unknown_outcome') say(w, 'protocol_mail_unknown', t.protocolMailUnknown());
-    else if (failed && !failed.outcome.ok && !retried) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code]));
+    else if (failed && !failed.outcome.ok && !retried) say(w, 'protocol_mail_unavailable', t.protocolMailUnavailable(t.followupReasons[failed.outcome.code], Number(job.payload['channel'] ?? 0)));
     // What became of the mail, per recipient. "Sent" is said of nobody the
     // integration did not confirm.
     const each = (o: ScopedOutcome<unknown>): string => (o.ok ? 'sent' : o.code === 'unknown_outcome' ? 'unknown' : 'not_sent');
@@ -369,6 +386,8 @@ const protocolMail: ExternalJob = async (engine, job) => {
     await w.event('protocol_mail', 'engine', { outcome: code, recipients });
     await finishJob(w, job, { outcome: code });
   });
+  // Nothing of this dispatch is tried again: its grant is done.
+  if (api && !retrying) await api.dispatchDone();
 };
 
 /** Which mail of a protocol dispatch this is: the participants' protocol,

@@ -31,7 +31,7 @@ identity:
   kind: "archetype"
   domain: "facilitation"
   name: "Facilitator archetype"
-  version: "1.7.0"
+  version: "1.8.0"
   description:
     en: "Delivers the archetype facilitator, an impartial moderator of group processes, and runs its facilitations: leads a group through an agreed process to a result the group owns. Records every contribution from authenticated messages, counts deterministically, keeps time from the deadline, and reports to the group first."
     de: "Liefert den Archetyp Facilitator, einen unparteiischen Moderator von Gruppenprozessen, und führt seine Moderationen: führt eine Gruppe durch einen vereinbarten Prozess zu einem Ergebnis, das der Gruppe gehört. Erfasst jeden Beitrag aus authentifizierten Nachrichten, zählt deterministisch, hält die Zeit ab der Deadline und berichtet zuerst an die Gruppe."
@@ -334,10 +334,20 @@ setup:
         en: "Window for confirming proposals (minutes)"
         de: "Fenster für Bestätigungen (Minuten)"
       help:
-        en: "Clusters, summaries and closing a step are proposals: they hold when nobody objects within this window, or at once when everyone agreed."
-        de: "Cluster, Zusammenfassungen und das Schließen eines Schritts sind Vorschläge: Sie gelten, wenn in diesem Fenster niemand widerspricht, oder sofort, wenn alle zugestimmt haben."
+        en: "Clusters, summaries and closing a step are proposals: they hold when nobody objects within this window. Agreeing early, even by everyone, does not end it."
+        de: "Cluster, Zusammenfassungen und das Schließen eines Schritts sind Vorschläge: Sie gelten, wenn in diesem Fenster niemand widerspricht. Frühe Zustimmung, auch von allen, beendet es nicht."
       required: false
       default: 30
+    - key: "live_confirm_window_minutes"
+      type: "number"
+      label:
+        en: "Window for confirming proposals during a meeting (minutes)"
+        de: "Fenster für Bestätigungen während eines Meetings (Minuten)"
+      help:
+        en: "While a meeting runs, a proposal holds when nobody objects within this shorter window."
+        de: "Während ein Meeting läuft, gilt ein Vorschlag, wenn in diesem kürzeren Fenster niemand widerspricht."
+      required: false
+      default: 5
     - key: "ranked_points"
       type: "string"
       label:

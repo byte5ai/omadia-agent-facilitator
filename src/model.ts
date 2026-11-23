@@ -165,6 +165,9 @@ export interface FacilitationSettings {
   changeWindowHours: number;
   runoffWindowHours: number;
   confirmWindowMinutes: number;
+  /** The window of a proposal while a live session runs (spec 5.7). Absent
+   *  in facilitations started before 1.8.0: the default applies. */
+  liveConfirmWindowMinutes?: number;
   /** Points per rank for a ranked vote set later, as at the start (the
    *  facilitator's default, else the instance setting). */
   rankedPoints?: number[];

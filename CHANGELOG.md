@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.8.0
+
+Defects of the live run of spec §9 criterion 18 in a real Teams meeting
+(byte5ai/omadia-channel-teams#44). Runs on kernels from plugin-api 1.82.0 (unchanged).
+
+### Fixed
+
+- A proposal put while a live session runs has the live window, at most
+  `live_confirm_window_minutes` (new setting, default 5; spec 5.7). Before, a step close
+  in a 40-minute meeting held 30 minutes and the next step's poll opened after the meeting.
+- One `protocol_dispatch` grant covers every mail of a dispatch and is revoked when nothing
+  is left to retry. Before, it was revoked after the first mail and the kernel refused the
+  stakeholders' mails (`scope_exists`).
+- An accepted proposal that people agreed to says how many agreed instead of
+  "nobody objected".
+- The mail-failure text and the dispatch notice no longer claim a private delivery when
+  nobody got the protocol privately.
+- The help text of `confirm_window_minutes` no longer says that full agreement ends the
+  window (it never does, spec 5.7).
+- A facilitator turn reserves 16 model calls instead of 8. One tool call plus the verifier
+  needed nine.
+
 ## 1.7.0
 
 ### Compatibility (#2090, ADR-0030 in byte5ai/omadia)

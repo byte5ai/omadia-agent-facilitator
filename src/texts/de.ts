@@ -183,7 +183,7 @@ export const de: Texts = {
   },
   proposalAnnounce: (what, until, extendable, mustReply) =>
     `Vorschlag: ${what}\nEr gilt, wenn bis ${until} niemand widerspricht. ${mustReply ? 'Antwortet auf diese Nachricht mit' : 'Schreibt'} "einverstanden" oder "Einwand: <euer Grund>"${extendable ? ' oder "verlängern 10" für zehn weitere Minuten' : ''}.${mustReply ? ' Nur eine Antwort auf diese Nachricht (oder ein 👍 darauf) zählt dafür.' : ''}`,
-  proposalAccepted: (what) => `Angenommen, niemand hat widersprochen: ${what}`,
+  proposalAccepted: (what, agreed) => (agreed > 0 ? `Angenommen (Zustimmungen: ${String(agreed)}, kein Widerspruch): ${what}` : `Angenommen, niemand hat widersprochen: ${what}`),
   proposalRejected: (what, objections) =>
     `Nicht angenommen: ${what}\n${objections.length === 1 ? 'Stehender Einwand' : 'Stehende Einwände'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,
   proposalObjection: (name, reason) =>
@@ -488,11 +488,15 @@ export const de: Texts = {
   protocolDirect: (name, protocol) => `Hallo ${name}, hier ist das Protokoll der Moderation, an der du teilgenommen hast.\n\n${protocol}`,
   stakeholderPartsWithheld: () => 'Einige Teile dieses Protokolls werden nicht mit dir geteilt (Beiträge und Teile, die du nicht kennen darfst). Frag bei Bedarf die Person, die die Moderation gestartet hat.',
   protocolMailSubject: (goal) => `Protokoll: ${goal}`,
-  protocolSent: (channel, mail) =>
-    `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}` : ''}.`,
+  protocolSent: (channel, mail) => {
+    const mailed = `per Mail an ${String(mail)} ${mail === 1 ? 'Adresse' : 'Adressen'}`;
+    if (channel === 0) return `Das Protokoll ist verschickt: ${mailed}.`;
+    return `Das Protokoll ist verschickt: privat an ${String(channel)} Teilnehmende${mail > 0 ? ` und ${mailed}` : ''}.`;
+  },
   protocolMailNoAddresses: (protocol) =>
     `Ich kann das Protokoll nicht mailen: Dieser Kanal liefert mir keine Mail-Adressen der Teilnehmenden, und im Chat sammle ich keine Adressen ein. ${protocol === undefined ? 'Das Protokoll steht in dieser Gruppe.' : `Hier ist es stattdessen:\n\n${protocol}`}`,
-  protocolMailUnavailable: (reason) => `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe, und die Teilnehmenden haben es privat erhalten, wo ich sie erreiche.`,
+  protocolMailUnavailable: (reason, channel) =>
+    `Das Protokoll konnte nicht gemailt werden (${reason}). Es steht in dieser Gruppe${channel > 0 ? `, und ${String(channel)} Teilnehmende haben es privat erhalten` : ''}.`,
   followupCreated: (subject, when, link, unknown) =>
     `Der Folgetermin "${subject}" steht für ${when} in den Kalendern.${link ? '' : ' Die Einladung ging ohne Meeting-Link raus.'}${unknown > 0 ? ` Für ${String(unknown)} ${unknown === 1 ? 'Person' : 'Personen'} konnte ich keine Verfügbarkeit sehen, prüft die Zeit bitte.` : ''}`,
   protocolMailUnknown: () => 'Ich weiß nicht, ob die Protokoll-Mail rausgegangen ist: Der Maildienst hat nicht geantwortet. Ich sende sie nicht noch einmal, damit niemand sie doppelt bekommt. Bitte prüft das oder teilt das Protokoll aus dieser Gruppe.',

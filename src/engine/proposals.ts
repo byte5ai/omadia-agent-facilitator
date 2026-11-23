@@ -11,6 +11,7 @@
 
 import type { ConversationMessageRecord } from '@omadia/plugin-api';
 import { HOUR_MS, MINUTE_MS } from '../clock.js';
+import { CONFIG_DEFAULTS } from '../config.js';
 import { insert } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Participant, Proposal, ProposalObjection } from '../model.js';
@@ -99,12 +100,19 @@ async function giveWay(w: Work, open: Proposal, kind: string): Promise<boolean> 
   return true;
 }
 
+/** While a live session runs, a proposal's window is the live one at most
+ *  (spec 5.7: shorter for a live session, default 5 minutes). */
+async function windowFor(w: Work, minutes: number): Promise<number> {
+  const live = (await store.listSessions(w.tx, w.f.id)).some((s) => s.kind === 'live' && s.status === 'live');
+  return live ? Math.min(minutes, w.f.settings.liveConfirmWindowMinutes ?? CONFIG_DEFAULTS.liveConfirmWindowMinutes) : minutes;
+}
+
 /** Put a proposal to the group. The window never runs past the deadline. */
 export async function openProposal(w: Work, input: NewProposal): Promise<Proposal> {
   const open = await store.openProposal(w.tx, w.f.id);
   if (open && !(await giveWay(w, open, input.kind))) throw new Refusal('proposal_open', texts(w.f.language).proposalBusy());
   const t = texts(w.f.language);
-  const wanted = new Date(w.now.getTime() + input.windowMinutes * MINUTE_MS);
+  const wanted = new Date(w.now.getTime() + (await windowFor(w, input.windowMinutes)) * MINUTE_MS);
   const windowEndsAt = w.f.deadline && w.f.deadline < wanted ? w.f.deadline : wanted;
   const proposal = await insert<Proposal>(w.tx, 'plg_omadia_agent_facilitator_proposals', {
     facilitationId: w.f.id,
@@ -165,7 +173,7 @@ export async function decideProposal(w: Work, proposal: Proposal, accepted: bool
       key: proposal.id,
       to: 'group',
       deliveryClass: 'essential',
-      text: accepted ? t.proposalAccepted(what) : t.proposalRejected(what, objections),
+      text: accepted ? t.proposalAccepted(what, proposal.consents.length) : t.proposalRejected(what, objections),
     });
   }
   if (accepted) await definition.accept(w, proposal);
