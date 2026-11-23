@@ -217,7 +217,8 @@ export const en = {
   },
   proposalAnnounce: (what: string, until: string, extendable: boolean, mustReply: boolean): string =>
     `Proposal: ${what}\nIt holds if nobody objects until ${until}. ${mustReply ? 'Reply to this message with' : 'Write'} "agreed" or "objection: <your reason>"${extendable ? ', or "extend 10" for ten more minutes' : ''}.${mustReply ? ' Only a reply to this message (or a 👍 on it) counts for it.' : ''}`,
-  proposalAccepted: (what: string): string => `Accepted, nobody objected: ${what}`,
+  /** `agreed`: how many said so explicitly; none is silence within the window. */
+  proposalAccepted: (what: string, agreed: number): string => (agreed > 0 ? `Accepted (agreed: ${String(agreed)}, no objection): ${what}` : `Accepted, nobody objected: ${what}`),
   proposalRejected: (what: string, objections: readonly string[]): string =>
     `Not accepted: ${what}\nStanding objection${objections.length === 1 ? '' : 's'}:\n${objections.map((o) => `- ${o}`).join('\n')}`,
   proposalObjection: (name: string, reason: string): string =>
@@ -583,12 +584,17 @@ export const en = {
   protocolDirect: (name: string, protocol: string): string => `Hello ${name}, here is the protocol of the facilitation you took part in.\n\n${protocol}`,
   stakeholderPartsWithheld: (): string => 'Some parts of this protocol are not shared with you (contributions and parts you may not know). Ask the initiator if you need them.',
   protocolMailSubject: (goal: string): string => `Protocol: ${goal}`,
-  protocolSent: (channel: number, mail: number): string =>
-    `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}` : ''}.`,
+  protocolSent: (channel: number, mail: number): string => {
+    const mailed = `by mail to ${String(mail)} address${mail === 1 ? '' : 'es'}`;
+    if (channel === 0) return `The protocol has been sent ${mailed}.`;
+    return `The protocol has been sent: privately to ${String(channel)} participant${channel === 1 ? '' : 's'}${mail > 0 ? ` and ${mailed}` : ''}.`;
+  },
   /** Nobody to mail to. With the protocol when the group does not have it yet. */
   protocolMailNoAddresses: (protocol: string | undefined): string =>
     `I cannot mail the protocol: this channel does not give me the mail addresses of the participants, and I do not collect addresses in the chat. ${protocol === undefined ? 'The protocol is in this group.' : `Here it is instead:\n\n${protocol}`}`,
-  protocolMailUnavailable: (reason: string): string => `The protocol could not be mailed (${reason}). It is in this group, and participants got it privately where I can reach them.`,
+  /** `channel`: how many participants got it privately; none is not claimed. */
+  protocolMailUnavailable: (reason: string, channel: number): string =>
+    `The protocol could not be mailed (${reason}). It is in this group${channel > 0 ? `, and ${String(channel)} participant${channel === 1 ? '' : 's'} got it privately` : ''}.`,
   followupCreated: (subject: string, when: string, link: boolean, unknown: number): string =>
     `Follow-up meeting "${subject}" is in the calendars for ${when}.${link ? '' : ' The invitation went out without a meeting link.'}${unknown > 0 ? ` For ${String(unknown)} ${unknown === 1 ? 'person' : 'people'} I could not see availability, so please check the time.` : ''}`,
   protocolMailUnknown: (): string => 'I do not know whether the protocol mail went out: the mail service did not answer. I will not send it again, so nobody gets it twice. Please check, or share the protocol from this group.',
