@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.1
+
+### Fixed
+
+- The summary of a live session lists the topics parked while it ran as open points
+  (#60). Before, only open steps were listed, while the final result had the parked
+  topic. Topics parked before the session stay out of its summary.
+
 ## 1.8.0
 
 Defects of the live run of spec §9 criterion 18 in a real Teams meeting
