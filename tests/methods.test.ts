@@ -217,3 +217,24 @@ test('assignment: done when every item has one confirmed name, open otherwise, a
   assert.equal(open.state, 'assignment_open');
   assert.deepEqual(open.state === 'assignment_open' ? [open.openItems, open.unconfirmed] : [], [['C'], ['B']]);
 });
+
+// K2 (live E2E on Discord and Telegram, 2026-11-23): a vote that goes out as
+// text lists its options numbered and suggests "z. B. 2,1,3" (channel-sdk
+// questionCardText). Such a ballot was not counted: only keys and labels were
+// known. A bare number names the option at that position.
+test('K2: options can be named by their number in the list, as the text vote suggests', () => {
+  assert.deepEqual(parse('ranked', '2,1,3'), ballot({ type: 'ranked', ranking: ['B', 'A', 'C'] }));
+  assert.deepEqual(parse('ranked', '3 > 1'), ballot({ type: 'ranked', ranking: ['C', 'A'] }));
+  assert.deepEqual(parse('single', '2'), ballot({ type: 'single', choice: 'B' }));
+  assert.deepEqual(parse('approval', '1, 3'), ballot({ type: 'approval', choices: ['A', 'C'] }));
+  // Rank syntax keeps its meaning: "1. C" ranks C first, it does not name option 1.
+  assert.deepEqual(parse('ranked', '1. C 2. A 3. B'), ballot({ type: 'ranked', ranking: ['C', 'A', 'B'] }));
+  // A number past the list is no option.
+  assert.deepEqual(parse('single', '4'), NOT);
+  // A label that is itself a number wins over the position.
+  const years = toOptions(['2027', '2026']);
+  assert.deepEqual(
+    parseBallot({ method: 'single', options: years, text: '2026', author: PEOPLE[1], people: PEOPLE }),
+    ballot({ type: 'single', choice: 'B' }),
+  );
+});
