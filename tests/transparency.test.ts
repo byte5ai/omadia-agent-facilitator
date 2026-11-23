@@ -183,7 +183,7 @@ test('definition of done changes without a restart: proposal, consent window, an
   h.clock.advance(12 * HOUR_MS + MINUTE_MS);
   await h.tick();
   const tail = posts(conv).slice(-2);
-  assert.match(tail[0] ?? '', /^Accepted, nobody objected: change the definition of done to \(version 3\): A venue is chosen and booked/);
+  assert.match(tail[0] ?? '', /^Accepted \(agreed: 1, no objection\): change the definition of done to \(version 3\): A venue is chosen and booked/);
   assert.equal(tail[1], 'The definition of done is now version 3: A venue is chosen and booked');
   assert.match(await tool(conv, 'facilitation_status'), /Definition of done \(version 3\): A venue is chosen and booked\nContributed: 1 of \d+\n/);
   assert.equal((await h.facilitation(conv)).phase, 'active', 'the facilitation ran on; the vote Anna cast still counts');

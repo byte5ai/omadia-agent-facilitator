@@ -946,6 +946,9 @@ export class FakeKernel {
         live.recipients = recipients;
         return { outcome: 'issued', grant: { ...live, live: true } };
       }
+      // As the kernel: one grant per scope, kind and subject; a revoked or
+      // expired one is never issued again.
+      if (this.grants.some((g) => g.scopeId === scope.id && g.kind === request.kind && g.subject === subject)) return this.refuse('scope_exists', 'this grant was revoked or has expired; a grant is not issued twice');
       const limit = request.kind === 'protocol_dispatch' ? Math.min(Date.parse(scope.deadline), this.clock.now().getTime() + 7 * 86_400_000) : Date.parse(scope.deadline);
       const grant: FakeGrant = { id: this.nextId('grant'), scopeId: scope.id, processId: scope.processId, kind: request.kind, subject, recipients, issuedAt: this.clock.now().toISOString(), expiresAt: new Date(limit).toISOString(), uses: [] };
       this.grants.push(grant);

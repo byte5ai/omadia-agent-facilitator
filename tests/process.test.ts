@@ -151,7 +151,7 @@ test('a proposal: an objection keeps it from holding, agreeing lifts it, it hold
   await say(conv, 'bert', 'agreed');
   assert.equal((await store.openProposal(h.db.pool, f.id))?.status, 'open', 'everybody agreeing does not end the window (spec 5.7)');
   await passWindow(h, conv);
-  assert.equal(last(conv), 'Accepted, nobody objected: take this summary into the record:\nWe want an offsite in spring, within budget.');
+  assert.equal(last(conv), 'Accepted (agreed: 3, no objection): take this summary into the record:\nWe want an offsite in spring, within budget.');
   assert.equal((await store.listEvents(h.db.pool, f.id, ['summary_confirmed'])).length, 1);
 
   await tool(conv, 'facilitation_propose_summary', { text: 'Second summary.' });

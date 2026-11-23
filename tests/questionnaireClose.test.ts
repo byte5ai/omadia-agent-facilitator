@@ -120,7 +120,7 @@ test('D37: without that, and with another definition of done, answers do not end
 });
 
 test('D38: closing on request is one tool call: the only participant concludes at once, and the result holds the answers', { skip: PG_SKIP }, async () => {
-  assert.equal(TURN_MODEL_CALLS, 8, 'a turn reserves eight model calls');
+  assert.equal(TURN_MODEL_CALLS, 16, 'a turn reserves sixteen model calls');
   const conv = h.kernel.conversation('qc-close-one', FOUR);
   await tool(conv, 'facilitation_start', { goal: 'Pause planen', definitionOfDone: 'Wir wissen, wie lang die Pause ist', participants: ['Anna'], open: true });
   await tool(conv, 'facilitation_questionnaire', PAUSE);
@@ -129,7 +129,7 @@ test('D38: closing on request is one tool call: the only participant concludes a
   h.kernel.onTurn = () => '[silent]';
   await say(conv, 'anna', 'Mira, bitte werte den Fragebogen aus und schließe die Moderation ab.');
   const turn = h.kernel.turns.at(-1);
-  assert.equal(turn?.budget.modelCalls, 8);
+  assert.equal(turn?.budget.modelCalls, TURN_MODEL_CALLS);
   assert.match(turn?.engineContext ?? '', /call facilitation_close, once; it needs no step closed before/);
 
   assert.match(await tool(conv, 'facilitation_close'), /^Concluded: the result was posted/);
