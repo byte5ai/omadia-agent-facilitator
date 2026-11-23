@@ -253,6 +253,14 @@ export async function postStepCard(w: Work, step: Step): Promise<boolean> {
  * Will this deciding step be put to the group as a card? Then the card is the
  * announcement, and the chat does not explain the vote a second time.
  */
+/** How to answer a vote card: on the card, or in the chat when the channel
+ *  shows the card as numbered text (`CardSupport.asText`, plugin-api 1.88.0;
+ *  live run on Slack 2026-11-23). */
+export function voteCardLine(w: Pick<Work, 'f' | 'engine'>): string {
+  const t = texts(w.f.language);
+  return (cardSupport(w.engine, w.f.channelType) as { asText?: boolean } | undefined)?.asText === true ? t.card.voteAsText : t.card.voteOnCard;
+}
+
 export async function voteCardFits(w: Pick<Work, 'tx' | 'f' | 'engine'>, step: Step): Promise<boolean> {
   const support = cardSupport(w.engine, w.f.channelType);
   if (!support || !step.method) return false;
