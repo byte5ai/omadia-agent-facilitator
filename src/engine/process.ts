@@ -11,7 +11,7 @@ import { insert, update } from '../db/sql.js';
 import * as store from '../db/store.js';
 import type { Cluster, Contribution, Facilitation, Participant, Proposal, Step } from '../model.js';
 import { formatWhen, texts } from '../texts/index.js';
-import { voteCardFits } from './cards.js';
+import { voteCardFits, voteCardLine } from './cards.js';
 import { recordContribution, recordParts, writtenAfterStart } from './contributions.js';
 import type { Work } from './core.js';
 import { Refusal } from './core.js';
@@ -261,7 +261,7 @@ export async function setDecision(w: Work, step: Step, patch: Partial<Pick<Step,
   await w.event('decision_set', 'facilitator', { stepId: step.id, method: updated.method, options: updated.options });
   if (updated.status === 'open') {
     const t = texts(w.f.language);
-    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...((await voteCardFits(w, updated)) ? [t.card.voteOnCard] : rulesOf(w.f, updated))].join(' ') });
+    w.post({ purpose: 'decision_set', key: `${step.id}:${String(w.now.getTime())}`, to: 'group', deliveryClass: 'essential', requiredPhases: ['active'], text: [t.decisionSet(updated.title), ...((await voteCardFits(w, updated)) ? [voteCardLine(w)] : rulesOf(w.f, updated))].join(' ') });
     await announceVote(w, updated);
   }
   return updated;

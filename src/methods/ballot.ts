@@ -66,9 +66,21 @@ export function cleanBallotText(text: string): { text: string; prefixed: boolean
   return { text: cleaned, prefixed };
 }
 
+/** A bare 1-based position ("2"), as a vote sent as text numbers its options. */
+const POSITION = /^\d{1,3}$/;
+
+/**
+ * The option a token names: by key ("B"), by label ("Old Town"), else by its
+ * number in the list ("2"). A vote that goes out as text lists the options
+ * numbered and suggests "2,1,3" (channel-sdk `questionCardText`), so the
+ * position counts too. A label wins over a position, so an option called
+ * "2026" is never read as the 2026th.
+ */
 function findOption(options: readonly StepOption[], token: string): StepOption | undefined {
   const wanted = norm(token);
-  return options.find((o) => norm(o.key) === wanted) ?? options.find((o) => norm(o.label) === wanted);
+  const named = options.find((o) => norm(o.key) === wanted) ?? options.find((o) => norm(o.label) === wanted);
+  if (named || !POSITION.test(wanted)) return named;
+  return options[Number(wanted) - 1];
 }
 
 interface Listed {

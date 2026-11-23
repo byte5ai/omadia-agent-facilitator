@@ -33,6 +33,7 @@ export const de: Texts = {
     chatToo: 'Eine Antwort im Chat zählt auch; eure neueste Antwort zählt.',
     stepOf: (position, total) => `Schritt ${String(position)} von ${String(total)}.`,
     voteOnCard: 'Abgestimmt wird über die Karte; eine Antwort im Chat zählt auch.',
+    voteAsText: 'Antwortet im Chat mit der Nummer oder dem Namen der Option, bei einer Reihung die beste zuerst (z. B. 2,1,3); eure neueste Antwort zählt.',
     rank: 'Reiht die Optionen, die beste zuerst.',
     rankLabel: (rank, points) => (points === undefined ? `${String(rank)}. Platz` : `${String(rank)}. Platz (${String(points)} ${points === 1 ? 'Punkt' : 'Punkte'})`),
     single: 'Wählt eine Option.',

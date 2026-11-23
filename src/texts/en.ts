@@ -56,6 +56,7 @@ export const en = {
     chatToo: 'An answer in the chat counts too; your newest answer counts.',
     stepOf: (position: number, total: number): string => `Step ${String(position)} of ${String(total)}.`,
     voteOnCard: 'You vote on the card; an answer in the chat counts too.',
+    voteAsText: 'Reply in the chat with the number or the name of the option, for a ranking best first (e.g. 2,1,3); your newest answer counts.',
     rank: 'Rank the options, best first.',
     rankLabel: (rank: number, points: number | undefined): string => {
       const ordinal = `${String(rank)}${rank === 1 ? 'st' : rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'} place`;

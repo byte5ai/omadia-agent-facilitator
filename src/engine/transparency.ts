@@ -20,7 +20,7 @@ import { reminderOffsetsFor, upcomingOffsets } from './reminders.js';
 import { verifyElectorate } from './electorate.js';
 import { everybodyKnown, expectedNames, listKnown } from './roll.js';
 import { blockingProposal, openProposal, registerProposalKind } from './proposals.js';
-import { voteCardFits } from './cards.js';
+import { voteCardFits, voteCardLine } from './cards.js';
 import { buildProtocol, closingSummary, sendWithProtocol } from './protocol.js';
 import { scheduleDeadlineJobs } from './scheduler.js';
 import { listClosings } from './resultStatus.js';
@@ -56,7 +56,8 @@ async function handshakeText(w: Work, onlyStep: Step | undefined): Promise<strin
   for (const s of deciding) {
     const lines = rulesOf(f, s);
     if (await voteCardFits(w, s)) {
-      if (!rules.includes(t.card.voteOnCard)) rules.push(t.card.voteOnCard);
+      const how = voteCardLine(w);
+      if (!rules.includes(how)) rules.push(how);
       rules.push(...lines.slice(1));
     } else rules.push(...lines);
   }
