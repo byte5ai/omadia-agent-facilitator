@@ -2,7 +2,8 @@
 // 38, 49, 51, 59).
 //
 // No session ends silently. When a live session ends, its summary
-// (decisions, next steps, open points) is frozen as the closing document of
+// (decisions, next steps, open points: open steps and topics parked while
+// it ran) is frozen as the closing document of
 // its own closing event (`session:<id>`, a row in the closings table, F2's
 // result status model) and goes out in the session's conversation, drawn
 // from that event's `closing` scope:
@@ -68,12 +69,14 @@ async function summaryOf(w: Work, session: Session, eventId: string): Promise<st
   const nameOf = (principal: string): string => people.find((p) => p.principalId === principal)?.displayName ?? principal;
   const actions = (await store.listActionItems(w.tx, w.f.id)).filter((a) => a.createdAt >= since && a.status !== 'declined');
   const open = (await store.listSteps(w.tx, w.f.id)).filter((s) => s.status !== 'closed' && s.kind !== 'open' && s.kind !== 'close');
+  // The parking lot of this session: what was parked while it ran (#60).
+  const parked = (await store.listEvents(w.tx, w.f.id, ['parked'])).filter((e) => e.occurredAt >= since).map((e) => String(e.payload['topic']));
   const list = (lines: readonly string[]): string => (lines.length > 0 ? lines.map((l) => `- ${l}`).join('\n') : t.summaryNone);
   return [
     t.summaryTitle(sessionTitleOf(session, w.f)),
     `${t.summaryDecisions}:\n${list(decisions.map((d) => d.statement))}`,
     `${t.summaryNextSteps}:\n${list(actions.map((a) => `${a.description} (${nameOf(a.ownerPrincipal)}, ${formatWhen(a.dueDate, w.f.timezone, w.f.language)})`))}`,
-    `${t.summaryOpen}:\n${list(open.map((s) => s.title))}`,
+    `${t.summaryOpen}:\n${list([...open.map((s) => s.title), ...parked])}`,
     t.summaryFooter(eventId, 1),
   ].join('\n\n');
 }
