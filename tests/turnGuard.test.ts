@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 
 import { checkTurnText } from '../src/engine/turnGuard.js';
 import type { TurnState } from '../src/engine/turnGuard.js';
-import { FOUR, createHarness, startActive } from './harness.js';
+import { FOUR, createHarness, startActive, textOf } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -108,7 +108,7 @@ test('S5: a turn whose tool refused does not end in silence: the group reads why
   const posted = await turn(conv, 'dave', 'Please close this now', async (request) => {
     const step = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_step');
     const answer = await step?.handler({ action: 'close' }, h.kernel.context('mira', conv, 'dave', request.inboundEventId));
-    assert.match(answer ?? '', /^Refused \(deciding_step\)/);
+    assert.match(textOf(answer), /^Refused \(deciding_step\)/);
     return '[silent]';
   });
   assert.deepEqual(posted, ['This step is decided by its vote. It closes when the result is in: once everybody has contributed, or at the deadline if that is what was agreed.']);
@@ -123,7 +123,7 @@ test('D28: asked to close a vote that waits for its deadline, the tool puts "clo
   const posted = await turn(conv, 'dave', 'All four have voted, please close the vote now', async (request) => {
     const step = buildTools(h.engine).find((t) => t.spec.name === 'facilitation_step');
     const answer = await step?.handler({ action: 'close' }, h.kernel.context('mira', conv, 'dave', request.inboundEventId));
-    assert.match(answer ?? '', /^Proposed to the group/);
+    assert.match(textOf(answer), /^Proposed to the group/);
     return '[silent]';
   });
   assert.equal(posted.length, 1);

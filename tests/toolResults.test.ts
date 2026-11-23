@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
-import { FOUR, createHarness } from './harness.js';
+import { FOUR, createHarness, textOf } from './harness.js';
 import type { Harness } from './harness.js';
 import { PG_SKIP } from './pg.js';
 
@@ -158,10 +158,10 @@ test('a tool that cannot work says so without naming the machinery', async () =>
   const kernel = new FakeKernel(undefined, clock);
   const engine = new FacilitationEngine({ kernel: kernel.kernel(), config: CONFIG_DEFAULTS, clock, log: () => undefined });
   const start = buildTools(engine).find((t) => t.spec.name === 'facilitation_start');
-  const noDatabase = (await start?.handler({ goal: 'g', definitionOfDone: 'd' }, kernel.context('mira', 'c1', 'anna'))) ?? '';
+  const noDatabase = textOf(await start?.handler({ goal: 'g', definitionOfDone: 'd' }, kernel.context('mira', 'c1', 'anna')));
   assert.match(noDatabase, /^Not available/);
   assert.doesNotMatch(noDatabase, INTERNALS);
-  const noContext = (await start?.handler({ goal: 'g', definitionOfDone: 'd' })) ?? '';
+  const noContext = textOf(await start?.handler({ goal: 'g', definitionOfDone: 'd' }));
   assert.match(noContext, /^Refused/);
   assert.doesNotMatch(noContext, INTERNALS);
 });
