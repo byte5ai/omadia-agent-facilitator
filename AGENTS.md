@@ -327,3 +327,15 @@ byte5ai/omadia `docs/adr/`.
   the facilitator binds to that facilitation, and to the action item of a reminder; private
   "stop" only as such a reply, ending only that follow-up. Without a reference, one question
   with lettered choices (`1a`, `1b`, facilitations in start order).
+
+## Who a person is (omadia ADR 0032; live runs 2026-11-23)
+
+- Inside a facilitation a person is `user:<channel user id>`, lower-cased. Message authors,
+  roster participants and the caller of a tool all use this form.
+- `resolveContext` keys the caller by `callerUserRef.id` and never by the routing principal
+  a kernel up to plugin-api 1.87 put in `callerPrincipalId` (`user:discord-user:<id>`,
+  `user:<e-mail>`).
+- Ballots name options by key ("B"), by label, or by their number in the list ("2"); a label
+  wins over a position.
+- On a channel whose cards go out as text (`CardSupport.asText`), the group is told to reply
+  in the chat.

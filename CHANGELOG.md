@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.2
+
+Findings of the live runs on Slack, Discord and Telegram (2026-11-23). Runs on kernels from
+plugin-api 1.82.0 (unchanged); the text-card wording needs 1.88.0 and falls back to the old
+line before it.
+
+### Fixed
+
+- **The caller of a tool is keyed like a message author.** A kernel up to plugin-api 1.87
+  states the routing principal as the caller on Discord, Slack and Telegram
+  (`user:discord-user:<id>`, `user:<e-mail>`). The initiator then counted as a second,
+  nameless participant, "everyone voted" never closed a vote, and the private report was
+  refused. The caller is now keyed by `callerUserRef` (omadia ADR 0032).
+- **A ballot can name options by their number** ("2,1,3"), as the text form of a vote
+  suggests. A label still wins over a position, and rank syntax ("1. C") keeps its meaning.
+- **A vote card that goes out as text** (`CardSupport.asText`) is explained as "reply in the
+  chat", not "vote on the card".
+
 ## 1.8.1
 
 ### Fixed
