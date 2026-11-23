@@ -38,13 +38,27 @@ function statedName(ref: unknown): string | undefined {
   return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
 }
 
+/**
+ * The caller keyed like a message author (`user:<channel user id>`, omadia
+ * ADR 0032). A kernel up to plugin-api 1.87 copied the channel's routing
+ * principal into `callerPrincipalId` on Discord, Slack and Telegram
+ * (`user:discord-user:<id>`, `user:<e-mail>`). The initiator then counted as
+ * a second participant next to their own ballot. The channel user the kernel
+ * states with the call is the same id a message author carries.
+ */
+function callerKey(context: NativeToolCallContext): string | undefined {
+  const ref = context.callerUserRef as { id?: unknown } | undefined;
+  const id = typeof ref?.id === 'string' ? ref.id.trim().toLowerCase() : '';
+  return id !== '' ? `user:${id}` : context.callerPrincipalId;
+}
+
 export function resolveContext(context: NativeToolCallContext | undefined): ResolvedContext {
   if (!context?.agentSlug || !context.channelType || !context.conversationId) throw new Refusal('no_context', NO_CONTEXT);
   return {
     agentSlug: context.agentSlug,
     channelType: context.channelType,
     conversationId: context.conversationId,
-    callerPrincipalId: context.callerPrincipalId,
+    callerPrincipalId: callerKey(context),
     callerDisplayName: statedName(context.callerUserRef),
     inboundEventId: context.inboundEventId,
   };
